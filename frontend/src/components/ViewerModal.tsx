@@ -21,6 +21,9 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const [videoSrc, setVideoSrc] = useState<string>();
   const [videoError, setVideoError] = useState<string>();
   const [videoFallbackAttempted, setVideoFallbackAttempted] = useState(false);
+  const [livePhotoMotionSrc, setLivePhotoMotionSrc] = useState<string>();
+  const [livePhotoMotionError, setLivePhotoMotionError] = useState<string>();
+  const [livePhotoFallbackAttempted, setLivePhotoFallbackAttempted] = useState(false);
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -37,13 +40,18 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     ? convertFileSrc(asset.live_photo_video_path)
     : undefined;
   const canUsePrimaryImageDirectly = isDirectImagePath(asset?.primary_path);
+  const shouldPreferBackendVideo = shouldUseBackendVideo(asset?.primary_path);
+  const shouldPreferBackendLivePhoto = shouldUseBackendVideo(asset?.live_photo_video_path);
 
   useEffect(() => {
     setForceRenderedFrame(false);
     setVideoFallbackAttempted(false);
+    setLivePhotoFallbackAttempted(false);
     setShowLivePhotoMotion(false);
     setVideoSrc(undefined);
     setVideoError(undefined);
+    setLivePhotoMotionSrc(undefined);
+    setLivePhotoMotionError(undefined);
     setZoomMode("fit");
     setZoom(1);
     setNaturalSize(undefined);
@@ -105,6 +113,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   }
 
   useEffect(() => {
+    let cancelled = false;
     if (!assetId || !isVideo) {
       setVideoSrc(undefined);
       setVideoError(undefined);
@@ -112,10 +121,74 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       return;
     }
 
-    setVideoSrc(primaryPath);
     setVideoError(undefined);
-    setVideoFallbackAttempted(false);
-  }, [assetId, isVideo, primaryPath]);
+    if (shouldPreferBackendVideo) {
+      setVideoSrc(undefined);
+      setVideoFallbackAttempted(true);
+      void api
+        .loadViewerVideo(assetId)
+        .then((backendPath) => {
+          if (cancelled) return;
+          if (backendPath) {
+            setVideoSrc(convertFileSrc(backendPath));
+            setVideoError(undefined);
+          } else {
+            setVideoError("Video playback unavailable");
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setVideoError(String(error));
+          }
+        });
+    } else {
+      setVideoSrc(primaryPath);
+      setVideoFallbackAttempted(false);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assetId, isVideo, primaryPath, shouldPreferBackendVideo]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetId || !livePhotoPath) {
+      setLivePhotoMotionSrc(undefined);
+      setLivePhotoMotionError(undefined);
+      setLivePhotoFallbackAttempted(false);
+      return;
+    }
+
+    setLivePhotoMotionError(undefined);
+    if (shouldPreferBackendLivePhoto) {
+      setLivePhotoMotionSrc(undefined);
+      setLivePhotoFallbackAttempted(true);
+      void api
+        .loadLivePhotoMotion(assetId)
+        .then((backendPath) => {
+          if (cancelled) return;
+          if (backendPath) {
+            setLivePhotoMotionSrc(convertFileSrc(backendPath));
+            setLivePhotoMotionError(undefined);
+          } else {
+            setLivePhotoMotionError("Live photo playback unavailable");
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            setLivePhotoMotionError(String(error));
+          }
+        });
+    } else {
+      setLivePhotoMotionSrc(livePhotoPath);
+      setLivePhotoFallbackAttempted(false);
+    }
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assetId, livePhotoPath, shouldPreferBackendLivePhoto]);
 
   useEffect(() => {
     let cancelled = false;
@@ -173,6 +246,24 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setVideoError("Video playback unavailable");
     } catch (error) {
       setVideoError(String(error));
+    }
+  }
+
+  async function fallbackLivePhotoToBackend() {
+    if (!assetId || livePhotoFallbackAttempted) {
+      return;
+    }
+    setLivePhotoFallbackAttempted(true);
+    setLivePhotoMotionError(undefined);
+    try {
+      const backendPath = await api.loadLivePhotoMotion(assetId);
+      if (backendPath) {
+        setLivePhotoMotionSrc(convertFileSrc(backendPath));
+        return;
+      }
+      setLivePhotoMotionError("Live photo playback unavailable");
+    } catch (error) {
+      setLivePhotoMotionError(String(error));
     }
   }
 
@@ -266,8 +357,27 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
             ) : (
               <div className="muted">Loading video…</div>
             )
-          ) : showLivePhotoMotion && livePhotoPath ? (
-            <video src={livePhotoPath} controls autoPlay muted loop />
+          ) : showLivePhotoMotion ? (
+            livePhotoMotionSrc ? (
+              <video
+                src={livePhotoMotionSrc}
+                controls
+                autoPlay
+                muted
+                loop
+                onError={() => {
+                  if (!livePhotoFallbackAttempted) {
+                    void fallbackLivePhotoToBackend();
+                    return;
+                  }
+                  setLivePhotoMotionError("Live photo playback unavailable");
+                }}
+              />
+            ) : livePhotoMotionError ? (
+              <div className="muted">{livePhotoMotionError}</div>
+            ) : (
+              <div className="muted">Loading live photo…</div>
+            )
           ) : imageSrc && assetId === asset.id ? (
             <div
               ref={imageFrameRef}
@@ -346,6 +456,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
 function isDirectImagePath(path?: string | null) {
   const extension = path?.split(".").pop()?.toLowerCase();
   return extension !== undefined && ["jpg", "jpeg", "png", "webp", "gif"].includes(extension);
+}
+
+function shouldUseBackendVideo(path?: string | null) {
+  const extension = path?.split(".").pop()?.toLowerCase();
+  return extension !== undefined && !["mp4", "m4v", "webm"].includes(extension);
 }
 
 function formatFileSize(bytes: number) {

@@ -360,6 +360,27 @@ pub fn load_viewer_video(asset_id: i64, state: State<AppState>) -> CommandResult
 }
 
 #[tauri::command]
+pub fn load_live_photo_motion(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
+    let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
+    let Some(motion_path) = detail.live_photo_video_path else {
+        return Ok(None);
+    };
+
+    match generate_viewer_video(&PathBuf::from(&motion_path)) {
+        Ok(Some(path)) => Ok(Some(path.to_string_lossy().to_string())),
+        Ok(None) => Ok(None),
+        Err(error) => {
+            error!(asset_id, %error, "live photo motion load failed");
+            state
+                .db
+                .insert_log("error", "live_photo", &error.to_string(), Some(asset_id))
+                .map_err(map_error)?;
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
 pub fn get_live_photo_pair(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
     query_service::get_live_photo_pair(&state.db, asset_id).map_err(map_error)
 }
@@ -468,6 +489,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         request_thumbnails_batch,
         load_viewer_frame,
         load_viewer_video,
+        load_live_photo_motion,
         get_live_photo_pair,
         get_cache_stats,
         clear_thumbnail_cache,

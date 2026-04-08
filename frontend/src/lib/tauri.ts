@@ -32,6 +32,8 @@ export const api = {
     invoke<string | null>("load_viewer_frame", { assetId }),
   loadViewerVideo: (assetId: number) =>
     invoke<string | null>("load_viewer_video", { assetId }),
+  loadLivePhotoMotion: (assetId: number) =>
+    invoke<string | null>("load_live_photo_motion", { assetId }),
   requestThumbnailsBatch: (assetIds: number[], size: number) =>
     invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size }),
   requestThumbnail: (assetId: number, size: number) =>

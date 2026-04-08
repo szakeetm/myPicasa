@@ -37,7 +37,7 @@ export function Sidebar({
         <div className="eyebrow">Google Photos Takeout</div>
         <div className="title">Read-only browser</div>
         <div className="muted">
-          Indexes in SQLite, reads originals in place, and keeps thumbnails RAM-only.
+          Indexes in SQLite and reads originals in place.
         </div>
         {importStatus ? (
           <div className="status-banner">
