@@ -20,9 +20,16 @@ use crate::{
 };
 
 type CommandResult<T> = Result<T, InvokeError>;
+const PREVIEW_DEBUG_LOGS: bool = false;
 
 fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
+}
+
+fn preview_debug_log(message: String) {
+    if PREVIEW_DEBUG_LOGS {
+        println!("{message}");
+    }
 }
 
 fn media_debug_info(path: &str) -> (String, u64) {
@@ -148,7 +155,9 @@ pub fn request_thumbnail(
     if let Some(bytes) = state.thumbnail_cache.lock().get(&key) {
         let elapsed = started.elapsed().as_millis();
         info!(asset_id, elapsed_ms = elapsed, "thumbnail cache hit");
-        println!("thumbnail asset_id={asset_id} cache_hit elapsed_ms={elapsed}");
+        preview_debug_log(format!(
+            "thumbnail asset_id={asset_id} cache_hit elapsed_ms={elapsed}"
+        ));
         return Ok(Some(format!(
             "data:image/jpeg;base64,{}",
             STANDARD.encode(bytes)
@@ -173,11 +182,11 @@ pub fn request_thumbnail(
                 file_size,
                 "thumbnail generated"
             );
-            println!(
+            preview_debug_log(format!(
                 "thumbnail asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
                 file_size,
                 bytes.len()
-            );
+            ));
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
@@ -186,18 +195,18 @@ pub fn request_thumbnail(
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
             info!(asset_id, elapsed_ms = elapsed, filename = %filename, file_size, "thumbnail unavailable");
-            println!(
+            preview_debug_log(format!(
                 "thumbnail asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={elapsed}",
                 file_size
-            );
+            ));
             Ok(None)
         }
         Err(error) => {
             error!(asset_id, %error, "thumbnail generation failed");
-            println!(
+            preview_debug_log(format!(
                 "thumbnail asset_id={asset_id} filename=\"{filename}\" file_size={} failed error={error}",
                 file_size
-            );
+            ));
             state
                 .db
                 .insert_log("error", "thumbnail", &error.to_string(), Some(asset_id))
@@ -222,12 +231,12 @@ pub fn request_thumbnails_batch(
             let key = format!("{asset_id}:{size}");
 
             if let Some(bytes) = cache.lock().get(&key) {
-                println!(
+                preview_debug_log(format!(
                     "thumbnail_batch_item asset_id={} size={} status=ready source=cache bytes={}",
                     asset_id,
                     size,
                     bytes.len()
-                );
+                ));
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "ready".to_string(),
@@ -236,10 +245,10 @@ pub fn request_thumbnails_batch(
             }
 
             if state.failed_thumbnails.lock().contains(&key) {
-                println!(
+                preview_debug_log(format!(
                     "thumbnail_batch_item asset_id={} size={} status=unavailable source=failed_cache",
                     asset_id, size
-                );
+                ));
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "unavailable".to_string(),
@@ -250,10 +259,10 @@ pub fn request_thumbnails_batch(
             let mut inflight = state.inflight_thumbnails.lock();
             if inflight.insert(key.clone()) {
                 drop(inflight);
-                println!(
+                preview_debug_log(format!(
                     "thumbnail_batch_item asset_id={} size={} status=pending enqueue=start",
                     asset_id, size
-                );
+                ));
                 if let Err(error) = state.thumbnail_job_sender.send(ThumbnailJob {
                     asset_id,
                     size,
@@ -267,22 +276,22 @@ pub fn request_thumbnails_batch(
                         &format!("failed to enqueue thumbnail job: {error}"),
                         Some(asset_id),
                     );
-                    println!(
+                    preview_debug_log(format!(
                         "thumbnail_batch_item asset_id={} size={} status=unavailable enqueue=failed error={error}",
                         asset_id, size
-                    );
+                    ));
                 } else {
-                    println!(
+                    preview_debug_log(format!(
                         "thumbnail_batch_item asset_id={} size={} status=pending enqueue=ok",
                         asset_id, size
-                    );
+                    ));
                 }
             } else {
                 drop(inflight);
-                println!(
+                preview_debug_log(format!(
                     "thumbnail_batch_item asset_id={} size={} status=pending source=inflight",
                     asset_id, size
-                );
+                ));
             }
 
             ThumbnailBatchItem {
@@ -304,13 +313,13 @@ pub fn request_thumbnails_batch(
         worker_count = state.thumbnail_worker_count,
         "thumbnail batch completed"
     );
-    println!(
+    preview_debug_log(format!(
         "thumbnail_batch item_count={} hit_count={} pending_count={} worker_count={} elapsed_ms={elapsed}",
         items.len(),
         hits,
         pending,
         state.thumbnail_worker_count
-    );
+    ));
 
     Ok(items)
 }
@@ -335,11 +344,11 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
                 file_size,
                 "viewer image generated"
             );
-            println!(
+            preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
                 file_size,
                 bytes.len()
-            );
+            ));
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
@@ -348,18 +357,18 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
             info!(asset_id, elapsed_ms = elapsed, filename = %filename, file_size, "viewer image unavailable");
-            println!(
+            preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={elapsed}",
                 file_size
-            );
+            ));
             Ok(None)
         }
         Err(error) => {
             error!(asset_id, %error, "viewer frame load failed");
-            println!(
+            preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} failed error={error}",
                 file_size
-            );
+            ));
             state
                 .db
                 .insert_log("error", "viewer", &error.to_string(), Some(asset_id))

@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useVirtualizer } from "@tanstack/react-virtual";
 import dayjs from "dayjs";
 
 import { api } from "../lib/tauri";
@@ -29,20 +28,6 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const [requestTick, setRequestTick] = useState(0);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const columns = columnCount(width);
-  const rowHeight = useMemo(() => {
-    const rowPadding = 12;
-    const interColumnGap = 6 * Math.max(columns - 1, 0);
-    const columnWidth = Math.max((width - rowPadding - interColumnGap) / columns, 120);
-    const metadataHeight = 70;
-    return Math.ceil(columnWidth + metadataHeight + rowPadding);
-  }, [columns, width]);
-  const rows = useMemo(() => {
-    const output: AssetListItem[][] = [];
-    for (let index = 0; index < assets.length; index += columns) {
-      output.push(assets.slice(index, index + columns));
-    }
-    return output;
-  }, [assets, columns]);
 
   useEffect(() => {
     const element = parentRef.current;
@@ -53,28 +38,13 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     return () => observer.disconnect();
   }, []);
 
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const rowVirtualizer = useVirtualizer({
-    count: rows.length,
-    getScrollElement: () => parentRef.current,
-    estimateSize: () => rowHeight,
-    overscan: 4,
-  });
-  const virtualRows = rowVirtualizer.getVirtualItems();
-
   const visibleIds = useMemo(
-    () =>
-      virtualRows
-        .flatMap((item) => rows[item.index] ?? [])
-        .map((asset) => asset.id),
-    [rows, virtualRows],
+    () => assets.map((asset) => asset.id),
+    [assets],
   );
   const visibleTitles = useMemo(
-    () =>
-      virtualRows
-        .flatMap((item) => rows[item.index] ?? [])
-        .map((asset) => asset.title ?? `asset-${asset.id}`),
-    [rows, virtualRows],
+    () => assets.map((asset) => asset.title ?? `asset-${asset.id}`),
+    [assets],
   );
 
   useEffect(() => {
@@ -160,60 +130,55 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
 
   return (
     <div className="grid-scroller" ref={parentRef}>
-      <div className="grid-inner" style={{ height: rowVirtualizer.getTotalSize() }}>
-        {virtualRows.map((virtualRow) => {
-          const row = rows[virtualRow.index] ?? [];
-          return (
-            <div
-              className="grid-row"
-              key={virtualRow.key}
-              ref={rowVirtualizer.measureElement}
-              style={{
-                transform: `translateY(${virtualRow.start}px)`,
-                gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
-              }}
-            >
-              {row.map((asset) => (
-                <button key={asset.id} className="tile" onClick={() => onSelect(asset.id)}>
-                  <div className="thumb">
-                    {thumbs[asset.id]?.status === "ready" ? (
-                      <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
-                    ) : thumbs[asset.id]?.status === "unavailable" ? (
-                      <div>Preview unavailable</div>
-                    ) : (
-                      <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
-                    )}
-                    {asset.media_kind === "video" ? (
-                      <>
-                        <div className="thumb-play-badge" aria-hidden="true">
-                          <span className="thumb-play-icon">▶</span>
-                          <span>Video</span>
-                        </div>
-                        {asset.duration_ms ? (
-                          <div className="thumb-duration-badge">{formatDuration(asset.duration_ms)}</div>
-                        ) : null}
-                      </>
-                    ) : null}
+      <div
+        className="media-grid"
+        style={{
+          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+        }}
+      >
+        {assets.map((asset) => (
+          <button key={asset.id} className="tile" onClick={() => onSelect(asset.id)}>
+            <div className="thumb">
+              {thumbs[asset.id]?.status === "ready" ? (
+                <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
+              ) : thumbs[asset.id]?.status === "unavailable" ? (
+                <div>Preview unavailable</div>
+              ) : (
+                <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
+              )}
+              {asset.media_kind === "video" ? (
+                <>
+                  <div className="thumb-play-badge" aria-hidden="true">
+                    <span className="thumb-play-icon">▶</span>
+                    <span>Video</span>
                   </div>
-                  <div className="tile-body">
-                    <strong>{asset.title ?? "Untitled asset"}</strong>
-                    <div className="muted">
-                      {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm") : "Unknown date"}
-                    </div>
-                    <div className="chips">
-                      <span className="chip">{asset.media_kind}</span>
-                      {asset.albums.slice(0, 2).map((album) => (
-                        <span className="chip" key={album}>
-                          {album}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
-                </button>
-              ))}
+                  {asset.duration_ms ? (
+                    <div className="thumb-duration-badge">{formatDuration(asset.duration_ms)}</div>
+                  ) : null}
+                </>
+              ) : null}
+              {asset.has_live_photo ? (
+                <div className="thumb-live-badge" aria-hidden="true" title="Live Photo">
+                  ◎
+                </div>
+              ) : null}
             </div>
-          );
-        })}
+            <div className="tile-body">
+              <strong>{asset.title ?? "Untitled asset"}</strong>
+              <div className="muted">
+                {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm") : "Unknown date"}
+              </div>
+              <div className="chips">
+                <span className="chip">{asset.media_kind}</span>
+                {asset.albums.slice(0, 2).map((album) => (
+                  <span className="chip" key={album}>
+                    {album}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </button>
+        ))}
       </div>
     </div>
   );

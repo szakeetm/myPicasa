@@ -26,6 +26,14 @@ use search::query_service;
 use tauri::Manager;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
+const PREVIEW_DEBUG_LOGS: bool = false;
+
+fn preview_debug_log(message: String) {
+    if PREVIEW_DEBUG_LOGS {
+        println!("{message}");
+    }
+}
+
 fn main() {
     tracing_subscriber::registry()
         .with(
@@ -85,19 +93,19 @@ fn main() {
                             .to_string();
                         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
                         let started = std::time::Instant::now();
-                        println!(
+                        preview_debug_log(format!(
                             "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=start size={}",
                             worker_index,
                             job.asset_id,
                             filename,
                             file_size,
                             job.size
-                        );
+                        ));
                         let generated =
                             generate_thumbnail(&std::path::PathBuf::from(primary_path), job.size)
                                 .map_err(|error| error.to_string())?;
                         match &generated {
-                            Some(bytes) => println!(
+                            Some(bytes) => preview_debug_log(format!(
                                 "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={} elapsed_ms={}",
                                 worker_index,
                                 job.asset_id,
@@ -105,15 +113,15 @@ fn main() {
                                 file_size,
                                 bytes.len(),
                                 started.elapsed().as_millis()
-                            ),
-                            None => println!(
+                            )),
+                            None => preview_debug_log(format!(
                                 "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=unavailable elapsed_ms={}",
                                 worker_index,
                                 job.asset_id,
                                 filename,
                                 file_size,
                                 started.elapsed().as_millis()
-                            ),
+                            )),
                         }
                         Ok(generated)
                     })();
@@ -127,10 +135,10 @@ fn main() {
                             failed.lock().insert(job.key.clone());
                         }
                         Err(error) => {
-                            println!(
+                            preview_debug_log(format!(
                                 "thumbnail_worker={} asset_id={} status=failed error={error}",
                                 worker_index, job.asset_id
-                            );
+                            ));
                             let _ = db.insert_log("error", "thumbnail_worker", &error, Some(job.asset_id));
                             failed.lock().insert(job.key.clone());
                         }

@@ -39,7 +39,9 @@ pub fn validate_import(
             }
         }
         if let Some(hash) = &scan.quick_hash {
-            if !duplicate_hashes.insert(hex(hash)) {
+            if !duplicate_hashes.insert(hex(hash))
+                && has_unmerged_duplicate_hash(db, hash, &scan.candidate_type)?
+            {
                 db.add_diagnostic(
                     import_id,
                     "info",
@@ -69,6 +71,27 @@ pub fn validate_import(
     )?;
 
     Ok(())
+}
+
+fn has_unmerged_duplicate_hash(
+    db: &crate::db::Database,
+    hash: &[u8],
+    media_kind: &str,
+) -> Result<bool, AppError> {
+    db.with_connection(|conn| {
+        use rusqlite::params;
+        let count = conn.query_row(
+            "SELECT COUNT(DISTINCT a.id)
+             FROM assets a
+             JOIN file_entries f ON f.id = a.primary_file_id
+             WHERE a.is_deleted = 0
+               AND a.media_kind = ?2
+               AND f.quick_hash = ?1",
+            params![hash, media_kind],
+            |row| row.get::<_, i64>(0),
+        )?;
+        Ok(count > 1)
+    })
 }
 
 fn hex(bytes: &[u8]) -> String {

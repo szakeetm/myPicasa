@@ -189,19 +189,11 @@ button {
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.34));
 }
 
-.grid-inner {
-  position: relative;
-  width: 100%;
-}
-
-.grid-row {
-  position: absolute;
-  left: 0;
-  width: 100%;
+.media-grid {
   display: grid;
-  align-items: stretch;
   gap: 6px;
   padding: 6px;
+  align-items: start;
 }
 
 .tile {
@@ -236,7 +228,8 @@ button {
 }
 
 .thumb-play-badge,
-.thumb-duration-badge {
+.thumb-duration-badge,
+.thumb-live-badge {
   position: absolute;
   z-index: 1;
   border-radius: 999px;
@@ -270,17 +263,40 @@ button {
   font-variant-numeric: tabular-nums;
 }
 
-.tile-body {
-  padding: 6px 7px 7px;
+.thumb-live-badge {
+  right: 10px;
+  top: 10px;
+  width: 32px;
+  height: 32px;
   display: grid;
-  gap: 2px;
+  place-items: center;
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.tile-body {
+  padding: 4px 7px 6px;
+  display: grid;
+  gap: 0;
   font-size: 0.78rem;
+  line-height: 1.1;
+}
+
+.tile-body strong {
+  display: block;
+  line-height: 1.02;
+  margin: 0;
+}
+
+.tile-body .muted {
+  line-height: 1.05;
 }
 
 .chips {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+  margin-top: 4px;
 }
 
 .chip {

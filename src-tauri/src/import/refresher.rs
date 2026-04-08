@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::Instant;
 
 use rayon::current_num_threads;
@@ -115,14 +115,6 @@ pub fn refresh_takeout_index(
             state.db.set_sidecar_metadata(asset_id, None, sidecar)?;
         }
 
-        if is_live_photo_video(scan) {
-            if let Some(still_asset_id) = find_still_pair_asset_id(state, scan)? {
-                state
-                    .db
-                    .attach_asset_file(still_asset_id, file_id, "live_photo_video")?;
-            }
-        }
-
         state.db.replace_search_row(asset_id)?;
 
         progress.processed_files = (index + 1) as u32;
@@ -135,6 +127,9 @@ pub fn refresh_takeout_index(
     progress.phase = "validating".to_string();
     progress.message = Some("running ingress validation".to_string());
     *state.import_status.lock() = Some(progress.clone());
+
+    attach_live_photo_pairs(state, &scans)?;
+    merge_duplicate_assets_by_hash(state, &scans)?;
 
     progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
     validate_import(&state.db, import_id, &scans)?;
@@ -273,35 +268,235 @@ fn score_sidecar_match(filename: &str, sidecar: &ParsedSidecar) -> Option<usize>
 }
 
 fn is_live_photo_video(scan: &crate::models::FileScanRecord) -> bool {
-    let lowercase = scan.filename.to_lowercase();
-    scan.candidate_type == "video" && (lowercase.contains("motion") || lowercase.contains("live"))
+    scan.candidate_type == "video"
 }
 
 fn find_still_pair_asset_id(
     state: &AppState,
     scan: &crate::models::FileScanRecord,
 ) -> Result<Option<i64>, AppError> {
-    let still_stem = scan
-        .filename
-        .split('.')
-        .next()
-        .unwrap_or_default()
-        .trim_end_matches("-motion")
-        .trim_end_matches("-live")
-        .to_string();
+    let still_stems = still_pair_stems(&scan.filename);
     state.db.with_connection(|conn| {
         use rusqlite::{OptionalExtension, params};
-        conn.query_row(
-            "SELECT a.id
+        for still_stem in still_stems {
+            let result = conn
+                .query_row(
+                    "SELECT a.id
+                     FROM assets a
+                     JOIN file_entries f ON f.id = a.primary_file_id
+                     WHERE f.parent_path = ?1
+                       AND a.media_kind IN ('photo', 'live_photo')
+                       AND (
+                         f.filename LIKE ?2
+                         OR f.filename LIKE ?3
+                       )
+                     LIMIT 1",
+                    params![
+                        scan.parent_path,
+                        format!("{still_stem}.%"),
+                        format!("{still_stem}(%).%"),
+                    ],
+                    |row| row.get::<_, i64>(0),
+                )
+                .optional()?;
+            if result.is_some() {
+                return Ok(result);
+            }
+        }
+        Ok(None)
+    })
+}
+
+fn attach_live_photo_pairs(
+    state: &AppState,
+    scans: &[crate::models::FileScanRecord],
+) -> Result<(), AppError> {
+    for scan in scans.iter().filter(|scan| is_live_photo_video(scan)) {
+        let file_id = state.db.with_connection(|conn| {
+            use rusqlite::{OptionalExtension, params};
+            conn.query_row(
+                "SELECT id FROM file_entries WHERE path = ?1 LIMIT 1",
+                params![scan.path],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()
+            .map_err(AppError::from)
+        })?;
+
+        let Some(file_id) = file_id else {
+            continue;
+        };
+
+        if let Some(still_asset_id) = find_still_pair_asset_id(state, scan)? {
+            state
+                .db
+                .attach_asset_file(still_asset_id, file_id, "live_photo_video")?;
+        }
+    }
+
+    Ok(())
+}
+
+fn merge_duplicate_assets_by_hash(
+    state: &AppState,
+    scans: &[crate::models::FileScanRecord],
+) -> Result<(), AppError> {
+    let mut groups = HashSet::<(Vec<u8>, String)>::new();
+    for scan in scans {
+        if scan.candidate_type == "json" || scan.candidate_type == "other" {
+            continue;
+        }
+        if let Some(hash) = &scan.quick_hash {
+            groups.insert((hash.clone(), scan.candidate_type.clone()));
+        }
+    }
+
+    for (hash, media_kind) in groups {
+        merge_asset_group_for_hash(state, &hash, &media_kind)?;
+    }
+
+    Ok(())
+}
+
+fn merge_asset_group_for_hash(
+    state: &AppState,
+    hash: &[u8],
+    media_kind: &str,
+) -> Result<(), AppError> {
+    let merged_asset_ids = state.db.with_connection(|conn| {
+        use rusqlite::{OptionalExtension, params};
+
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT a.id
              FROM assets a
              JOIN file_entries f ON f.id = a.primary_file_id
-             WHERE f.parent_path = ?1
-               AND f.filename LIKE ?2
-             LIMIT 1",
-            params![scan.parent_path, format!("{still_stem}.%")],
-            |row| row.get::<_, i64>(0),
-        )
-        .optional()
-        .map_err(AppError::from)
-    })
+             WHERE a.is_deleted = 0
+               AND a.media_kind = ?2
+               AND f.quick_hash = ?1
+             ORDER BY a.id",
+        )?;
+        let asset_ids = stmt
+            .query_map(params![hash, media_kind], |row| row.get::<_, i64>(0))?
+            .filter_map(Result::ok)
+            .collect::<Vec<_>>();
+
+        if asset_ids.len() <= 1 {
+            return Ok(Vec::new());
+        }
+
+        let canonical_asset_id = asset_ids[0];
+        let canonical_has_sidecar = conn
+            .query_row(
+                "SELECT 1 FROM sidecar_metadata WHERE asset_id = ?1 LIMIT 1",
+                params![canonical_asset_id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+
+        let mut canonical_has_sidecar = canonical_has_sidecar;
+        let mut merged = Vec::new();
+
+        for duplicate_asset_id in asset_ids.into_iter().skip(1) {
+            conn.execute(
+                "INSERT OR IGNORE INTO album_assets (album_id, asset_id, position_hint, added_at)
+                 SELECT album_id, ?1, position_hint, added_at
+                 FROM album_assets
+                 WHERE asset_id = ?2",
+                params![canonical_asset_id, duplicate_asset_id],
+            )?;
+            conn.execute(
+                "DELETE FROM album_assets WHERE asset_id = ?1",
+                params![duplicate_asset_id],
+            )?;
+
+            conn.execute(
+                "INSERT OR IGNORE INTO asset_files (asset_id, file_id, role)
+                 SELECT ?1,
+                        file_id,
+                        CASE WHEN role = 'primary' THEN 'duplicate' ELSE role END
+                 FROM asset_files
+                 WHERE asset_id = ?2",
+                params![canonical_asset_id, duplicate_asset_id],
+            )?;
+            conn.execute(
+                "DELETE FROM asset_files WHERE asset_id = ?1",
+                params![duplicate_asset_id],
+            )?;
+
+            let duplicate_has_sidecar = conn
+                .query_row(
+                    "SELECT 1 FROM sidecar_metadata WHERE asset_id = ?1 LIMIT 1",
+                    params![duplicate_asset_id],
+                    |_| Ok(()),
+                )
+                .optional()?
+                .is_some();
+            if duplicate_has_sidecar {
+                if canonical_has_sidecar {
+                    conn.execute(
+                        "DELETE FROM sidecar_metadata WHERE asset_id = ?1",
+                        params![duplicate_asset_id],
+                    )?;
+                } else {
+                    conn.execute(
+                        "UPDATE sidecar_metadata SET asset_id = ?1 WHERE asset_id = ?2",
+                        params![canonical_asset_id, duplicate_asset_id],
+                    )?;
+                    canonical_has_sidecar = true;
+                }
+            }
+
+            conn.execute(
+                "DELETE FROM search_fts WHERE asset_id = ?1",
+                params![duplicate_asset_id],
+            )?;
+            conn.execute(
+                "DELETE FROM asset_relationships
+                 WHERE src_asset_id = ?1 OR dst_asset_id = ?1",
+                params![duplicate_asset_id],
+            )?;
+            conn.execute(
+                "UPDATE assets
+                 SET is_deleted = 1, updated_at = ?2
+                 WHERE id = ?1",
+                params![duplicate_asset_id, crate::util::time::utc_now()],
+            )?;
+            merged.push(duplicate_asset_id);
+        }
+
+        Ok(std::iter::once(canonical_asset_id)
+            .chain(merged)
+            .collect::<Vec<_>>())
+    })?;
+
+    if let Some(canonical_asset_id) = merged_asset_ids.first().copied() {
+        state.db.replace_search_row(canonical_asset_id)?;
+        state.db.insert_log(
+            "info",
+            "merge",
+            &format!(
+                "merged {} duplicate assets for media_kind={media_kind}",
+                merged_asset_ids.len() - 1
+            ),
+            Some(canonical_asset_id),
+        )?;
+    }
+
+    Ok(())
+}
+
+fn still_pair_stems(filename: &str) -> Vec<String> {
+    let stem = filename.split('.').next().unwrap_or_default().to_string();
+    let mut stems = vec![stem.clone()];
+
+    for suffix in ["-motion", "-live"] {
+        if let Some(stripped) = stem.strip_suffix(suffix) {
+            if !stems.iter().any(|existing| existing == stripped) {
+                stems.push(stripped.to_string());
+            }
+        }
+    }
+
+    stems
 }

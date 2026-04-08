@@ -506,12 +506,24 @@ impl DatabaseQueries for super::Database {
     ) -> Result<AssetListResponse, AppError> {
         paged_asset_query(
             self,
-            "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+            "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
+                    EXISTS(
+                      SELECT 1 FROM asset_files af_live
+                      WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
+                    ),
+                    f.path, COALESCE(group_concat(DISTINCT al.name), '')
              FROM assets a
              JOIN file_entries f ON f.id = a.primary_file_id
              LEFT JOIN album_assets aa ON aa.asset_id = a.id
              LEFT JOIN albums al ON al.id = aa.album_id
-             WHERE a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')",
+             WHERE a.is_deleted = 0
+               AND a.media_kind IN ('photo', 'video', 'live_photo')
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM asset_files af_hidden
+                 WHERE af_hidden.file_id = a.primary_file_id
+                   AND af_hidden.role = 'live_photo_video'
+               )",
             " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
             request,
         )
@@ -525,13 +537,25 @@ impl DatabaseQueries for super::Database {
         paged_asset_query(
             self,
             &format!(
-                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
+                        EXISTS(
+                          SELECT 1 FROM asset_files af_live
+                          WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
+                        ),
+                        f.path, COALESCE(group_concat(DISTINCT al.name), '')
                  FROM assets a
                  JOIN album_assets aa_filter ON aa_filter.asset_id = a.id AND aa_filter.album_id = {album_id}
                  JOIN file_entries f ON f.id = a.primary_file_id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')"
+                 WHERE a.is_deleted = 0
+                   AND a.media_kind IN ('photo', 'video', 'live_photo')
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM asset_files af_hidden
+                     WHERE af_hidden.file_id = a.primary_file_id
+                       AND af_hidden.role = 'live_photo_video'
+                   )"
             ),
             " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
             request,
@@ -544,18 +568,33 @@ impl DatabaseQueries for super::Database {
             let offset = request.cursor.unwrap_or_default();
             let limit = request.limit.unwrap_or(200) as i64;
             let mut stmt = conn.prepare(
-                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
+                        EXISTS(
+                          SELECT 1 FROM asset_files af_live
+                          WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
+                        ),
+                        f.path, COALESCE(group_concat(DISTINCT al.name), '')
                  FROM search_fts s
                  JOIN assets a ON a.id = s.asset_id
                  JOIN file_entries f ON f.id = a.primary_file_id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE search_fts MATCH ?1 AND a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')
+                 WHERE search_fts MATCH ?1
+                   AND a.is_deleted = 0
+                   AND a.media_kind IN ('photo', 'video', 'live_photo')
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM asset_files af_hidden
+                     WHERE af_hidden.file_id = a.primary_file_id
+                       AND af_hidden.role = 'live_photo_video'
+                   )
                  GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path
                  ORDER BY rank
                  LIMIT ?2 OFFSET ?3",
             )?;
-            let rows = stmt.query_map(params![query, limit, offset], |row| map_asset_list_item(row))?;
+            let rows = stmt.query_map(params![query, limit, offset], |row| {
+                map_asset_list_item(row)
+            })?;
             let items: Vec<_> = rows.filter_map(Result::ok).collect();
             Ok(AssetListResponse {
                 items,
@@ -731,8 +770,9 @@ fn map_asset_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetListIte
         media_kind: row.get(2)?,
         taken_at_utc: row.get(3)?,
         duration_ms: row.get(4)?,
-        primary_path: row.get(5)?,
-        albums: split_csv(row.get::<_, String>(6)?),
+        has_live_photo: row.get::<_, bool>(5)?,
+        primary_path: row.get(6)?,
+        albums: split_csv(row.get::<_, String>(7)?),
     })
 }
 

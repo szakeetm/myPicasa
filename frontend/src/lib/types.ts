@@ -39,6 +39,7 @@ export type AssetListItem = {
   media_kind: string;
   taken_at_utc?: string | null;
   duration_ms?: number | null;
+  has_live_photo: boolean;
   primary_path: string;
   albums: string[];
 };
