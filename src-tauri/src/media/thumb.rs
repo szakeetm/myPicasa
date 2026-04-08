@@ -12,6 +12,7 @@ use image::{DynamicImage, ImageDecoder, ImageReader, codecs::jpeg::JpegEncoder};
 use crate::util::errors::AppError;
 
 const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
+const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     if is_video_path(path) {
@@ -325,7 +326,7 @@ fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<V
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()?,
-        EXTERNAL_TOOL_TIMEOUT,
+        VIDEO_THUMBNAIL_TIMEOUT,
         "ffmpeg thumbnail render",
     )?;
 
