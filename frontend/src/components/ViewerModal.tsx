@@ -160,7 +160,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           }
         });
     } else {
-      void logClient("viewer.video", `asset ${assetId} attempting native playback for ${asset?.primary_path ?? "unknown"}`);
+      void logClient(
+        "viewer.video",
+        `asset ${assetId} attempting native playback for ${asset?.primary_path ?? "unknown"} (${describeVideoSupport(primaryPath)})`,
+      );
+      void probeMediaFetch("viewer.video", assetId, primaryPath);
       setVideoSrc(primaryPath);
       setVideoFallbackAttempted(false);
       setVideoTranscoding(false);
@@ -211,7 +215,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           }
         });
     } else {
-      void logClient("viewer.live_photo", `asset ${assetId} attempting native motion playback for ${asset?.live_photo_video_path ?? "unknown"}`);
+      void logClient(
+        "viewer.live_photo",
+        `asset ${assetId} attempting native motion playback for ${asset?.live_photo_video_path ?? "unknown"} (${describeVideoSupport(livePhotoPath)})`,
+      );
+      void probeMediaFetch("viewer.live_photo", assetId, livePhotoPath);
       setLivePhotoMotionSrc(livePhotoPath);
       setLivePhotoFallbackAttempted(false);
       setLivePhotoTranscoding(false);
@@ -327,6 +335,30 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     await element.requestFullscreen();
   }
 
+  function handleVideoDiagnostics(
+    scope: "viewer.video" | "viewer.live_photo",
+    label: string,
+    event: React.SyntheticEvent<HTMLVideoElement>,
+  ) {
+    const element = event.currentTarget;
+    const errorCode = element.error?.code;
+    const errorName =
+      errorCode === 1
+        ? "aborted"
+        : errorCode === 2
+          ? "network"
+          : errorCode === 3
+            ? "decode"
+            : errorCode === 4
+              ? "src_not_supported"
+              : "none";
+    void logClient(
+      scope,
+      `${label} src="${summarizeMediaSrc(element.currentSrc)}" readyState=${element.readyState} networkState=${element.networkState} error=${errorName}`,
+      errorCode ? "error" : "info",
+    );
+  }
+
   useEffect(() => {
     if (!asset) return;
     function onKeyDown(event: KeyboardEvent) {
@@ -407,21 +439,27 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
             videoSrc ? (
               <video
                 ref={videoElementRef}
-                src={videoSrc}
                 controls
                 autoPlay
+                preload="metadata"
+                onLoadedMetadata={(event) => handleVideoDiagnostics("viewer.video", "loadedmetadata", event)}
+                onCanPlay={(event) => handleVideoDiagnostics("viewer.video", "canplay", event)}
+                onWaiting={(event) => handleVideoDiagnostics("viewer.video", "waiting", event)}
+                onStalled={(event) => handleVideoDiagnostics("viewer.video", "stalled", event)}
                 onPlay={() => {
                   void logClient("viewer.video", `asset ${assetId} video started playing`);
                 }}
-                onError={() => {
-                  void logClient("viewer.video", `asset ${assetId} native video element error for ${videoSrc ?? "unknown"}`, "error");
+                onError={(event) => {
+                  handleVideoDiagnostics("viewer.video", `asset ${assetId} video element error`, event);
                   if (!videoFallbackAttempted) {
                     void fallbackVideoToBackend();
                     return;
                   }
                   setVideoError("Video playback unavailable");
                 }}
-              />
+              >
+                <source src={videoSrc} type={inferVideoSourceType(videoSrc)} />
+              </video>
             ) : videoError ? (
               <div className="muted">{videoError}</div>
             ) : videoTranscoding ? (
@@ -432,23 +470,44 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           ) : showLivePhotoMotion ? (
             livePhotoMotionSrc ? (
               <video
-                src={livePhotoMotionSrc}
                 controls
                 autoPlay
                 muted
                 loop
+                preload="metadata"
+                onLoadedMetadata={(event) =>
+                  handleVideoDiagnostics("viewer.live_photo", "loadedmetadata", event)
+                }
+                onCanPlay={(event) =>
+                  handleVideoDiagnostics("viewer.live_photo", "canplay", event)
+                }
+                onWaiting={(event) =>
+                  handleVideoDiagnostics("viewer.live_photo", "waiting", event)
+                }
+                onStalled={(event) =>
+                  handleVideoDiagnostics("viewer.live_photo", "stalled", event)
+                }
                 onPlay={() => {
                   void logClient("viewer.live_photo", `asset ${assetId} live photo motion started playing`);
                 }}
-                onError={() => {
-                  void logClient("viewer.live_photo", `asset ${assetId} live photo motion element error for ${livePhotoMotionSrc ?? "unknown"}`, "error");
+                onError={(event) => {
+                  handleVideoDiagnostics(
+                    "viewer.live_photo",
+                    `asset ${assetId} live photo motion element error`,
+                    event,
+                  );
                   if (!livePhotoFallbackAttempted) {
                     void fallbackLivePhotoToBackend();
                     return;
                   }
                   setLivePhotoMotionError("Live photo playback unavailable");
                 }}
-              />
+              >
+                <source
+                  src={livePhotoMotionSrc}
+                  type={inferVideoSourceType(livePhotoMotionSrc)}
+                />
+              </video>
             ) : livePhotoMotionError ? (
               <div className="muted">{livePhotoMotionError}</div>
             ) : livePhotoTranscoding ? (
@@ -531,6 +590,77 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   );
 }
 
+function summarizeMediaSrc(src?: string) {
+  if (!src) return "none";
+  if (src.startsWith("data:video/")) {
+    const format = src.slice("data:".length).split(";")[0] ?? "video";
+    return `${format} data-url`;
+  }
+  return src;
+}
+
+function describeVideoSupport(src?: string) {
+  if (typeof document === "undefined") {
+    return "video support unknown";
+  }
+  const probe = document.createElement("video");
+  const requestedType = inferVideoSourceType(src) ?? "unknown";
+  const mp4 = probe.canPlayType("video/mp4") || "no";
+  const mov = probe.canPlayType("video/quicktime") || "no";
+  const webm = probe.canPlayType("video/webm") || "no";
+  return `requested=${requestedType} canPlayType(mp4=${mp4}, mov=${mov}, webm=${webm})`;
+}
+
+async function probeMediaFetch(
+  scope: "viewer.video" | "viewer.live_photo",
+  assetId: number,
+  src?: string,
+) {
+  if (!src || src.startsWith("data:")) {
+    return;
+  }
+
+  try {
+    const response = await fetch(src, {
+      headers: {
+        Range: "bytes=0-4095",
+      },
+    });
+    const contentType = response.headers.get("content-type") ?? "unknown";
+    const contentLength = response.headers.get("content-length") ?? "unknown";
+    const contentRange = response.headers.get("content-range") ?? "none";
+    void logClient(
+      scope,
+      `asset ${assetId} fetch probe status=${response.status} ok=${response.ok} type=${contentType} length=${contentLength} range=${contentRange}`,
+      response.ok ? "info" : "error",
+    );
+  } catch (error) {
+    void logClient(
+      scope,
+      `asset ${assetId} fetch probe failed for ${summarizeMediaSrc(src)}: ${String(error)}`,
+      "error",
+    );
+  }
+}
+
+function inferVideoSourceType(src?: string) {
+  if (!src) return undefined;
+  if (src.startsWith("data:video/mp4")) return "video/mp4";
+  const extension = src.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "mp4":
+      return "video/mp4";
+    case "m4v":
+      return "video/x-m4v";
+    case "mov":
+      return "video/quicktime";
+    case "webm":
+      return "video/webm";
+    default:
+      return undefined;
+  }
+}
+
 function isDirectImagePath(path?: string | null) {
   const extension = path?.split(".").pop()?.toLowerCase();
   return extension !== undefined && ["jpg", "jpeg", "png", "webp", "gif"].includes(extension);
@@ -538,7 +668,7 @@ function isDirectImagePath(path?: string | null) {
 
 function shouldUseBackendVideo(path?: string | null) {
   const extension = path?.split(".").pop()?.toLowerCase();
-  return extension !== undefined && !["mp4", "m4v", "webm"].includes(extension);
+  return extension !== undefined && !["mp4", "m4v", "mov", "webm"].includes(extension);
 }
 
 function formatFileSize(bytes: number) {
