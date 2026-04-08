@@ -10,6 +10,9 @@ type MediaGridProps = {
   onSelect: (assetId: number) => void;
   onLeadingDateChange?: (value?: string) => void;
   thumbnailResetKey?: number;
+  hasMore?: boolean;
+  isLoadingMore?: boolean;
+  onLoadMore?: () => void;
   thumbnailPreload?: {
     active: boolean;
     runId: number;
@@ -40,10 +43,14 @@ export function MediaGrid({
   onSelect,
   onLeadingDateChange,
   thumbnailResetKey,
+  hasMore = false,
+  isLoadingMore = false,
+  onLoadMore,
   thumbnailPreload,
   onThumbnailPreloadProgress,
 }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
@@ -109,7 +116,27 @@ export function MediaGrid({
       previewsCompleted: -1,
       previewsTotal: -1,
     };
-  }, [assets, thumbnailResetKey, thumbnailSize]);
+  }, [thumbnailResetKey, thumbnailSize]);
+
+  useEffect(() => {
+    const assetIds = new Set(assets.map((asset) => asset.id));
+    startTransition(() => {
+      setThumbs((current) => {
+        let changed = false;
+        const next: Record<number, ThumbnailState> = {};
+        for (const [assetId, value] of Object.entries(current)) {
+          const numericId = Number(assetId);
+          if (assetIds.has(numericId)) {
+            next[numericId] = value;
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : current;
+      });
+      setVisibleIds((current) => current.filter((assetId) => assetIds.has(assetId)));
+    });
+  }, [assets]);
 
   useEffect(() => {
     thumbsRef.current = thumbs;
@@ -276,6 +303,30 @@ export function MediaGrid({
 
     return () => observer.disconnect();
   }, [assets, columns]);
+
+  useEffect(() => {
+    const root = parentRef.current;
+    const sentinel = loadMoreRef.current;
+    if (!root || !sentinel || !hasMore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !isLoadingMore) {
+          onLoadMore?.();
+        }
+      },
+      {
+        root,
+        rootMargin: "400px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, isLoadingMore, onLoadMore, assets.length]);
 
   useEffect(() => {
     let disposed = false;
@@ -547,6 +598,11 @@ export function MediaGrid({
           </button>
         ))}
       </div>
+      {hasMore || isLoadingMore ? (
+        <div className="grid-load-more" ref={loadMoreRef} aria-live="polite">
+          {isLoadingMore ? "Loading more media..." : "Scroll to load more"}
+        </div>
+      ) : null}
     </div>
   );
 }

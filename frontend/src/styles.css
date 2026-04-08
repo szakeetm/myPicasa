@@ -230,6 +230,12 @@ button {
   align-items: start;
 }
 
+.grid-load-more {
+  padding: 14px 18px 18px;
+  text-align: center;
+  color: var(--text-soft);
+}
+
 .tile {
   border: 1px solid var(--border);
   border-radius: 20px;

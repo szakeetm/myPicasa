@@ -839,9 +839,10 @@ fn paged_asset_query(
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], |row| map_asset_list_item(row))?;
         let items = rows.filter_map(Result::ok).collect::<Vec<_>>();
+        let has_more = items.len() == limit as usize;
         Ok(AssetListResponse {
             items,
-            next_cursor: Some(offset + limit as u32),
+            next_cursor: has_more.then_some(offset + limit as u32),
         })
     })
 }

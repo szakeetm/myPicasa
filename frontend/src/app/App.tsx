@@ -13,10 +13,14 @@ import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
 import type { AssetListRequest } from "../lib/types";
 
+const ASSET_PAGE_SIZE = 200;
+
 export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
   const [timelineLabel, setTimelineLabel] = useState<string>();
+  const [nextAssetCursor, setNextAssetCursor] = useState<number>();
+  const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [thumbnailPreloadActive, setThumbnailPreloadActive] = useState(false);
   const [thumbnailPreloadRunId, setThumbnailPreloadRunId] = useState(0);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
@@ -30,20 +34,25 @@ export function App() {
     | undefined
   >();
   const didInitFilterEffect = useRef(false);
+  const assetQueryGenerationRef = useRef(0);
 
-  async function refreshAllAssets(options?: {
-    viewMode?: "timeline" | "album";
-    selectedAlbumId?: number;
-    query?: string;
-    mediaKind?: string;
-  }) {
-    const viewMode = options?.viewMode ?? state.viewMode;
+  async function fetchAssetsPage(
+    options: {
+      viewMode?: "timeline" | "album";
+      selectedAlbumId?: number;
+      query?: string;
+      mediaKind?: string;
+    },
+    cursor?: number,
+  ) {
+    const viewMode = options.viewMode ?? state.viewMode;
     const selectedAlbumId =
-      options && "selectedAlbumId" in options ? options.selectedAlbumId : state.selectedAlbumId;
-    const query = options?.query ?? state.query;
-    const mediaKind = options?.mediaKind ?? state.mediaKind;
+      "selectedAlbumId" in options ? options.selectedAlbumId : state.selectedAlbumId;
+    const query = options.query ?? state.query;
+    const mediaKind = options.mediaKind ?? state.mediaKind;
     const request: AssetListRequest = {
-      limit: 400,
+      cursor,
+      limit: ASSET_PAGE_SIZE,
       query: query || undefined,
       media_kind: mediaKind || undefined,
     };
@@ -54,9 +63,62 @@ export function App() {
         : query
           ? await api.searchAssets(request)
           : await api.listAssetsByDate(request);
+
+    return {
+      response,
+      viewMode,
+    };
+  }
+
+  async function refreshAllAssets(options?: {
+    viewMode?: "timeline" | "album";
+    selectedAlbumId?: number;
+    query?: string;
+    mediaKind?: string;
+  }) {
+    const generation = ++assetQueryGenerationRef.current;
+    setLoadingMoreAssets(false);
+    const { response, viewMode } = await fetchAssetsPage(options ?? {}, undefined);
+    if (generation !== assetQueryGenerationRef.current) {
+      return;
+    }
     state.setAssets(response.items);
+    setNextAssetCursor(response.next_cursor ?? undefined);
+    setThumbnailResetKey((value) => value + 1);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
-    await logClient("ui.refresh", `loaded ${response.items.length} assets in ${viewMode} mode`);
+    await logClient(
+      "ui.refresh",
+      `loaded ${response.items.length} assets in ${viewMode} mode next_cursor=${response.next_cursor ?? "end"}`,
+    );
+  }
+
+  async function loadMoreAssets() {
+    if (loadingMoreAssets || nextAssetCursor == null) {
+      return;
+    }
+
+    const generation = assetQueryGenerationRef.current;
+    setLoadingMoreAssets(true);
+    try {
+      const { response, viewMode } = await fetchAssetsPage({}, nextAssetCursor);
+      if (generation !== assetQueryGenerationRef.current) {
+        return;
+      }
+
+      const currentAssets = useAppState.getState().assets;
+      const seen = new Set(currentAssets.map((asset) => asset.id));
+      const appendedItems = response.items.filter((asset) => !seen.has(asset.id));
+      state.setAssets([...currentAssets, ...appendedItems]);
+      setNextAssetCursor(response.next_cursor ?? undefined);
+      await logClient(
+        "ui.refresh",
+        `appended ${appendedItems.length} assets in ${viewMode} mode total=${currentAssets.length + appendedItems.length} next_cursor=${response.next_cursor ?? "end"}`,
+      );
+    } finally {
+      if (generation === assetQueryGenerationRef.current) {
+        setLoadingMoreAssets(false);
+      }
+    }
   }
 
   async function refreshDebugSurfaces() {
@@ -247,6 +309,8 @@ export function App() {
     state.setImportStatus(undefined);
     state.setSelectedAlbumId(undefined);
     state.setViewMode("timeline");
+    setNextAssetCursor(undefined);
+    setLoadingMoreAssets(false);
 
     await api.resetLocalDatabase();
     window.location.reload();
@@ -358,6 +422,9 @@ export function App() {
             assets={state.assets}
             onSelect={handleSelectAsset}
             thumbnailResetKey={thumbnailResetKey}
+            hasMore={nextAssetCursor != null}
+            isLoadingMore={loadingMoreAssets}
+            onLoadMore={loadMoreAssets}
             thumbnailPreload={{
               active: thumbnailPreloadActive,
               runId: thumbnailPreloadRunId,
