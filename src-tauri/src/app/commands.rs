@@ -209,21 +209,6 @@ pub fn request_thumbnail(
         &state.thumbnail_cache
     };
     if let Some(bytes) = cache.lock().get(&key) {
-        let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
-        let (filename, file_size) = detail
-            .primary_path
-            .as_deref()
-            .map(media_debug_info)
-            .unwrap_or_else(|| (asset_id.to_string(), 0));
-        info!(
-            asset_id,
-            size,
-            bytes = bytes.len(),
-            filename = %filename,
-            file_size,
-            source = if use_preview_cache { "preview-cache" } else { "thumbnail-cache" },
-            "thumbnail load ready"
-        );
         return Ok(Some(format!(
             "data:image/jpeg;base64,{}",
             STANDARD.encode(bytes)
@@ -239,29 +224,13 @@ pub fn request_thumbnail(
     let working_dir = state.app_data_dir.join("working");
     match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
         Ok(Some(bytes)) => {
-            info!(
-                asset_id,
-                size,
-                bytes = bytes.len(),
-                filename = %filename,
-                file_size,
-                source = if use_preview_cache {
-                    "generated-preview-cache"
-                } else {
-                    "generated-thumbnail-cache"
-                },
-                "thumbnail load ready"
-            );
             cache.lock().insert(key, bytes.clone());
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
             )))
         }
-        Ok(None) => {
-            info!(asset_id, size, filename = %filename, file_size, "thumbnail unavailable");
-            Ok(None)
-        }
+        Ok(None) => Ok(None),
         Err(error) => {
             error!(asset_id, %error, "thumbnail generation failed");
             preview_debug_log(format!(
@@ -303,13 +272,6 @@ pub fn request_thumbnails_batch(
                     size,
                     bytes.len()
                 ));
-                info!(
-                    asset_id,
-                    size,
-                    bytes = bytes.len(),
-                    source = if use_preview_cache { "preview-cache" } else { "thumbnail-cache" },
-                    "thumbnail batch load ready"
-                );
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "ready".to_string(),
@@ -322,12 +284,6 @@ pub fn request_thumbnails_batch(
                     "thumbnail_batch_item asset_id={} size={} status=unavailable source=failed_cache",
                     asset_id, size
                 ));
-                info!(
-                    asset_id,
-                    size,
-                    source = if use_preview_cache { "preview-cache" } else { "thumbnail-cache" },
-                    "thumbnail batch unavailable"
-                );
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "unavailable".to_string(),
@@ -399,26 +355,9 @@ pub fn load_viewer_frame(
     let (filename, file_size) = media_debug_info(&primary_path);
     let source_path = PathBuf::from(&primary_path);
     let prefer_original = prefer_original.unwrap_or(false);
-    info!(
-        asset_id,
-        filename = %filename,
-        file_size,
-        source = if prefer_original { "original" } else { "rendered" },
-        "viewer image load requested"
-    );
 
     if prefer_original {
         let bytes = fs::read(&source_path).map_err(map_error)?;
-        let elapsed = started.elapsed().as_millis();
-        info!(
-            asset_id,
-            elapsed_ms = elapsed,
-            bytes = bytes.len(),
-            filename = %filename,
-            file_size,
-            source = "original",
-            "viewer image original-byte load ready"
-        );
         return Ok(Some(format!(
             "data:{};base64,{}",
             image_mime_type(&source_path),
@@ -438,15 +377,6 @@ pub fn load_viewer_frame(
             let elapsed = started.elapsed().as_millis();
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-            info!(
-                asset_id,
-                elapsed_ms = elapsed,
-                bytes = generated_bytes,
-                filename = %filename,
-                file_size,
-                source = "rendered",
-                "viewer image generated"
-            );
             preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
                 file_size,
@@ -459,14 +389,6 @@ pub fn load_viewer_frame(
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
-            info!(
-                asset_id,
-                elapsed_ms = elapsed,
-                filename = %filename,
-                file_size,
-                source = "rendered",
-                "viewer image unavailable"
-            );
             preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={elapsed}",
                 file_size
@@ -501,18 +423,9 @@ pub fn load_viewer_video(
     let (filename, file_size) = media_debug_info(&primary_path);
     let source_path = PathBuf::from(&primary_path);
     let prefer_original = prefer_original.unwrap_or(false);
-    let original_codec = probe_primary_video_codec(&source_path).ok().flatten();
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
-        info!(asset_id, filename = %filename, file_size, "viewer video original-byte load requested");
         let bytes = fs::read(&source_path).map_err(map_error)?;
-        info!(
-            asset_id,
-            filename = %filename,
-            file_size,
-            generated_bytes = bytes.len(),
-            "viewer video original-byte load ready"
-        );
         state
             .db
             .insert_log(
@@ -536,45 +449,13 @@ pub fn load_viewer_video(
                 _ => "original_mp4".to_string(),
             },
         }));
-    } else if prefer_original {
-        let original_mime = video_mime_type(&source_path);
-        info!(
-            asset_id,
-            filename = %filename,
-            file_size,
-            codec = %original_codec.as_deref().unwrap_or("unknown"),
-            mime = %original_mime,
-            reason = "codec_not_allowed_for_original_playback",
-            "viewer video original-byte load skipped"
-        );
     }
-
-    info!(asset_id, filename = %filename, file_size, "viewer video transcode requested");
 
     let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
     match generate_viewer_video(&source_path, &viewer_cache_dir) {
         Ok(Some((path, cache_hit))) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-            if cache_hit {
-                info!(
-                    asset_id,
-                    filename = %filename,
-                    file_size,
-                    generated_bytes,
-                    output_path = %path.display(),
-                    "viewer video cache hit"
-                );
-            } else {
-                info!(
-                    asset_id,
-                    filename = %filename,
-                    file_size,
-                    generated_bytes,
-                    output_path = %path.display(),
-                    "viewer video transcode ready"
-                );
-            }
             state
                 .db
                 .insert_log(
@@ -629,18 +510,9 @@ pub fn load_live_photo_motion(
     let (filename, file_size) = media_debug_info(&motion_path);
     let source_path = PathBuf::from(&motion_path);
     let prefer_original = prefer_original.unwrap_or(false);
-    let original_codec = probe_primary_video_codec(&source_path).ok().flatten();
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
-        info!(asset_id, filename = %filename, file_size, "live photo motion original-byte load requested");
         let bytes = fs::read(&source_path).map_err(map_error)?;
-        info!(
-            asset_id,
-            filename = %filename,
-            file_size,
-            generated_bytes = bytes.len(),
-            "live photo motion original-byte load ready"
-        );
         state
             .db
             .insert_log(
@@ -664,45 +536,13 @@ pub fn load_live_photo_motion(
                 _ => "original_mp4".to_string(),
             },
         }));
-    } else if prefer_original {
-        let original_mime = video_mime_type(&source_path);
-        info!(
-            asset_id,
-            filename = %filename,
-            file_size,
-            codec = %original_codec.as_deref().unwrap_or("unknown"),
-            mime = %original_mime,
-            reason = "codec_not_allowed_for_original_playback",
-            "live photo motion original-byte load skipped"
-        );
     }
-
-    info!(asset_id, filename = %filename, file_size, "live photo motion transcode requested");
 
     let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
     match generate_viewer_video(&source_path, &viewer_cache_dir) {
         Ok(Some((path, cache_hit))) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-            if cache_hit {
-                info!(
-                    asset_id,
-                    filename = %filename,
-                    file_size,
-                    generated_bytes,
-                    output_path = %path.display(),
-                    "live photo motion cache hit"
-                );
-            } else {
-                info!(
-                    asset_id,
-                    filename = %filename,
-                    file_size,
-                    generated_bytes,
-                    output_path = %path.display(),
-                    "live photo motion transcode ready"
-                );
-            }
             state
                 .db
                 .insert_log(
