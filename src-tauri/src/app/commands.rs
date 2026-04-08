@@ -283,7 +283,12 @@ pub fn request_thumbnails_batch(
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
     let generation = state.thumbnail_generation.load(Ordering::SeqCst);
-    let cache = state.thumbnail_cache.clone();
+    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let cache = if use_preview_cache {
+        state.preview_cache.clone()
+    } else {
+        state.thumbnail_cache.clone()
+    };
 
     let items = asset_ids
         .into_iter()
@@ -297,6 +302,13 @@ pub fn request_thumbnails_batch(
                     size,
                     bytes.len()
                 ));
+                info!(
+                    asset_id,
+                    size,
+                    bytes = bytes.len(),
+                    source = if use_preview_cache { "preview-cache" } else { "thumbnail-cache" },
+                    "thumbnail batch load ready"
+                );
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "ready".to_string(),
@@ -309,6 +321,12 @@ pub fn request_thumbnails_batch(
                     "thumbnail_batch_item asset_id={} size={} status=unavailable source=failed_cache",
                     asset_id, size
                 ));
+                info!(
+                    asset_id,
+                    size,
+                    source = if use_preview_cache { "preview-cache" } else { "thumbnail-cache" },
+                    "thumbnail batch unavailable"
+                );
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "unavailable".to_string(),

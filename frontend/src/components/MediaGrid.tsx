@@ -124,7 +124,7 @@ export function MediaGrid({
             !state.previewStatus
           );
         })
-        .slice(0, 1)
+        .slice(0, 4)
         .map((asset) => asset.id);
 
       const preloadPreviewIds = thumbnailPreload?.active
@@ -137,60 +137,77 @@ export function MediaGrid({
                 !state.previewStatus
               );
             })
-            .slice(0, Math.max(0, 1 - visiblePreviewIds.length))
+            .slice(0, Math.max(0, 8 - visiblePreviewIds.length))
             .map((asset) => asset.id)
         : [];
 
-      const targetId = [...visiblePreviewIds, ...preloadPreviewIds][0];
-      if (!targetId) {
+      const targetIds = [...visiblePreviewIds, ...preloadPreviewIds];
+      if (targetIds.length === 0) {
         return;
       }
 
       startTransition(() => {
-        setThumbs((current) => ({
-          ...current,
-          [targetId]: {
-            ...current[targetId],
-            previewStatus: "pending",
-          },
-        }));
+        setThumbs((current) => {
+          const next = { ...current };
+          for (const targetId of targetIds) {
+            next[targetId] = {
+              ...next[targetId],
+              previewStatus: "pending",
+            };
+          }
+          return next;
+        });
       });
 
       previewRequestInFlightRef.current = true;
       try {
-        const src = await api.requestThumbnail(targetId, 1024);
+        const batch = await api.requestThumbnailsBatch(targetIds, 1024);
         if (disposed) {
           return;
         }
 
         startTransition(() => {
-          setThumbs((current) => ({
-            ...current,
-            [targetId]: {
-              ...current[targetId],
-              previewStatus: src ? "ready" : "unavailable",
-            },
-          }));
+          setThumbs((current) => {
+            const next = { ...current };
+            for (const item of batch) {
+              next[item.asset_id] = {
+                ...next[item.asset_id],
+                previewStatus:
+                  item.status === "ready"
+                    ? "ready"
+                    : item.status === "unavailable"
+                      ? "unavailable"
+                      : undefined,
+              };
+            }
+            return next;
+          });
         });
 
+        const readyCount = batch.filter((item) => item.status === "ready").length;
+        const pendingCount = batch.filter((item) => item.status === "pending").length;
+        const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
         void logClient(
           "grid",
-          `viewer preview ${src ? "ready" : "unavailable"} asset_id=${targetId} size=1024 mode=${visiblePreviewIds.length > 0 ? "visible" : "idle-preload"}`,
+          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=1024 mode=${visiblePreviewIds.length > 0 ? "visible" : "idle-preload"}`,
         );
       } catch (error) {
         if (disposed) {
           return;
         }
         startTransition(() => {
-          setThumbs((current) => ({
-            ...current,
-            [targetId]: {
-              ...current[targetId],
-              previewStatus: undefined,
-            },
-          }));
+          setThumbs((current) => {
+            const next = { ...current };
+            for (const targetId of targetIds) {
+              next[targetId] = {
+                ...next[targetId],
+                previewStatus: undefined,
+              };
+            }
+            return next;
+          });
         });
-        await logClient("grid", `viewer preview generation failed asset_id=${targetId}: ${String(error)}`, "error");
+        await logClient("grid", `viewer preview batch failed requested=${targetIds.length}: ${String(error)}`, "error");
       } finally {
         previewRequestInFlightRef.current = false;
         schedule();
