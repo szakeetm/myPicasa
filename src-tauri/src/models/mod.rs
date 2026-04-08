@@ -43,6 +43,7 @@ pub struct FileScanRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ParsedSidecar {
     pub json_raw: String,
+    pub title_hint: Option<String>,
     pub photo_taken_time_utc: Option<String>,
     pub geo_lat: Option<f64>,
     pub geo_lon: Option<f64>,

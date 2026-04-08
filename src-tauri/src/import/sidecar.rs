@@ -19,6 +19,7 @@ pub fn parse_sidecar(scan: &FileScanRecord) -> Result<Option<ParsedSidecar>, App
         .and_then(Value::as_str)
         .and_then(|item| item.parse::<i64>().ok())
         .map(crate::util::time::epoch_to_utc);
+    let title_hint = value.get("title").and_then(Value::as_str).map(ToOwned::to_owned);
 
     let geo_lat = value
         .pointer("/geoDataExif/latitude")
@@ -49,6 +50,7 @@ pub fn parse_sidecar(scan: &FileScanRecord) -> Result<Option<ParsedSidecar>, App
 
     Ok(Some(ParsedSidecar {
         json_raw: raw,
+        title_hint,
         photo_taken_time_utc,
         geo_lat,
         geo_lon,

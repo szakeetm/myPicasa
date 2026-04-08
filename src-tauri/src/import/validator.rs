@@ -1,7 +1,12 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::{db::DatabaseQueries, models::FileScanRecord, util::errors::AppError};
+use crate::{
+    db::DatabaseQueries,
+    import::sidecar::parse_sidecar,
+    models::FileScanRecord,
+    util::errors::AppError,
+};
 
 pub fn validate_import(
     db: &crate::db::Database,
@@ -15,8 +20,14 @@ pub fn validate_import(
     for scan in scans {
         if scan.candidate_type == "json" {
             sidecars += 1;
-            if db.resolve_sidecar_target(&scan.path)?.is_none() {
-                unmatched.push((scan.path.clone(), guessed_target_name(&scan.path)));
+            let sidecar = parse_sidecar(scan).ok().flatten();
+            let candidate_names = build_candidate_names(&scan.path, sidecar.as_ref());
+            if db.resolve_sidecar_target(&scan.path, &candidate_names)?.is_none() {
+                println!(
+                    "ambiguous_json_target path=\"{}\" candidates={:?}",
+                    scan.path, candidate_names
+                );
+                unmatched.push((scan.path.clone(), describe_target_guess(&candidate_names)));
             }
         }
         if let Some(hash) = &scan.quick_hash {
@@ -65,4 +76,25 @@ fn guessed_target_name(path: &str) -> String {
         .trim_end_matches(".supplemental-metadata.json")
         .trim_end_matches(".json")
         .to_string()
+}
+
+fn build_candidate_names(path: &str, sidecar: Option<&crate::models::ParsedSidecar>) -> Vec<String> {
+    let mut candidates = vec![guessed_target_name(path)];
+    if let Some(title_hint) = sidecar.and_then(|item| item.title_hint.as_ref()) {
+        let trimmed = title_hint.trim().to_string();
+        if !trimmed.is_empty() && !candidates.iter().any(|existing| existing == &trimmed) {
+            candidates.push(trimmed);
+        }
+    }
+    candidates
+}
+
+fn describe_target_guess(candidates: &[String]) -> String {
+    if candidates.is_empty() {
+        "unknown target".to_string()
+    } else if candidates.len() == 1 {
+        candidates[0].clone()
+    } else {
+        format!("{} (sidecar title hint: {})", candidates[0], candidates[1])
+    }
 }

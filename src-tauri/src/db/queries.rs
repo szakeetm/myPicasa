@@ -46,7 +46,11 @@ pub trait DatabaseQueries {
         related_path: Option<&str>,
         message: &str,
     ) -> Result<(), AppError>;
-    fn resolve_sidecar_target(&self, sidecar_path: &str) -> Result<Option<(i64, i64)>, AppError>;
+    fn resolve_sidecar_target(
+        &self,
+        sidecar_path: &str,
+        candidate_names: &[String],
+    ) -> Result<Option<(i64, i64)>, AppError>;
     fn list_albums(&self) -> Result<Vec<AlbumSummary>, AppError>;
     fn list_assets_by_date(&self, request: AssetListRequest) -> Result<AssetListResponse, AppError>;
     fn list_assets_by_album(
@@ -387,30 +391,64 @@ impl DatabaseQueries for super::Database {
         })
     }
 
-    fn resolve_sidecar_target(&self, sidecar_path: &str) -> Result<Option<(i64, i64)>, AppError> {
+    fn resolve_sidecar_target(
+        &self,
+        sidecar_path: &str,
+        candidate_names: &[String],
+    ) -> Result<Option<(i64, i64)>, AppError> {
         let path = Path::new(sidecar_path);
         let Some(stem) = path.file_stem().and_then(|item| item.to_str()) else {
             return Ok(None);
         };
-        let candidate_prefix = stem.trim_end_matches(".supplemental-metadata");
+        let mut candidates = vec![stem.trim_end_matches(".supplemental-metadata").to_string()];
+        for candidate in candidate_names {
+            let trimmed = candidate.trim();
+            if !trimmed.is_empty() && !candidates.iter().any(|existing| existing == trimmed) {
+                candidates.push(trimmed.to_string());
+            }
+        }
         self.with_connection(|conn| {
-            conn.query_row(
-                "SELECT a.id, f.id
-                 FROM file_entries f
-                 JOIN asset_files af ON af.file_id = f.id
-                 JOIN assets a ON a.id = af.asset_id
-                 WHERE f.parent_path = ?1
-                   AND f.filename LIKE ?2
-                   AND f.is_deleted = 0
-                 LIMIT 1",
-                params![
-                    path.parent().and_then(|item| item.to_str()).unwrap_or(""),
-                    format!("{candidate_prefix}.%")
-                ],
-                |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-            )
-            .optional()
-            .map_err(AppError::from)
+            let parent_path = path.parent().and_then(|item| item.to_str()).unwrap_or("");
+
+            for candidate in &candidates {
+                let direct_match = conn
+                    .query_row(
+                        "SELECT a.id, f.id
+                         FROM file_entries f
+                         JOIN asset_files af ON af.file_id = f.id
+                         JOIN assets a ON a.id = af.asset_id
+                         WHERE f.parent_path = ?1
+                           AND f.filename = ?2
+                           AND f.is_deleted = 0
+                         LIMIT 1",
+                        params![parent_path, candidate],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .optional()?;
+                if direct_match.is_some() {
+                    return Ok(direct_match);
+                }
+
+                let prefix_match = conn
+                    .query_row(
+                        "SELECT a.id, f.id
+                         FROM file_entries f
+                         JOIN asset_files af ON af.file_id = f.id
+                         JOIN assets a ON a.id = af.asset_id
+                         WHERE f.parent_path = ?1
+                           AND f.filename LIKE ?2
+                           AND f.is_deleted = 0
+                         LIMIT 1",
+                        params![parent_path, format!("{candidate}.%")],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+                    )
+                    .optional()?;
+                if prefix_match.is_some() {
+                    return Ok(prefix_match);
+                }
+            }
+
+            Ok(None)
         })
     }
 
