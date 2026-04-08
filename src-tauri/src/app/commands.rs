@@ -537,11 +537,14 @@ pub fn load_viewer_video(
             },
         }));
     } else if prefer_original {
+        let original_mime = video_mime_type(&source_path);
         info!(
             asset_id,
             filename = %filename,
             file_size,
             codec = %original_codec.as_deref().unwrap_or("unknown"),
+            mime = %original_mime,
+            reason = "codec_not_allowed_for_original_playback",
             "viewer video original-byte load skipped"
         );
     }
@@ -650,11 +653,14 @@ pub fn load_live_photo_motion(
             },
         }));
     } else if prefer_original {
+        let original_mime = video_mime_type(&source_path);
         info!(
             asset_id,
             filename = %filename,
             file_size,
             codec = %original_codec.as_deref().unwrap_or("unknown"),
+            mime = %original_mime,
+            reason = "codec_not_allowed_for_original_playback",
             "live photo motion original-byte load skipped"
         );
     }

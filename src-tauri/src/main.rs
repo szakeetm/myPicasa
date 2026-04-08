@@ -28,6 +28,7 @@ use tauri::Manager;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const PREVIEW_DEBUG_LOGS: bool = false;
+const VIEWER_PREVIEW_SIZE: u32 = 1024;
 fn preview_debug_log(message: String) {
     if PREVIEW_DEBUG_LOGS {
         println!("{message}");
@@ -83,7 +84,8 @@ fn main() {
             for worker_index in 0..worker_count {
                 let receiver = thumbnail_job_receiver.clone();
                 let db = Arc::new(Database::new(&db_path)?);
-                let cache = thumbnail_cache.clone();
+                let thumbnail_cache = thumbnail_cache.clone();
+                let preview_cache = preview_cache.clone();
                 let inflight = inflight_thumbnails.clone();
                 let failed = failed_thumbnails.clone();
                 let generation = thumbnail_generation.clone();
@@ -147,6 +149,11 @@ fn main() {
                     match result {
                         Ok(Some(bytes)) => {
                             if generation.load(Ordering::SeqCst) == job.generation {
+                                let cache = if job.size >= VIEWER_PREVIEW_SIZE {
+                                    &preview_cache
+                                } else {
+                                    &thumbnail_cache
+                                };
                                 cache.lock().insert(job.key.clone(), bytes);
                                 failed.lock().remove(&job.key);
                             }
