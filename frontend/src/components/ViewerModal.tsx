@@ -285,6 +285,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
               <img
                 src={imageSrc}
                 alt={asset.title ?? "asset"}
+                className={livePhotoPath ? "viewer-live-photo-still" : undefined}
                 style={
                   naturalSize
                     ? {
@@ -298,6 +299,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                     width: event.currentTarget.naturalWidth,
                     height: event.currentTarget.naturalHeight,
                   });
+                }}
+                onClick={() => {
+                  if (livePhotoPath) {
+                    setShowLivePhotoMotion(true);
+                  }
                 }}
                 onError={() => {
                   if (!forceRenderedFrame && canUsePrimaryImageDirectly) {
@@ -331,12 +337,6 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
               </span>
             ))}
           </div>
-          {livePhotoPath ? (
-            <>
-              <p className="muted">Live photo motion companion</p>
-              <video src={livePhotoPath} controls muted />
-            </>
-          ) : null}
         </div>
       </div>
     </div>

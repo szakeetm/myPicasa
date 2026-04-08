@@ -420,6 +420,10 @@ button {
   height: auto;
 }
 
+.viewer-live-photo-still {
+  cursor: pointer;
+}
+
 .viewer-live-photo-button {
   position: absolute;
   right: 16px;

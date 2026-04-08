@@ -291,6 +291,7 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
     match generate_viewer_image_file(&PathBuf::from(primary_path), 2400) {
         Ok(Some(path)) => {
             let elapsed = started.elapsed().as_millis();
+            let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             info!(
                 asset_id,
@@ -305,7 +306,10 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
                 file_size,
                 generated_bytes
             ));
-            Ok(Some(path.to_string_lossy().to_string()))
+            Ok(Some(format!(
+                "data:image/jpeg;base64,{}",
+                STANDARD.encode(bytes)
+            )))
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
