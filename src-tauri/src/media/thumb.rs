@@ -2,13 +2,16 @@ use std::{
     fs,
     io::Cursor,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
-    time::{SystemTime, UNIX_EPOCH},
+    process::{Child, Command, Output, Stdio},
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use image::{ImageReader, codecs::jpeg::JpegEncoder};
 
 use crate::util::errors::AppError;
+
+const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 
 pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     if is_video_path(path) {
@@ -139,7 +142,8 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(Pa
     let temp_output = output_path.with_extension("tmp.mp4");
     let _ = fs::remove_file(&temp_output);
 
-    let status = Command::new(ffmpeg)
+    let status = wait_for_status_with_timeout(
+        Command::new(ffmpeg)
         .arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
@@ -163,7 +167,10 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(Pa
         .arg(&temp_output)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
-        .status()?;
+        .spawn()?,
+        EXTERNAL_TOOL_TIMEOUT,
+        "ffmpeg viewer transcode",
+    )?;
 
     if !status.success() || !temp_output.is_file() {
         let _ = fs::remove_file(&temp_output);
@@ -223,7 +230,8 @@ pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
         return Ok(None);
     };
 
-    let output = Command::new(ffprobe)
+    let output = wait_for_output_with_timeout(
+        Command::new(ffprobe)
         .arg("-v")
         .arg("error")
         .arg("-show_entries")
@@ -233,7 +241,10 @@ pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()?;
+        .spawn()?,
+        EXTERNAL_TOOL_TIMEOUT,
+        "ffprobe duration probe",
+    )?;
 
     if !output.status.success() {
         return Ok(None);
@@ -258,7 +269,8 @@ pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError
         return Ok(None);
     };
 
-    let output = Command::new(ffprobe)
+    let output = wait_for_output_with_timeout(
+        Command::new(ffprobe)
         .arg("-v")
         .arg("error")
         .arg("-select_streams")
@@ -270,7 +282,10 @@ pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError
         .arg(path)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()?;
+        .spawn()?,
+        EXTERNAL_TOOL_TIMEOUT,
+        "ffprobe codec probe",
+    )?;
 
     if !output.status.success() {
         return Ok(None);
@@ -291,7 +306,8 @@ fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<V
     };
 
     let seek_time = probe_video_seek_seconds(path).unwrap_or(1.0).max(0.0);
-    let output = Command::new(ffmpeg)
+    let output = wait_for_output_with_timeout(
+        Command::new(ffmpeg)
         .arg("-hide_banner")
         .arg("-loglevel")
         .arg("error")
@@ -308,7 +324,10 @@ fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<V
         .arg("-")
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()?;
+        .spawn()?,
+        EXTERNAL_TOOL_TIMEOUT,
+        "ffmpeg thumbnail render",
+    )?;
 
     if !output.status.success() || output.stdout.is_empty() {
         return Ok(None);
@@ -407,7 +426,8 @@ fn render_with_sips(path: &Path, width: u32, quality: u8, working_dir: &Path) ->
     #[cfg(target_os = "macos")]
     {
         let temp_path = temp_jpeg_path(path, working_dir);
-        let status = Command::new("sips")
+        let status = wait_for_status_with_timeout(
+            Command::new("sips")
             .arg("-s")
             .arg("format")
             .arg("jpeg")
@@ -421,7 +441,10 @@ fn render_with_sips(path: &Path, width: u32, quality: u8, working_dir: &Path) ->
             .arg(&temp_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()?;
+            .spawn()?,
+            EXTERNAL_TOOL_TIMEOUT,
+            "sips thumbnail render",
+        )?;
 
         if !status.success() {
             let _ = fs::remove_file(&temp_path);
@@ -444,7 +467,8 @@ fn render_with_sips_original(path: &Path, quality: u8, working_dir: &Path) -> Re
     #[cfg(target_os = "macos")]
     {
         let temp_path = temp_jpeg_path(path, working_dir);
-        let status = Command::new("sips")
+        let status = wait_for_status_with_timeout(
+            Command::new("sips")
             .arg("-s")
             .arg("format")
             .arg("jpeg")
@@ -456,7 +480,10 @@ fn render_with_sips_original(path: &Path, quality: u8, working_dir: &Path) -> Re
             .arg(&temp_path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()?;
+            .spawn()?,
+            EXTERNAL_TOOL_TIMEOUT,
+            "sips viewer render",
+        )?;
 
         if !status.success() {
             let _ = fs::remove_file(&temp_path);
@@ -481,7 +508,8 @@ fn render_thumbnail_with_quicklook(path: &Path, width: u32, working_dir: &Path) 
         let output_dir = temp_render_dir(path, working_dir);
         fs::create_dir_all(&output_dir)?;
 
-        let status = Command::new("qlmanage")
+        let status = wait_for_status_with_timeout(
+            Command::new("qlmanage")
             .arg("-t")
             .arg("-s")
             .arg(width.to_string())
@@ -490,7 +518,10 @@ fn render_thumbnail_with_quicklook(path: &Path, width: u32, working_dir: &Path) 
             .arg(path)
             .stdout(Stdio::null())
             .stderr(Stdio::null())
-            .status()?;
+            .spawn()?,
+            EXTERNAL_TOOL_TIMEOUT,
+            "qlmanage thumbnail render",
+        )?;
 
         if !status.success() {
             let _ = fs::remove_dir_all(&output_dir);
@@ -554,4 +585,48 @@ fn normalize_image_bytes_to_jpeg(bytes: &[u8], quality: u8) -> Result<Vec<u8>, A
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
     encoder.encode_image(&image)?;
     Ok(buffer)
+}
+
+fn wait_for_status_with_timeout(
+    mut child: Child,
+    timeout: Duration,
+    label: &str,
+) -> Result<std::process::ExitStatus, AppError> {
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(status);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Message(format!(
+                "{label} timed out after {} ms",
+                timeout.as_millis()
+            )));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+}
+
+fn wait_for_output_with_timeout(
+    mut child: Child,
+    timeout: Duration,
+    label: &str,
+) -> Result<Output, AppError> {
+    let started = Instant::now();
+    loop {
+        if child.try_wait()?.is_some() {
+            return child.wait_with_output().map_err(AppError::from);
+        }
+        if started.elapsed() >= timeout {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(AppError::Message(format!(
+                "{label} timed out after {} ms",
+                timeout.as_millis()
+            )));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
 }
