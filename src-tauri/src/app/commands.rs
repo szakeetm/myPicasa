@@ -3,6 +3,7 @@ use std::thread;
 use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
+use rayon::prelude::*;
 use tauri::{generate_handler, ipc::InvokeError, State};
 use tracing::{error, info};
 
@@ -13,7 +14,7 @@ use crate::{
     media::thumb::{generate_thumbnail, generate_viewer_image},
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats, DiagnosticEntry,
-        ImportProgress, LogEntry, RefreshRequest,
+        ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
     },
     search::query_service,
 };
@@ -166,6 +167,91 @@ pub fn request_thumbnail(
 }
 
 #[tauri::command]
+pub fn request_thumbnails_batch(
+    asset_ids: Vec<i64>,
+    size: u32,
+    state: State<AppState>,
+) -> CommandResult<Vec<ThumbnailBatchItem>> {
+    let started = Instant::now();
+    let db = state.db.clone();
+    let cache = state.thumbnail_cache.clone();
+
+    let items = asset_ids
+        .into_par_iter()
+        .map(|asset_id| {
+            let key = format!("{asset_id}:{size}");
+
+            if let Some(bytes) = cache.lock().get(&key) {
+                return ThumbnailBatchItem {
+                    asset_id,
+                    data_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))),
+                };
+            }
+
+            let detail = match query_service::get_asset_detail(&db, asset_id) {
+                Ok(detail) => detail,
+                Err(error) => {
+                    let _ = db.insert_log(
+                        "error",
+                        "thumbnail_batch",
+                        &format!("detail lookup failed for {asset_id}: {error}"),
+                        Some(asset_id),
+                    );
+                    return ThumbnailBatchItem {
+                        asset_id,
+                        data_url: None,
+                    };
+                }
+            };
+
+            let Some(primary_path) = detail.primary_path else {
+                return ThumbnailBatchItem {
+                    asset_id,
+                    data_url: None,
+                };
+            };
+
+            match generate_thumbnail(&PathBuf::from(primary_path), size) {
+                Ok(Some(bytes)) => {
+                    cache.lock().insert(key, bytes.clone());
+                    ThumbnailBatchItem {
+                        asset_id,
+                        data_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))),
+                    }
+                }
+                Ok(None) => ThumbnailBatchItem {
+                    asset_id,
+                    data_url: None,
+                },
+                Err(error) => {
+                    let _ = db.insert_log(
+                        "error",
+                        "thumbnail_batch",
+                        &error.to_string(),
+                        Some(asset_id),
+                    );
+                    ThumbnailBatchItem {
+                        asset_id,
+                        data_url: None,
+                    }
+                }
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let elapsed = started.elapsed().as_millis();
+    let hits = items.iter().filter(|item| item.data_url.is_some()).count();
+    info!(elapsed_ms = elapsed, item_count = items.len(), hit_count = hits, "thumbnail batch completed");
+    println!(
+        "thumbnail_batch item_count={} hit_count={} elapsed_ms={elapsed}",
+        items.len(),
+        hits
+    );
+
+    Ok(items)
+}
+
+#[tauri::command]
 pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
     let started = Instant::now();
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
@@ -254,6 +340,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_asset_detail,
         get_ingress_diagnostics,
         request_thumbnail,
+        request_thumbnails_batch,
         load_viewer_frame,
         get_live_photo_pair,
         get_cache_stats,

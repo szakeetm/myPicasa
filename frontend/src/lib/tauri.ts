@@ -10,6 +10,7 @@ import type {
   ImportProgress,
   LogEntry,
   RefreshRequest,
+  ThumbnailBatchItem,
 } from "./types";
 
 export const api = {
@@ -29,6 +30,8 @@ export const api = {
     invoke<AssetDetail>("get_asset_detail", { assetId }),
   loadViewerFrame: (assetId: number) =>
     invoke<string | null>("load_viewer_frame", { assetId }),
+  requestThumbnailsBatch: (assetIds: number[], size: number) =>
+    invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size }),
   requestThumbnail: (assetId: number, size: number) =>
     invoke<string | null>("request_thumbnail", { assetId, size }),
   getDiagnostics: () =>

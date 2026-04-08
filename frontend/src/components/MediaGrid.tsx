@@ -64,17 +64,15 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     const timer = window.setTimeout(async () => {
       const pending = visibleIds.filter((id) => thumbs[id] === undefined);
       if (pending.length === 0) return;
-      await logClient("grid", `requesting ${pending.length} visible thumbnails`);
-      const entries = await Promise.all(
-        pending.map(async (id) => {
-          try {
-            return [id, await api.requestThumbnail(id, 480)] as const;
-          } catch (error) {
-            await logClient("grid", `thumbnail request failed for ${id}: ${String(error)}`, "error");
-            return [id, null] as const;
-          }
-        }),
-      );
+      await logClient("grid", `requesting batch of ${pending.length} visible thumbnails`);
+      let entries: Array<readonly [number, string | null]> = [];
+      try {
+        const batch = await api.requestThumbnailsBatch(pending, 256);
+        entries = batch.map((item) => [item.asset_id, item.data_url ?? null] as const);
+      } catch (error) {
+        await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
+        entries = pending.map((id) => [id, null] as const);
+      }
       setThumbs((current) => {
         const next = { ...current };
         for (const [id, src] of entries) next[id] = src;

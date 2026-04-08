@@ -87,3 +87,8 @@ export type LogEntry = {
   message: string;
   asset_id?: number | null;
 };
+
+export type ThumbnailBatchItem = {
+  asset_id: number;
+  data_url?: string | null;
+};
