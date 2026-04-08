@@ -24,10 +24,13 @@ function columnCount(width: number) {
 
 export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const tileRefs = useRef(new Map<number, HTMLButtonElement>());
   const [width, setWidth] = useState(1200);
   const [requestTick, setRequestTick] = useState(0);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
+  const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const columns = columnCount(width);
+  const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
 
   useEffect(() => {
     const element = parentRef.current;
@@ -38,13 +41,12 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     return () => observer.disconnect();
   }, []);
 
-  const visibleIds = useMemo(
-    () => assets.map((asset) => asset.id),
-    [assets],
-  );
   const visibleTitles = useMemo(
-    () => assets.map((asset) => asset.title ?? `asset-${asset.id}`),
-    [assets],
+    () =>
+      assets
+        .filter((asset) => visibleIdSet.has(asset.id))
+        .map((asset) => asset.title ?? `asset-${asset.id}`),
+    [assets, visibleIdSet],
   );
 
   useEffect(() => {
@@ -57,6 +59,51 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   useEffect(() => {
     setThumbs({});
   }, [assets]);
+
+  useEffect(() => {
+    const root = parentRef.current;
+    if (!root) return;
+
+    const nextVisible = new Set<number>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        let changed = false;
+        for (const entry of entries) {
+          const target = entry.target as HTMLElement;
+          const assetId = Number(target.dataset.assetId);
+          if (!Number.isFinite(assetId)) continue;
+
+          if (entry.isIntersecting) {
+            if (!nextVisible.has(assetId)) {
+              nextVisible.add(assetId);
+              changed = true;
+            }
+          } else if (nextVisible.delete(assetId)) {
+            changed = true;
+          }
+        }
+
+        if (changed) {
+          setVisibleIds(
+            assets.filter((asset) => nextVisible.has(asset.id)).map((asset) => asset.id),
+          );
+        }
+      },
+      {
+        root,
+        rootMargin: "120px 0px",
+        threshold: 0.01,
+      },
+    );
+    for (const asset of assets) {
+      const element = tileRefs.current.get(asset.id);
+      if (element) {
+        observer.observe(element);
+      }
+    }
+
+    return () => observer.disconnect();
+  }, [assets, columns]);
 
   useEffect(() => {
     if (visibleIds.length === 0) return;
@@ -137,7 +184,19 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
         }}
       >
         {assets.map((asset) => (
-          <button key={asset.id} className="tile" onClick={() => onSelect(asset.id)}>
+          <button
+            key={asset.id}
+            className="tile"
+            data-asset-id={asset.id}
+            ref={(element) => {
+              if (element) {
+                tileRefs.current.set(asset.id, element);
+              } else {
+                tileRefs.current.delete(asset.id);
+              }
+            }}
+            onClick={() => onSelect(asset.id)}
+          >
             <div className="thumb">
               {thumbs[asset.id]?.status === "ready" ? (
                 <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
