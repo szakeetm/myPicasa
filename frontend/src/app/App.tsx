@@ -56,6 +56,17 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      void api.getCacheStats().then((cacheStats) => {
+        state.setCacheStats(cacheStats);
+      });
+    }, 1000);
+
+    return () => window.clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   async function handleRefreshIndex() {
     const roots = state.rootsInput
       .split(";")

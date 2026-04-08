@@ -14,6 +14,12 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
         return Ok(None);
     }
 
+    if matches!(extension.as_str(), "heic" | "heif") {
+        if let Some(bytes) = render_with_sips(path, size.max(256), 82)? {
+            return Ok(Some(bytes));
+        }
+    }
+
     let image = load_image(path, size)?;
     let thumb = image.thumbnail(size, size);
     let mut buffer = Vec::new();
@@ -31,6 +37,12 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<V
         .to_lowercase();
     if matches!(extension.as_str(), "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm") {
         return Ok(None);
+    }
+
+    if matches!(extension.as_str(), "heic" | "heif") {
+        if let Some(bytes) = render_with_sips(path, max_dimension, 90)? {
+            return Ok(Some(bytes));
+        }
     }
 
     let image = load_image(path, max_dimension)?;
@@ -69,30 +81,51 @@ fn load_image(path: &Path, size_hint: u32) -> Result<image::DynamicImage, AppErr
 fn load_image_with_sips(path: &Path, size_hint: u32) -> Result<Option<image::DynamicImage>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        let temp_path = temp_jpeg_path(path);
-        let status = Command::new("sips")
-            .arg("-s")
-            .arg("format")
-            .arg("jpeg")
-            .arg("--resampleWidth")
-            .arg(size_hint.max(512).to_string())
-            .arg(path)
-            .arg("--out")
-            .arg(&temp_path)
-            .status()?;
-        if !status.success() {
-            let _ = fs::remove_file(&temp_path);
-            return Ok(None);
+        if let Some(bytes) = render_with_sips(path, size_hint.max(512), 90)? {
+            let image = image::load_from_memory(&bytes)?;
+            return Ok(Some(image));
         }
-        let bytes = fs::read(&temp_path)?;
-        let _ = fs::remove_file(&temp_path);
-        let image = image::load_from_memory(&bytes)?;
-        return Ok(Some(image));
+        Ok(None)
     }
 
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (path, size_hint);
+        Ok(None)
+    }
+}
+
+fn render_with_sips(path: &Path, width: u32, quality: u8) -> Result<Option<Vec<u8>>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let temp_path = temp_jpeg_path(path);
+        let status = Command::new("sips")
+            .arg("-s")
+            .arg("format")
+            .arg("jpeg")
+            .arg("-s")
+            .arg("formatOptions")
+            .arg(quality.to_string())
+            .arg("--resampleWidth")
+            .arg(width.to_string())
+            .arg(path)
+            .arg("--out")
+            .arg(&temp_path)
+            .status()?;
+
+        if !status.success() {
+            let _ = fs::remove_file(&temp_path);
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&temp_path)?;
+        let _ = fs::remove_file(&temp_path);
+        return Ok(Some(bytes));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (path, width, quality);
         Ok(None)
     }
 }
