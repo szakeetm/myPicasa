@@ -199,8 +199,8 @@ button {
   left: 0;
   width: 100%;
   display: grid;
-  gap: 8px;
-  padding: 8px;
+  gap: 6px;
+  padding: 6px;
 }
 
 .tile {
@@ -218,6 +218,7 @@ button {
   aspect-ratio: 1 / 1;
   width: 100%;
   flex: 0 0 auto;
+  overflow: hidden;
   background:
     linear-gradient(135deg, rgba(33, 80, 186, 0.16), rgba(248, 207, 110, 0.18)),
     rgba(90, 67, 40, 0.08);
@@ -227,16 +228,17 @@ button {
 }
 
 .thumb img {
+  display: block;
   width: 100%;
   height: 100%;
   object-fit: cover;
 }
 
 .tile-body {
-  padding: 8px;
+  padding: 6px 7px 7px;
   display: grid;
-  gap: 3px;
-  font-size: 0.82rem;
+  gap: 2px;
+  font-size: 0.78rem;
 }
 
 .chips {

@@ -30,10 +30,10 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const columns = columnCount(width);
   const rowHeight = useMemo(() => {
-    const horizontalPadding = 16;
-    const gap = 8 * Math.max(columns - 1, 0);
+    const horizontalPadding = 12;
+    const gap = 6 * Math.max(columns - 1, 0);
     const columnWidth = Math.max((width - horizontalPadding - gap) / columns, 120);
-    const metadataHeight = 84;
+    const metadataHeight = 62;
     return Math.ceil(columnWidth + metadataHeight);
   }, [columns, width]);
   const rows = useMemo(() => {
