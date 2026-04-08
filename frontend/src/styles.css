@@ -32,6 +32,7 @@ body,
 
 body {
   min-width: 320px;
+  font-size: 14px;
 }
 
 button,
@@ -81,7 +82,7 @@ button {
 }
 
 .title {
-  font-size: 1.45rem;
+  font-size: 1.3rem;
   font-weight: 700;
 }
 
@@ -98,7 +99,7 @@ button {
 .controls input,
 .controls select {
   width: 100%;
-  padding: 12px 14px;
+  padding: 10px 12px;
   border-radius: 14px;
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.75);
@@ -114,7 +115,7 @@ button {
 .button-danger {
   border: none;
   border-radius: 14px;
-  padding: 12px 14px;
+  padding: 10px 12px;
   transition: transform 140ms ease, opacity 140ms ease;
 }
 
@@ -167,7 +168,7 @@ button {
 }
 
 .toolbar {
-  padding: 18px 20px;
+  padding: 14px 16px;
   border-bottom: 1px solid var(--border);
   display: grid;
   grid-template-columns: minmax(160px, 1fr) minmax(140px, 180px) minmax(140px, 180px) auto;
@@ -176,7 +177,7 @@ button {
 
 .grid-frame {
   flex: 1;
-  padding: 14px;
+  padding: 10px;
   overflow: hidden;
 }
 
@@ -198,8 +199,8 @@ button {
   left: 0;
   width: 100%;
   display: grid;
-  gap: 14px;
-  padding: 12px;
+  gap: 10px;
+  padding: 10px;
 }
 
 .tile {
@@ -209,11 +210,11 @@ button {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 260px;
+  min-height: 220px;
 }
 
 .thumb {
-  aspect-ratio: 1 / 1;
+  aspect-ratio: 1 / 0.82;
   background:
     linear-gradient(135deg, rgba(33, 80, 186, 0.16), rgba(248, 207, 110, 0.18)),
     rgba(90, 67, 40, 0.08);
@@ -229,9 +230,10 @@ button {
 }
 
 .tile-body {
-  padding: 12px;
+  padding: 10px;
   display: grid;
-  gap: 6px;
+  gap: 4px;
+  font-size: 0.92rem;
 }
 
 .chips {
@@ -241,11 +243,11 @@ button {
 }
 
 .chip {
-  padding: 5px 9px;
+  padding: 4px 8px;
   border-radius: 999px;
   background: var(--surface-muted);
   color: var(--text-soft);
-  font-size: 0.75rem;
+  font-size: 0.7rem;
 }
 
 .viewer-backdrop {
@@ -278,6 +280,7 @@ button {
 .viewer-media video {
   max-width: 100%;
   max-height: 68vh;
+  transition: transform 120ms ease;
 }
 
 .viewer-meta {
