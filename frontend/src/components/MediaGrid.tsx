@@ -23,6 +23,7 @@ type MediaGridProps = {
 type ThumbnailState = {
   status: "pending" | "ready" | "unavailable";
   src?: string | null;
+  previewStatus?: "pending" | "ready" | "unavailable";
 };
 
 function columnCount(width: number) {
@@ -47,6 +48,7 @@ export function MediaGrid({
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
   const requestInFlightRef = useRef(false);
+  const previewRequestInFlightRef = useRef(false);
   const lastBatchLogRef = useRef<{
     signature: string;
     at: number;
@@ -83,6 +85,7 @@ export function MediaGrid({
     setThumbs({});
     setVisibleIds([]);
     requestInFlightRef.current = false;
+    previewRequestInFlightRef.current = false;
     lastBatchLogRef.current = { signature: "", at: 0 };
     lastProgressLogRef.current = { completed: -1, total: -1 };
   }, [assets, thumbnailResetKey, thumbnailSize]);
@@ -90,6 +93,126 @@ export function MediaGrid({
   useEffect(() => {
     thumbsRef.current = thumbs;
   }, [thumbs]);
+
+  useEffect(() => {
+    let disposed = false;
+    let idleHandle: number | undefined;
+    let timeoutHandle: number | undefined;
+
+    async function processPreviewPass() {
+      if (previewRequestInFlightRef.current) {
+        return;
+      }
+
+      const visiblePreviewIds = assets
+        .filter((asset) => {
+          const state = thumbsRef.current[asset.id];
+          return (
+            visibleIdSet.has(asset.id) &&
+            state?.status === "ready" &&
+            !state.previewStatus
+          );
+        })
+        .slice(0, 1)
+        .map((asset) => asset.id);
+
+      const preloadPreviewIds = thumbnailPreload?.active
+        ? assets
+            .filter((asset) => {
+              const state = thumbsRef.current[asset.id];
+              return (
+                !visibleIdSet.has(asset.id) &&
+                state?.status === "ready" &&
+                !state.previewStatus
+              );
+            })
+            .slice(0, Math.max(0, 1 - visiblePreviewIds.length))
+            .map((asset) => asset.id)
+        : [];
+
+      const targetId = [...visiblePreviewIds, ...preloadPreviewIds][0];
+      if (!targetId) {
+        return;
+      }
+
+      startTransition(() => {
+        setThumbs((current) => ({
+          ...current,
+          [targetId]: {
+            ...current[targetId],
+            previewStatus: "pending",
+          },
+        }));
+      });
+
+      previewRequestInFlightRef.current = true;
+      try {
+        const src = await api.requestThumbnail(targetId, 1024);
+        if (disposed) {
+          return;
+        }
+
+        startTransition(() => {
+          setThumbs((current) => ({
+            ...current,
+            [targetId]: {
+              ...current[targetId],
+              previewStatus: src ? "ready" : "unavailable",
+            },
+          }));
+        });
+
+        void logClient(
+          "grid",
+          `viewer preview ${src ? "ready" : "unavailable"} asset_id=${targetId} size=1024 mode=${visiblePreviewIds.length > 0 ? "visible" : "idle-preload"}`,
+        );
+      } catch (error) {
+        if (disposed) {
+          return;
+        }
+        startTransition(() => {
+          setThumbs((current) => ({
+            ...current,
+            [targetId]: {
+              ...current[targetId],
+              previewStatus: undefined,
+            },
+          }));
+        });
+        await logClient("grid", `viewer preview generation failed asset_id=${targetId}: ${String(error)}`, "error");
+      } finally {
+        previewRequestInFlightRef.current = false;
+        schedule();
+      }
+    }
+
+    function schedule() {
+      if (disposed) {
+        return;
+      }
+      if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+        idleHandle = window.requestIdleCallback(() => {
+          void processPreviewPass();
+        }, { timeout: thumbnailPreload?.active ? 1500 : 2500 });
+      } else {
+        timeoutHandle = setTimeout(() => {
+          void processPreviewPass();
+        }, thumbnailPreload?.active ? 240 : 420);
+      }
+    }
+
+    schedule();
+
+    return () => {
+      disposed = true;
+      if (idleHandle !== undefined && typeof window !== "undefined" && "cancelIdleCallback" in window) {
+        window.cancelIdleCallback(idleHandle);
+      }
+      if (timeoutHandle !== undefined) {
+        clearTimeout(timeoutHandle);
+      }
+    };
+  }, [assets, thumbnailPreload?.active, visibleIdSet]);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -214,9 +337,17 @@ export function MediaGrid({
             const next = { ...current };
             for (const item of batch) {
               if (item.status === "ready") {
-                next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
+                next[item.asset_id] = {
+                  ...next[item.asset_id],
+                  status: "ready",
+                  src: item.data_url ?? null,
+                };
               } else if (item.status === "unavailable") {
-                next[item.asset_id] = { status: "unavailable", src: null };
+                next[item.asset_id] = {
+                  ...next[item.asset_id],
+                  status: "unavailable",
+                  src: null,
+                };
               } else if (!next[item.asset_id]) {
                 next[item.asset_id] = { status: "pending" };
               }
@@ -310,7 +441,7 @@ export function MediaGrid({
             }}
             onClick={() => onSelect(asset.id)}
           >
-            <div className="thumb">
+            <div className={`thumb${thumbs[asset.id]?.previewStatus === "ready" ? " has-viewer-preview" : ""}`}>
               {thumbs[asset.id]?.status === "ready" ? (
                 <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
               ) : thumbs[asset.id]?.status === "unavailable" ? (

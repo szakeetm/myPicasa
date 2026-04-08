@@ -44,6 +44,7 @@ export function ViewerModal({
   const [zoomMode, setZoomMode] = useState<"fit" | "custom">("fit");
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number }>();
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>();
+  const [displaySourceLabel, setDisplaySourceLabel] = useState<string>("Loading");
   const viewerMediaRef = useRef<HTMLDivElement | null>(null);
   const imageFrameRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
@@ -67,6 +68,10 @@ export function ViewerModal({
   const shouldPreferOriginalLivePhotoBytes = shouldPreferOriginalVideoBytesForPath(
     asset?.live_photo_video_path,
   );
+  const canonicalImageSize =
+    asset?.width && asset?.height
+      ? { width: asset.width, height: asset.height }
+      : naturalSize;
 
   useEffect(() => {
     setForceRenderedFrame(false);
@@ -84,6 +89,7 @@ export function ViewerModal({
     setZoomMode("fit");
     setZoom(1);
     setNaturalSize(undefined);
+    setDisplaySourceLabel("Loading");
     setImageError(undefined);
     setImageSrc(undefined);
     if (videoObjectUrlRef.current) {
@@ -112,14 +118,14 @@ export function ViewerModal({
   }, [assetId, imageSrc]);
 
   const fitZoom = useMemo(() => {
-    if (!naturalSize || !viewportSize?.width || !viewportSize?.height) {
+    if (!canonicalImageSize || !viewportSize?.width || !viewportSize?.height) {
       return 1;
     }
     return Math.min(
-      viewportSize.width / naturalSize.width,
-      viewportSize.height / naturalSize.height,
+      viewportSize.width / canonicalImageSize.width,
+      viewportSize.height / canonicalImageSize.height,
     );
-  }, [naturalSize, viewportSize]);
+  }, [canonicalImageSize, viewportSize]);
 
   const effectiveZoom = isPhoto
     ? zoomMode === "fit"
@@ -127,10 +133,10 @@ export function ViewerModal({
       : zoom
     : 1;
   const isScrollable =
-    !!naturalSize &&
+    !!canonicalImageSize &&
     !!viewportSize &&
-    (naturalSize.width * effectiveZoom > viewportSize.width ||
-      naturalSize.height * effectiveZoom > viewportSize.height);
+    (canonicalImageSize.width * effectiveZoom > viewportSize.width ||
+      canonicalImageSize.height * effectiveZoom > viewportSize.height);
 
   function setActualSize() {
     setZoomMode("custom");
@@ -147,6 +153,27 @@ export function ViewerModal({
       const base = zoomMode === "fit" ? fitZoom : current;
       return Math.min(Math.max(base + delta, 0.1), 8);
     });
+  }
+
+  function setImageSourceLabel(label: string) {
+    imageSourceLabelRef.current = label;
+    if (!showLivePhotoMotion && isPhoto) {
+      setDisplaySourceLabel(label);
+    }
+  }
+
+  function setVideoSourceLabel(label: string) {
+    videoSourceLabelRef.current = label;
+    if (isVideo) {
+      setDisplaySourceLabel(label);
+    }
+  }
+
+  function setLivePhotoSourceLabel(label: string) {
+    livePhotoSourceLabelRef.current = label;
+    if (showLivePhotoMotion) {
+      setDisplaySourceLabel(label);
+    }
   }
 
   useEffect(() => {
@@ -184,7 +211,7 @@ export function ViewerModal({
             "viewer.video",
             `viewer-v2 asset ${assetId} backend video ready source=${sourceLabel}`,
           );
-          videoSourceLabelRef.current = sourceLabel;
+          setVideoSourceLabel(sourceLabel);
           const materialized = await materializeVideoSrc(backendPath, videoObjectUrlRef);
           if (cancelled) {
             if (materialized.startsWith("blob:")) {
@@ -247,7 +274,7 @@ export function ViewerModal({
             "viewer.live_photo",
             `viewer-v2 asset ${assetId} backend motion ready source=${sourceLabel}`,
           );
-          livePhotoSourceLabelRef.current = sourceLabel;
+          setLivePhotoSourceLabel(sourceLabel);
           const materialized = await materializeVideoSrc(backendPath, livePhotoObjectUrlRef);
           if (cancelled) {
             if (materialized.startsWith("blob:")) {
@@ -283,7 +310,6 @@ export function ViewerModal({
       setNaturalSize(undefined);
       return;
     }
-    setImageSrc(undefined);
     setImageError(undefined);
     const useViewerPreview = zoomMode === "fit";
     const preferOriginal = !forceRenderedFrame;
@@ -292,7 +318,7 @@ export function ViewerModal({
       : preferOriginal
         ? "original"
         : "rendered";
-    imageSourceLabelRef.current = imageMode;
+    setImageSourceLabel(imageMode);
     void logClient(
       "viewer.image",
       `asset ${assetId} loading backend image source=${imageSourceLabelRef.current} path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
@@ -304,6 +330,7 @@ export function ViewerModal({
         .then((src) => {
           if (cancelled) return;
           if (src) {
+            setImageSourceLabel("preview");
             void logClient(
               "viewer.image",
               `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
@@ -320,7 +347,7 @@ export function ViewerModal({
           return api.loadViewerFrame(assetId, true).then((fullSrc) => {
             if (cancelled) return;
             if (fullSrc) {
-              imageSourceLabelRef.current = "original";
+              setImageSourceLabel("original");
               void logClient(
                 "viewer.image",
                 `asset ${assetId} original image fallback ready after missing ${VIEWER_PREVIEW_SIZE}px preview path=${asset?.primary_path ?? "unknown"}`,
@@ -355,6 +382,7 @@ export function ViewerModal({
         .then((src) => {
           if (cancelled) return;
           if (src) {
+            setImageSourceLabel(preferOriginal ? "original" : "rendered");
             void logClient(
               "viewer.image",
               `asset ${assetId} full image source ready source=${preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"}`,
@@ -403,7 +431,7 @@ export function ViewerModal({
       setVideoTranscoding(false);
       if (backendPath) {
         void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
-        videoSourceLabelRef.current = "transcoded_mp4";
+        setVideoSourceLabel("transcoded_mp4");
         setVideoSrc(await materializeVideoSrc(backendPath, videoObjectUrlRef));
         return;
       }
@@ -430,7 +458,7 @@ export function ViewerModal({
       setLivePhotoTranscoding(false);
       if (backendPath) {
         void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
-        livePhotoSourceLabelRef.current = "transcoded_mp4";
+        setLivePhotoSourceLabel("transcoded_mp4");
         setLivePhotoMotionSrc(await materializeVideoSrc(backendPath, livePhotoObjectUrlRef));
         return;
       }
@@ -509,6 +537,58 @@ export function ViewerModal({
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [asset, fitZoom, hasNext, hasPrevious, isPhoto, onClose, onNext, onPrevious, zoomMode]);
 
+  useEffect(() => {
+    const element = viewerMediaRef.current;
+    if (!element || !isPhoto) {
+      return;
+    }
+
+    let gestureBaseZoom = 1;
+    const onWheel = (event: WheelEvent) => {
+      if (!event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      const base = zoomMode === "fit" ? fitZoom : zoom;
+      const factor = Math.exp(-event.deltaY * 0.01);
+      setZoomMode("custom");
+      setZoom(Math.min(Math.max(base * factor, 0.1), 8));
+    };
+    const onGestureStart = () => {
+      gestureBaseZoom = zoomMode === "fit" ? fitZoom : zoom;
+    };
+    const onGestureChange = (event: Event) => {
+      const gestureEvent = event as Event & { scale?: number };
+      if (typeof gestureEvent.scale !== "number") {
+        return;
+      }
+      event.preventDefault();
+      setZoomMode("custom");
+      setZoom(Math.min(Math.max(gestureBaseZoom * gestureEvent.scale, 0.1), 8));
+    };
+
+    element.addEventListener("wheel", onWheel, { passive: false });
+    element.addEventListener("gesturestart", onGestureStart as EventListener);
+    element.addEventListener("gesturechange", onGestureChange as EventListener);
+    return () => {
+      element.removeEventListener("wheel", onWheel);
+      element.removeEventListener("gesturestart", onGestureStart as EventListener);
+      element.removeEventListener("gesturechange", onGestureChange as EventListener);
+    };
+  }, [fitZoom, isPhoto, zoom, zoomMode]);
+
+  useEffect(() => {
+    if (showLivePhotoMotion) {
+      setDisplaySourceLabel(livePhotoSourceLabelRef.current);
+    } else if (isVideo) {
+      setDisplaySourceLabel(videoSourceLabelRef.current);
+    } else if (isPhoto) {
+      setDisplaySourceLabel(imageSourceLabelRef.current);
+    } else {
+      setDisplaySourceLabel("Loading");
+    }
+  }, [isPhoto, isVideo, showLivePhotoMotion]);
+
   if (!asset) return null;
 
   return (
@@ -517,6 +597,7 @@ export function ViewerModal({
         <div className="viewer-toolbar">
           <strong>{asset.title ?? "Untitled asset"}</strong>
           <div className="button-row">
+            <span className="viewer-source-badge">{formatViewerSourceLabel(displaySourceLabel)}</span>
             {canFullscreenVideo ? (
               <button className="button-secondary" onClick={() => void toggleVideoFullscreen()}>
                 Fullscreen
@@ -686,10 +767,10 @@ export function ViewerModal({
                 alt={asset.title ?? "asset"}
                 className={livePhotoPath ? "viewer-live-photo-still" : undefined}
                 style={
-                  naturalSize
+                  canonicalImageSize
                     ? {
-                        width: `${Math.max(1, Math.round(naturalSize.width * effectiveZoom))}px`,
-                        height: `${Math.max(1, Math.round(naturalSize.height * effectiveZoom))}px`,
+                        width: `${Math.max(1, Math.round(canonicalImageSize.width * effectiveZoom))}px`,
+                        height: `${Math.max(1, Math.round(canonicalImageSize.height * effectiveZoom))}px`,
                       }
                     : undefined
                 }
@@ -738,7 +819,7 @@ export function ViewerModal({
           <p className="muted">
             {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm:ss") : "Unknown capture time"}
             {isPhoto ? ` • zoom ${Math.round(effectiveZoom * 100)}%` : ""}
-            {naturalSize ? ` • ${naturalSize.width}x${naturalSize.height}` : ""}
+            {canonicalImageSize ? ` • ${canonicalImageSize.width}x${canonicalImageSize.height}` : ""}
             {asset.file_size ? ` • ${formatFileSize(asset.file_size)}` : ""}
           </p>
           <div className="chips">
@@ -827,6 +908,27 @@ function inferImageFormat(src?: string | null) {
   if (!src) return undefined;
   const extension = src.split(".").pop()?.toLowerCase();
   return extension;
+}
+
+function formatViewerSourceLabel(label: string) {
+  switch (label) {
+    case "preview":
+      return "Showing 1024px Preview";
+    case "original":
+      return "Showing Original";
+    case "rendered":
+      return "Showing Rendered";
+    case "original_mp4":
+      return "Video: Original MP4";
+    case "original_quicktime":
+      return "Video: Original MOV";
+    case "transcoded_mp4":
+      return "Video: Transcoded MP4";
+    case "unset":
+    case "Loading":
+    default:
+      return "Loading Source";
+  }
 }
 
 function formatFileSize(bytes: number) {
