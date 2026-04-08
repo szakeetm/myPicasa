@@ -31,6 +31,8 @@ export type AlbumSummary = {
   name: string;
   source_path: string;
   asset_count: number;
+  begin_taken_at_utc?: string | null;
+  end_taken_at_utc?: string | null;
 };
 
 export type AssetListItem = {

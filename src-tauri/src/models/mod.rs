@@ -60,6 +60,8 @@ pub struct AlbumSummary {
     pub name: String,
     pub source_path: String,
     pub asset_count: u32,
+    pub begin_taken_at_utc: Option<String>,
+    pub end_taken_at_utc: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

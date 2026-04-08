@@ -1,4 +1,5 @@
 import type { AlbumSummary, ImportProgress } from "../lib/types";
+import dayjs from "dayjs";
 
 type SidebarProps = {
   rootsInput: string;
@@ -112,6 +113,8 @@ export function Sidebar({
           >
             <div>{album.name}</div>
             <div className="muted">
+              {formatAlbumDateRange(album.begin_taken_at_utc, album.end_taken_at_utc)}
+              <br />
               {album.asset_count} assets
               <br />
               {album.source_path}
@@ -121,4 +124,29 @@ export function Sidebar({
       </div>
     </aside>
   );
+}
+
+function formatAlbumDateRange(begin?: string | null, end?: string | null) {
+  if (!begin && !end) {
+    return "Unknown date range";
+  }
+
+  const beginDate = begin ? dayjs(begin) : undefined;
+  const endDate = end ? dayjs(end) : undefined;
+
+  if (beginDate?.isValid() && endDate?.isValid()) {
+    if (beginDate.isSame(endDate, "day")) {
+      return beginDate.format("YYYY-MM-DD");
+    }
+    if (beginDate.isSame(endDate, "month")) {
+      return `${beginDate.format("YYYY-MM-DD")} to ${endDate.format("DD")}`;
+    }
+    if (beginDate.isSame(endDate, "year")) {
+      return `${beginDate.format("YYYY-MM-DD")} to ${endDate.format("MM-DD")}`;
+    }
+    return `${beginDate.format("YYYY-MM-DD")} to ${endDate.format("YYYY-MM-DD")}`;
+  }
+
+  const fallback = beginDate?.isValid() ? beginDate : endDate;
+  return fallback?.format("YYYY-MM-DD") ?? "Unknown date range";
 }

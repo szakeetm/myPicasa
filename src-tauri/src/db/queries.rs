@@ -482,11 +482,18 @@ impl DatabaseQueries for super::Database {
     fn list_albums(&self) -> Result<Vec<AlbumSummary>, AppError> {
         self.with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT al.id, al.name, al.source_path, COUNT(aa.asset_id)
+                "SELECT al.id,
+                        al.name,
+                        al.source_path,
+                        COUNT(DISTINCT aa.asset_id),
+                        MIN(COALESCE(a.taken_at_utc, f.mtime_utc)),
+                        MAX(COALESCE(a.taken_at_utc, f.mtime_utc))
                  FROM albums al
                  LEFT JOIN album_assets aa ON aa.album_id = al.id
+                 LEFT JOIN assets a ON a.id = aa.asset_id AND a.is_deleted = 0
+                 LEFT JOIN file_entries f ON f.id = a.primary_file_id
                  GROUP BY al.id, al.name, al.source_path
-                 ORDER BY al.name COLLATE NOCASE",
+                 ORDER BY MIN(COALESCE(a.taken_at_utc, f.mtime_utc)) DESC, al.name COLLATE NOCASE",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(AlbumSummary {
@@ -494,6 +501,8 @@ impl DatabaseQueries for super::Database {
                     name: row.get(1)?,
                     source_path: row.get(2)?,
                     asset_count: row.get(3)?,
+                    begin_taken_at_utc: row.get(4)?,
+                    end_taken_at_utc: row.get(5)?,
                 })
             })?;
             Ok(rows.filter_map(Result::ok).collect())
