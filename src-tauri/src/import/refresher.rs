@@ -173,15 +173,56 @@ fn find_sidecar_for<'a>(
     scan: &crate::models::FileScanRecord,
     sidecars: &'a HashMap<String, ParsedSidecar>,
 ) -> Option<&'a ParsedSidecar> {
-    let base = scan.path.clone();
-    let json_path = format!("{base}.json");
-    if let Some(sidecar) = sidecars.get(&json_path) {
-        return Some(sidecar);
-    }
     let parent = std::path::Path::new(&scan.path).parent()?.to_str()?;
-    let stem = std::path::Path::new(&scan.path).file_name()?.to_str()?;
-    let supplemental = format!("{parent}/{stem}.supplemental-metadata.json");
-    sidecars.get(&supplemental)
+
+    for candidate_filename in sidecar_candidate_filenames(&scan.filename) {
+        let candidate_path = format!("{parent}/{candidate_filename}");
+        let json_path = format!("{candidate_path}.json");
+        if let Some(sidecar) = sidecars.get(&json_path) {
+            return Some(sidecar);
+        }
+
+        let supplemental = format!("{candidate_path}.supplemental-metadata.json");
+        if let Some(sidecar) = sidecars.get(&supplemental) {
+            return Some(sidecar);
+        }
+    }
+
+    None
+}
+
+fn sidecar_candidate_filenames(filename: &str) -> Vec<String> {
+    let mut candidates = vec![filename.to_string()];
+
+    if let Some(unedited) = strip_edited_marker(filename) {
+        candidates.push(unedited);
+    }
+
+    candidates
+}
+
+fn strip_edited_marker(filename: &str) -> Option<String> {
+    let path = std::path::Path::new(filename);
+    let stem = path.file_stem()?.to_str()?;
+    let extension = path.extension().and_then(|item| item.to_str()).unwrap_or_default();
+
+    let normalized = if let Some(stripped) = stem.strip_suffix("-edited") {
+        stripped.to_string()
+    } else if let Some(index) = stem.rfind("-edited(") {
+        if stem.ends_with(')') {
+            stem[..index].to_string()
+        } else {
+            return None;
+        }
+    } else {
+        return None;
+    };
+
+    if extension.is_empty() {
+        Some(normalized)
+    } else {
+        Some(format!("{normalized}.{extension}"))
+    }
 }
 
 fn is_live_photo_video(scan: &crate::models::FileScanRecord) -> bool {
