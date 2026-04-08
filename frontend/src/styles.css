@@ -274,6 +274,29 @@ button {
   line-height: 1;
 }
 
+.thumb-player-button {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 1;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 999px;
+  background: rgba(20, 16, 12, 0.82);
+  color: white;
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.2);
+  backdrop-filter: blur(10px);
+}
+
+.thumb-player-icon {
+  font-size: 0.86rem;
+  line-height: 1;
+  margin-left: 2px;
+}
+
 .tile-body {
   padding: 4px 7px 6px;
   display: grid;
@@ -342,17 +365,37 @@ button {
 .viewer-media {
   max-height: 68vh;
   background: #16110c;
-  display: grid;
-  place-items: center;
+  display: block;
   overflow: auto;
   padding: 12px;
 }
 
+.viewer-image-frame {
+  min-width: 100%;
+  min-height: calc(68vh - 24px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.viewer-image-frame.zoomed {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
 .viewer-media img,
 .viewer-media video {
-  max-width: 100%;
   max-height: 68vh;
-  transition: transform 120ms ease;
+  display: block;
+}
+
+.viewer-image-frame img {
+  height: auto;
+}
+
+.viewer-media video {
+  max-width: 100%;
+  margin: 0 auto;
 }
 
 .viewer-meta {

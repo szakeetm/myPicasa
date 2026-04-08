@@ -138,11 +138,16 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           {asset.media_kind === "video" && primaryPath ? (
             <video src={primaryPath} controls autoPlay />
           ) : imageSrc && assetId === asset.id ? (
-            <img
-              src={imageSrc}
-              alt={asset.title ?? "asset"}
-              style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
-            />
+            <div className={`viewer-image-frame${zoom > 1 ? " zoomed" : ""}`}>
+              <img
+                src={imageSrc}
+                alt={asset.title ?? "asset"}
+                style={{
+                  width: `${zoom * 100}%`,
+                  maxWidth: "none",
+                }}
+              />
+            </div>
           ) : imageError ? (
             <div className="muted">{imageError}</div>
           ) : (

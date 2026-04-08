@@ -162,6 +162,22 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
                   ◎
                 </div>
               ) : null}
+              {(asset.media_kind === "video" || asset.has_live_photo) ? (
+                <button
+                  className="thumb-player-button"
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    onSelect(asset.id);
+                  }}
+                  aria-label={asset.media_kind === "video" ? "Play video" : "Play live photo"}
+                  title={asset.media_kind === "video" ? "Play video" : "Play live photo"}
+                >
+                  <span className="thumb-player-icon" aria-hidden="true">
+                    ▶
+                  </span>
+                </button>
+              ) : null}
             </div>
             <div className="tile-body">
               <strong>{asset.title ?? "Untitled asset"}</strong>
