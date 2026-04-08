@@ -13,6 +13,8 @@ import type {
 } from "./types";
 
 export const api = {
+  startRefreshIndex: (request: RefreshRequest) =>
+    invoke<void>("start_refresh_index", { request }),
   refreshIndex: (request: RefreshRequest) =>
     invoke<ImportProgress>("refresh_index", { request }),
   getImportStatus: () => invoke<ImportProgress | null>("get_import_status"),

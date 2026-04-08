@@ -84,6 +84,11 @@ export function App() {
         const status = await api.getImportStatus();
         if (status) {
           state.setImportStatus(status);
+          if (status.status === "completed" || status.status === "failed") {
+            window.clearInterval(poll);
+            await refreshDebugSurfaces();
+            await refreshAllAssets();
+          }
         }
       } catch (error) {
         console.error("failed to poll import status", error);
@@ -91,12 +96,15 @@ export function App() {
     }, 400);
 
     try {
-      const progress = await api.refreshIndex({ roots });
-      state.setImportStatus(progress);
-      await refreshDebugSurfaces();
-      await refreshAllAssets();
+      await api.startRefreshIndex({ roots });
     } finally {
-      window.clearInterval(poll);
+      window.setTimeout(() => {
+        void api.getImportStatus().then((status) => {
+          if (status) {
+            state.setImportStatus(status);
+          }
+        });
+      }, 50);
     }
   }
 
@@ -140,6 +148,16 @@ export function App() {
     const detail = await api.getAssetDetail(assetId);
     state.setSelectedAsset(detail);
     await logClient("ui.viewer", `opened asset ${assetId}`);
+  }
+
+  async function handleStepAsset(direction: -1 | 1) {
+    const currentId = state.selectedAsset?.id;
+    if (!currentId) return;
+    const currentIndex = state.assets.findIndex((asset) => asset.id === currentId);
+    if (currentIndex < 0) return;
+    const nextAsset = state.assets[currentIndex + direction];
+    if (!nextAsset) return;
+    await handleSelectAsset(nextAsset.id);
   }
 
   async function handleResetDatabase() {
@@ -200,7 +218,18 @@ export function App() {
         cacheStats={state.cacheStats}
       />
 
-      <ViewerModal asset={state.selectedAsset} onClose={() => state.setSelectedAsset(undefined)} />
+      <ViewerModal
+        asset={state.selectedAsset}
+        hasPrevious={state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id) > 0}
+        hasNext={
+          state.selectedAsset
+            ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id) < state.assets.length - 1
+            : false
+        }
+        onPrevious={() => void handleStepAsset(-1)}
+        onNext={() => void handleStepAsset(1)}
+        onClose={() => state.setSelectedAsset(undefined)}
+      />
     </div>
   );
 }

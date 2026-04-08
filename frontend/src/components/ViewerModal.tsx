@@ -8,10 +8,14 @@ import type { AssetDetail } from "../lib/types";
 
 type ViewerModalProps = {
   asset?: AssetDetail;
+  hasPrevious: boolean;
+  hasNext: boolean;
+  onPrevious: () => void;
+  onNext: () => void;
   onClose: () => void;
 };
 
-export function ViewerModal({ asset, onClose }: ViewerModalProps) {
+export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, onClose }: ViewerModalProps) {
   const [imageSrc, setImageSrc] = useState<string>();
   const [imageError, setImageError] = useState<string>();
   const assetId = asset?.id;
@@ -47,6 +51,24 @@ export function ViewerModal({ asset, onClose }: ViewerModalProps) {
     };
   }, [assetId, isPhoto]);
 
+  useEffect(() => {
+    if (!asset) return;
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "ArrowLeft" && hasPrevious) {
+        event.preventDefault();
+        onPrevious();
+      } else if (event.key === "ArrowRight" && hasNext) {
+        event.preventDefault();
+        onNext();
+      } else if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+      }
+    }
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [asset, hasNext, hasPrevious, onClose, onNext, onPrevious]);
+
   if (!asset) return null;
 
   const primaryPath = asset.primary_path ? convertFileSrc(asset.primary_path) : undefined;
@@ -71,9 +93,17 @@ export function ViewerModal({ asset, onClose }: ViewerModalProps) {
         <div className="viewer-meta">
           <div className="button-row" style={{ justifyContent: "space-between" }}>
             <strong>{asset.title ?? "Untitled asset"}</strong>
-            <button className="button-danger" onClick={onClose}>
-              Close
-            </button>
+            <div className="button-row">
+              <button className="button-secondary" onClick={onPrevious} disabled={!hasPrevious}>
+                Previous
+              </button>
+              <button className="button-secondary" onClick={onNext} disabled={!hasNext}>
+                Next
+              </button>
+              <button className="button-danger" onClick={onClose}>
+                Close
+              </button>
+            </div>
           </div>
           <p className="muted">
             {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm:ss") : "Unknown capture time"}

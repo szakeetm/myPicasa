@@ -1,7 +1,7 @@
 use std::collections::HashMap;
+use std::time::Instant;
 
 use rayon::current_num_threads;
-use tauri::State;
 use tracing::info;
 
 use crate::{
@@ -13,9 +13,10 @@ use crate::{
 };
 
 pub fn refresh_takeout_index(
-    state: &State<AppState>,
+    state: &AppState,
     request: RefreshRequest,
 ) -> Result<ImportProgress, AppError> {
+    let started = Instant::now();
     let roots = request
         .roots
         .into_iter()
@@ -28,6 +29,8 @@ pub fn refresh_takeout_index(
     state
         .db
         .insert_log("info", "import", &format!("starting refresh for {} roots", roots.len()), None)?;
+    info!("refresh_takeout_index: starting for {} roots", roots.len());
+    println!("refresh_takeout_index: starting for {} roots", roots.len());
 
     let import_id = state.db.create_import(&roots.join("; "))?;
     let mut progress = ImportProgress {
@@ -48,7 +51,18 @@ pub fn refresh_takeout_index(
     };
     *state.import_status.lock() = Some(progress.clone());
 
+    let scan_started = Instant::now();
     let scans = scan_roots(&roots)?;
+    info!(
+        "refresh_takeout_index: scanned {} files in {} ms",
+        scans.len(),
+        scan_started.elapsed().as_millis()
+    );
+    println!(
+        "refresh_takeout_index: scanned {} files in {} ms",
+        scans.len(),
+        scan_started.elapsed().as_millis()
+    );
     progress.files_scanned = scans.len() as u32;
     progress.total_files = scans.len() as u32;
     progress.message = Some(format!("scanned {} files", progress.files_scanned));
@@ -116,12 +130,25 @@ pub fn refresh_takeout_index(
     progress.status = "completed".to_string();
     progress.phase = "completed".to_string();
     progress.processed_files = progress.total_files;
-    progress.message = Some("refresh completed".to_string());
+    progress.message = Some(format!(
+        "refresh completed in {} ms",
+        started.elapsed().as_millis()
+    ));
     state.db.finish_import(&progress)?;
     state
         .db
         .insert_log("info", "import", &format!("completed import {}", import_id), None)?;
-    info!(import_id, scanned = progress.files_scanned, "refresh completed");
+    info!(
+        import_id,
+        scanned = progress.files_scanned,
+        elapsed_ms = started.elapsed().as_millis(),
+        "refresh completed"
+    );
+    println!(
+        "refresh_takeout_index: import {} completed in {} ms",
+        import_id,
+        started.elapsed().as_millis()
+    );
 
     *state.import_status.lock() = Some(progress.clone());
     Ok(progress)
@@ -163,7 +190,7 @@ fn is_live_photo_video(scan: &crate::models::FileScanRecord) -> bool {
 }
 
 fn find_still_pair_asset_id(
-    state: &State<AppState>,
+    state: &AppState,
     scan: &crate::models::FileScanRecord,
 ) -> Result<Option<i64>, AppError> {
     let still_stem = scan
