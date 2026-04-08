@@ -2,16 +2,25 @@ type ToolbarProps = {
   query: string;
   mediaKind: string;
   timelineLabel?: string;
+  thumbnailPreloadActive: boolean;
+  thumbnailPreloadProgress?: {
+    completed: number;
+    total: number;
+  };
   onQueryChange: (value: string) => void;
   onMediaKindChange: (value: string) => void;
+  onToggleThumbnailPreload: () => void;
 };
 
 export function Toolbar({
   query,
   mediaKind,
   timelineLabel,
+  thumbnailPreloadActive,
+  thumbnailPreloadProgress,
   onQueryChange,
   onMediaKindChange,
+  onToggleThumbnailPreload,
 }: ToolbarProps) {
   return (
     <div className="toolbar">
@@ -27,6 +36,14 @@ export function Toolbar({
       </select>
       <div className="timeline-marker" aria-live="polite">
         {timelineLabel || "Timeline"}
+      </div>
+      <button className="button-secondary" onClick={onToggleThumbnailPreload}>
+        {thumbnailPreloadActive ? "Interrupt Thumb Fill" : "Generate Thumbs"}
+      </button>
+      <div className="timeline-marker" aria-live="polite">
+        {thumbnailPreloadProgress
+          ? `${thumbnailPreloadProgress.completed}/${thumbnailPreloadProgress.total} thumbs`
+          : "Manual thumb fill"}
       </div>
     </div>
   );

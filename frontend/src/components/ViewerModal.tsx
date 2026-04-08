@@ -63,17 +63,15 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   useEffect(() => {
     setForceRenderedFrame(false);
     setVideoFallbackAttempted(false);
-    setLivePhotoFallbackAttempted(false);
     setShowLivePhotoMotion(false);
     setVideoSrc(undefined);
     setVideoError(undefined);
     setVideoTranscoding(false);
-    setVideoFallbackAttempted(false);
     setVideoFallbackAvailable(false);
     setLivePhotoMotionSrc(undefined);
     setLivePhotoMotionError(undefined);
-    setLivePhotoTranscoding(false);
     setLivePhotoFallbackAttempted(false);
+    setLivePhotoTranscoding(false);
     setLivePhotoFallbackAvailable(false);
     setZoomMode("fit");
     setZoom(1);

@@ -17,6 +17,15 @@ export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
   const [timelineLabel, setTimelineLabel] = useState<string>();
+  const [thumbnailPreloadActive, setThumbnailPreloadActive] = useState(false);
+  const [thumbnailPreloadRunId, setThumbnailPreloadRunId] = useState(0);
+  const [thumbnailPreloadProgress, setThumbnailPreloadProgress] = useState<
+    | {
+        completed: number;
+        total: number;
+      }
+    | undefined
+  >();
   const didInitFilterEffect = useRef(false);
 
   async function refreshAllAssets() {
@@ -246,6 +255,33 @@ export function App() {
     state.setCacheStats(cacheStats);
   }
 
+  function handleToggleThumbnailPreload() {
+    if (thumbnailPreloadActive) {
+      setThumbnailPreloadActive(false);
+      setThumbnailPreloadProgress(undefined);
+      return;
+    }
+
+    setThumbnailPreloadRunId((value) => value + 1);
+    setThumbnailPreloadActive(true);
+    setThumbnailPreloadProgress({
+      completed: 0,
+      total: state.assets.length,
+    });
+  }
+
+  function handleThumbnailPreloadProgress(
+    progress?: {
+      completed: number;
+      total: number;
+    },
+  ) {
+    setThumbnailPreloadProgress(progress);
+    if (progress && progress.completed >= progress.total) {
+      setThumbnailPreloadActive(false);
+    }
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -267,13 +303,21 @@ export function App() {
           query={state.query}
           mediaKind={state.mediaKind}
           timelineLabel={state.viewMode === "timeline" ? timelineLabel : undefined}
+          thumbnailPreloadActive={thumbnailPreloadActive}
+          thumbnailPreloadProgress={thumbnailPreloadProgress}
           onQueryChange={state.setQuery}
           onMediaKindChange={state.setMediaKind}
+          onToggleThumbnailPreload={handleToggleThumbnailPreload}
         />
         <div className="grid-frame">
           <MediaGrid
             assets={state.assets}
             onSelect={handleSelectAsset}
+            thumbnailPreload={{
+              active: thumbnailPreloadActive,
+              runId: thumbnailPreloadRunId,
+            }}
+            onThumbnailPreloadProgress={handleThumbnailPreloadProgress}
             onLeadingDateChange={(value) => {
               if (state.viewMode === "timeline") {
                 setTimelineLabel(formatTimelineLabel(value));
