@@ -25,6 +25,7 @@ use crate::{
 
 type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
+const VIEWER_PREVIEW_SIZE: u32 = 1024;
 
 fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
@@ -200,7 +201,13 @@ pub fn request_thumbnail(
     state: State<AppState>,
 ) -> CommandResult<Option<String>> {
     let key = format!("{asset_id}:{size}");
-    if let Some(bytes) = state.thumbnail_cache.lock().get(&key) {
+    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let cache = if use_preview_cache {
+        &state.preview_cache
+    } else {
+        &state.thumbnail_cache
+    };
+    if let Some(bytes) = cache.lock().get(&key) {
         let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
         let (filename, file_size) = detail
             .primary_path
@@ -213,7 +220,7 @@ pub fn request_thumbnail(
             bytes = bytes.len(),
             filename = %filename,
             file_size,
-            source = "cache",
+            source = if use_preview_cache { "preview-cache" } else { "thumbnail-cache" },
             "thumbnail load ready"
         );
         return Ok(Some(format!(
@@ -237,10 +244,14 @@ pub fn request_thumbnail(
                 bytes = bytes.len(),
                 filename = %filename,
                 file_size,
-                source = "generated",
+                source = if use_preview_cache {
+                    "generated-preview-cache"
+                } else {
+                    "generated-thumbnail-cache"
+                },
                 "thumbnail load ready"
             );
-            state.thumbnail_cache.lock().insert(key, bytes.clone());
+            cache.lock().insert(key, bytes.clone());
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
@@ -678,6 +689,10 @@ pub fn get_live_photo_pair(asset_id: i64, state: State<AppState>) -> CommandResu
 #[tauri::command]
 pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
     let mut stats = state.thumbnail_cache.lock().stats();
+    let preview_stats = state.preview_cache.lock().stats();
+    stats.preview_items = preview_stats.thumbnail_items;
+    stats.preview_bytes = preview_stats.thumbnail_bytes;
+    stats.preview_budget_bytes = preview_stats.thumbnail_budget_bytes;
     let (viewer_render_items, viewer_render_bytes) =
         viewer_render_cache_stats(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     stats.viewer_render_items = viewer_render_items;
@@ -689,11 +704,12 @@ pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
 pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
     state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
     state.thumbnail_cache.lock().clear();
+    state.preview_cache.lock().clear();
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
     state
         .db
-        .insert_log("info", "thumbnail", "cleared thumbnail cache", None)
+        .insert_log("info", "thumbnail", "cleared thumbnail and preview caches", None)
         .map_err(map_error)?;
     Ok(())
 }
@@ -733,6 +749,7 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     *state.import_status.lock() = None;
     state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
     state.thumbnail_cache.lock().clear();
+    state.preview_cache.lock().clear();
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
     clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;

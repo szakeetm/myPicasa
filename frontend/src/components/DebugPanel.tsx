@@ -38,6 +38,13 @@ export function DebugPanel({
             </div>
             <div className="debug-cache-summary">
               <div className="muted">
+                viewer previews: {cacheStats.preview_items} items •{" "}
+                {Math.round((cacheStats.preview_bytes / 1024 / 1024) * 10) / 10} /{" "}
+                {Math.round(cacheStats.preview_budget_bytes / 1024 / 1024)} MB
+              </div>
+            </div>
+            <div className="debug-cache-summary">
+              <div className="muted">
                 rendered viewer media: {cacheStats.viewer_render_items} items •{" "}
                 {Math.round((cacheStats.viewer_render_bytes / 1024 / 1024) * 10) / 10} MB
               </div>

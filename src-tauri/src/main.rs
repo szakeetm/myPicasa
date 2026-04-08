@@ -55,8 +55,10 @@ fn main() {
 
             let db_path = app_data_dir.join("my_picasa.sqlite");
             let thumbnail_cache_dir = app_data_dir.join("thumbnail-cache");
+            let preview_cache_dir = app_data_dir.join("preview-cache");
             let viewer_cache_dir = app_data_dir.join("viewer-cache");
             let working_dir = app_data_dir.join("working");
+            fs::create_dir_all(&preview_cache_dir)?;
             fs::create_dir_all(&viewer_cache_dir)?;
             fs::create_dir_all(&working_dir)?;
             let database = Database::new(&db_path)?;
@@ -65,6 +67,10 @@ fn main() {
             let thumbnail_cache = Arc::new(Mutex::new(ThumbnailCache::new(
                 thumbnail_cache_dir,
                 256 * 1024 * 1024,
+            )));
+            let preview_cache = Arc::new(Mutex::new(ThumbnailCache::new(
+                preview_cache_dir,
+                512 * 1024 * 1024,
             )));
             let inflight_thumbnails = Arc::new(Mutex::new(HashSet::new()));
             let failed_thumbnails = Arc::new(Mutex::new(HashSet::new()));
@@ -171,6 +177,7 @@ fn main() {
                 app_data_dir: Arc::new(app_data_dir),
                 import_status: Arc::new(Mutex::new(None)),
                 thumbnail_cache,
+                preview_cache,
                 inflight_thumbnails,
                 failed_thumbnails,
                 thumbnail_generation,

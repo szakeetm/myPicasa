@@ -82,6 +82,9 @@ export type CacheStats = {
   thumbnail_items: number;
   thumbnail_bytes: number;
   thumbnail_budget_bytes: number;
+  preview_items: number;
+  preview_bytes: number;
+  preview_budget_bytes: number;
   viewer_render_items: number;
   viewer_render_bytes: number;
 };

@@ -21,6 +21,7 @@ pub struct AppState {
     pub app_data_dir: Arc<PathBuf>,
     pub import_status: Arc<Mutex<Option<ImportProgress>>>,
     pub thumbnail_cache: Arc<Mutex<ThumbnailCache>>,
+    pub preview_cache: Arc<Mutex<ThumbnailCache>>,
     pub inflight_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub failed_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub thumbnail_generation: Arc<AtomicU64>,

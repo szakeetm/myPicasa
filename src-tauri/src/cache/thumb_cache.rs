@@ -79,6 +79,9 @@ impl ThumbnailCache {
             thumbnail_items: self.persisted_items as u32,
             thumbnail_bytes: self.persisted_bytes as u64,
             thumbnail_budget_bytes: self.max_bytes as u64,
+            preview_items: 0,
+            preview_bytes: 0,
+            preview_budget_bytes: 0,
             viewer_render_items: 0,
             viewer_render_bytes: 0,
         }
