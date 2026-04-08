@@ -56,6 +56,10 @@ fn main() {
 
             let db_path = app_data_dir.join("my_picasa.sqlite");
             let thumbnail_cache_dir = app_data_dir.join("thumbnail-cache");
+            let viewer_cache_dir = app_data_dir.join("viewer-cache");
+            let working_dir = app_data_dir.join("working");
+            fs::create_dir_all(&viewer_cache_dir)?;
+            fs::create_dir_all(&working_dir)?;
             let database = Database::new(&db_path)?;
             let (thumbnail_job_sender, thumbnail_job_receiver) = mpsc::channel::<ThumbnailJob>();
             let thumbnail_job_receiver = Arc::new(Mutex::new(thumbnail_job_receiver));
@@ -78,6 +82,7 @@ fn main() {
                 let inflight = inflight_thumbnails.clone();
                 let failed = failed_thumbnails.clone();
                 let generation = thumbnail_generation.clone();
+                let working_dir = working_dir.clone();
                 thread::spawn(move || loop {
                     let job = {
                         let receiver = receiver.lock();
@@ -109,7 +114,11 @@ fn main() {
                             job.size
                         ));
                         let generated =
-                            generate_thumbnail(&std::path::PathBuf::from(primary_path), job.size)
+                            generate_thumbnail(
+                                &std::path::PathBuf::from(primary_path),
+                                job.size,
+                                &working_dir,
+                            )
                                 .map_err(|error| error.to_string())?;
                         match &generated {
                             Some(bytes) => preview_debug_log(format!(
@@ -163,6 +172,7 @@ fn main() {
 
             let state = AppState {
                 db: Arc::new(database),
+                app_data_dir: Arc::new(app_data_dir),
                 import_status: Arc::new(Mutex::new(None)),
                 thumbnail_cache,
                 inflight_thumbnails,

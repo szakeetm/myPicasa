@@ -10,7 +10,7 @@ use image::{ImageReader, codecs::jpeg::JpegEncoder};
 
 use crate::util::errors::AppError;
 
-pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, AppError> {
+pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     if is_video_path(path) {
         return render_video_thumbnail_with_ffmpeg(path, size);
     }
@@ -20,16 +20,16 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
     #[cfg(target_os = "macos")]
     {
         if matches!(extension.as_str(), "heic" | "heif") {
-            if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(192))? {
+            if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(192), working_dir)? {
                 return Ok(Some(bytes));
             }
         }
-        if let Some(bytes) = render_with_sips(path, size.max(192), 82)? {
+        if let Some(bytes) = render_with_sips(path, size.max(192), 82, working_dir)? {
             return Ok(Some(bytes));
         }
     }
 
-    let image = load_image(path, size)?;
+    let image = load_image(path, size, working_dir)?;
     let thumb = image.thumbnail(size, size);
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
@@ -38,19 +38,19 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
     Ok(Some(buffer))
 }
 
-pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<Vec<u8>>, AppError> {
+pub fn generate_viewer_image(path: &Path, max_dimension: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     let extension = normalized_extension(path);
     if is_video_extension(&extension) {
         return Ok(None);
     }
 
     if matches!(extension.as_str(), "heic" | "heif") {
-        if let Some(bytes) = render_with_sips_original(path, 90)? {
+        if let Some(bytes) = render_with_sips_original(path, 90, working_dir)? {
             return Ok(Some(bytes));
         }
     }
 
-    let image = load_image(path, max_dimension)?;
+    let image = load_image(path, max_dimension, working_dir)?;
     let fitted = if image.width() > max_dimension || image.height() > max_dimension {
         image.resize(
             max_dimension,
@@ -68,7 +68,12 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<V
     Ok(Some(buffer))
 }
 
-pub fn generate_viewer_image_file(path: &Path, max_dimension: u32) -> Result<Option<PathBuf>, AppError> {
+pub fn generate_viewer_image_file(
+    path: &Path,
+    max_dimension: u32,
+    cache_dir: &Path,
+    working_dir: &Path,
+) -> Result<Option<PathBuf>, AppError> {
     let metadata = fs::metadata(path)?;
     let modified = metadata
         .modified()
@@ -83,7 +88,8 @@ pub fn generate_viewer_image_file(path: &Path, max_dimension: u32) -> Result<Opt
         metadata.len(),
         modified
     );
-    let output_path = std::env::temp_dir().join(format!(
+    fs::create_dir_all(cache_dir)?;
+    let output_path = cache_dir.join(format!(
         "my-picasa-viewer-{}.jpg",
         blake3::hash(cache_key.as_bytes()).to_hex()
     ));
@@ -92,7 +98,7 @@ pub fn generate_viewer_image_file(path: &Path, max_dimension: u32) -> Result<Opt
         return Ok(Some(output_path));
     }
 
-    let Some(bytes) = generate_viewer_image(path, max_dimension)? else {
+    let Some(bytes) = generate_viewer_image(path, max_dimension, working_dir)? else {
         return Ok(None);
     };
     let temp_output = output_path.with_extension("tmp.jpg");
@@ -102,7 +108,7 @@ pub fn generate_viewer_image_file(path: &Path, max_dimension: u32) -> Result<Opt
     Ok(Some(output_path))
 }
 
-pub fn generate_viewer_video(path: &Path) -> Result<Option<PathBuf>, AppError> {
+pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<PathBuf>, AppError> {
     if !is_video_path(path) {
         return Ok(None);
     }
@@ -120,7 +126,8 @@ pub fn generate_viewer_video(path: &Path) -> Result<Option<PathBuf>, AppError> {
         .map(|value| value.as_secs())
         .unwrap_or(0);
     let cache_key = format!("{}:{}:{}", path.display(), metadata.len(), modified);
-    let output_path = std::env::temp_dir().join(format!(
+    fs::create_dir_all(cache_dir)?;
+    let output_path = cache_dir.join(format!(
         "my-picasa-viewer-{}.mp4",
         blake3::hash(cache_key.as_bytes()).to_hex()
     ));
@@ -167,12 +174,11 @@ pub fn generate_viewer_video(path: &Path) -> Result<Option<PathBuf>, AppError> {
     Ok(Some(output_path))
 }
 
-pub fn viewer_render_cache_stats() -> Result<(u32, u64), AppError> {
-    let temp_dir = std::env::temp_dir();
+pub fn viewer_render_cache_stats(cache_dir: &Path) -> Result<(u32, u64), AppError> {
     let mut items = 0_u32;
     let mut bytes = 0_u64;
 
-    if let Ok(entries) = fs::read_dir(temp_dir) {
+    if let Ok(entries) = fs::read_dir(cache_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
@@ -193,9 +199,8 @@ pub fn viewer_render_cache_stats() -> Result<(u32, u64), AppError> {
     Ok((items, bytes))
 }
 
-pub fn clear_viewer_render_cache() -> Result<(), AppError> {
-    let temp_dir = std::env::temp_dir();
-    if let Ok(entries) = fs::read_dir(temp_dir) {
+pub fn clear_viewer_render_cache(cache_dir: &Path) -> Result<(), AppError> {
+    if let Ok(entries) = fs::read_dir(cache_dir) {
         for entry in entries.flatten() {
             let path = entry.path();
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
@@ -318,7 +323,7 @@ fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<V
     Ok(Some(buffer))
 }
 
-fn load_image(path: &Path, size_hint: u32) -> Result<image::DynamicImage, AppError> {
+fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::DynamicImage, AppError> {
     match ImageReader::open(path)?.with_guessed_format()?.decode() {
         Ok(image) => Ok(image),
         Err(error) => {
@@ -328,7 +333,7 @@ fn load_image(path: &Path, size_hint: u32) -> Result<image::DynamicImage, AppErr
                 .unwrap_or_default()
                 .to_lowercase();
             if matches!(extension.as_str(), "heic" | "heif") {
-                if let Some(image) = load_image_with_sips(path, size_hint)? {
+                if let Some(image) = load_image_with_sips(path, size_hint, working_dir)? {
                     return Ok(image);
                 }
             }
@@ -380,10 +385,11 @@ fn is_video_extension(extension: &str) -> bool {
 fn load_image_with_sips(
     path: &Path,
     size_hint: u32,
+    working_dir: &Path,
 ) -> Result<Option<image::DynamicImage>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        if let Some(bytes) = render_with_sips(path, size_hint.max(512), 90)? {
+        if let Some(bytes) = render_with_sips(path, size_hint.max(512), 90, working_dir)? {
             let image = image::load_from_memory(&bytes)?;
             return Ok(Some(image));
         }
@@ -392,15 +398,15 @@ fn load_image_with_sips(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, size_hint);
+        let _ = (path, size_hint, working_dir);
         Ok(None)
     }
 }
 
-fn render_with_sips(path: &Path, width: u32, quality: u8) -> Result<Option<Vec<u8>>, AppError> {
+fn render_with_sips(path: &Path, width: u32, quality: u8, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        let temp_path = temp_jpeg_path(path);
+        let temp_path = temp_jpeg_path(path, working_dir);
         let status = Command::new("sips")
             .arg("-s")
             .arg("format")
@@ -429,15 +435,15 @@ fn render_with_sips(path: &Path, width: u32, quality: u8) -> Result<Option<Vec<u
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, width, quality);
+        let _ = (path, width, quality, working_dir);
         Ok(None)
     }
 }
 
-fn render_with_sips_original(path: &Path, quality: u8) -> Result<Option<Vec<u8>>, AppError> {
+fn render_with_sips_original(path: &Path, quality: u8, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        let temp_path = temp_jpeg_path(path);
+        let temp_path = temp_jpeg_path(path, working_dir);
         let status = Command::new("sips")
             .arg("-s")
             .arg("format")
@@ -464,15 +470,15 @@ fn render_with_sips_original(path: &Path, quality: u8) -> Result<Option<Vec<u8>>
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, quality);
+        let _ = (path, quality, working_dir);
         Ok(None)
     }
 }
 
-fn render_thumbnail_with_quicklook(path: &Path, width: u32) -> Result<Option<Vec<u8>>, AppError> {
+fn render_thumbnail_with_quicklook(path: &Path, width: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        let output_dir = temp_render_dir(path);
+        let output_dir = temp_render_dir(path, working_dir);
         fs::create_dir_all(&output_dir)?;
 
         let status = Command::new("qlmanage")
@@ -510,12 +516,12 @@ fn render_thumbnail_with_quicklook(path: &Path, width: u32) -> Result<Option<Vec
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, width);
+        let _ = (path, width, working_dir);
         Ok(None)
     }
 }
 
-fn temp_jpeg_path(path: &Path) -> PathBuf {
+fn temp_jpeg_path(path: &Path, working_dir: &Path) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -524,10 +530,11 @@ fn temp_jpeg_path(path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|item| item.to_str())
         .unwrap_or("thumb");
-    std::env::temp_dir().join(format!("mypicasa-{stem}-{stamp}.jpg"))
+    let _ = fs::create_dir_all(working_dir);
+    working_dir.join(format!("mypicasa-{stem}-{stamp}.jpg"))
 }
 
-fn temp_render_dir(path: &Path) -> PathBuf {
+fn temp_render_dir(path: &Path, working_dir: &Path) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
@@ -536,5 +543,6 @@ fn temp_render_dir(path: &Path) -> PathBuf {
         .file_stem()
         .and_then(|item| item.to_str())
         .unwrap_or("thumb");
-    std::env::temp_dir().join(format!("mypicasa-ql-{stem}-{stamp}"))
+    let _ = fs::create_dir_all(working_dir);
+    working_dir.join(format!("mypicasa-ql-{stem}-{stamp}"))
 }

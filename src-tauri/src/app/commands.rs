@@ -197,7 +197,8 @@ pub fn request_thumbnail(
     };
     let (filename, file_size) = media_debug_info(&primary_path);
 
-    match generate_thumbnail(&PathBuf::from(primary_path), size) {
+    let working_dir = state.app_data_dir.join("working");
+    match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
         Ok(Some(bytes)) => {
             state.thumbnail_cache.lock().insert(key, bytes.clone());
             Ok(Some(format!(
@@ -320,7 +321,14 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
     };
     let (filename, file_size) = media_debug_info(&primary_path);
 
-    match generate_viewer_image_file(&PathBuf::from(primary_path), 2400) {
+    let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
+    let working_dir = state.app_data_dir.join("working");
+    match generate_viewer_image_file(
+        &PathBuf::from(primary_path),
+        2400,
+        &viewer_cache_dir,
+        &working_dir,
+    ) {
         Ok(Some(path)) => {
             let elapsed = started.elapsed().as_millis();
             let bytes = fs::read(&path).map_err(map_error)?;
@@ -420,7 +428,8 @@ pub fn load_viewer_video(
 
     info!(asset_id, filename = %filename, file_size, "viewer video transcode requested");
 
-    match generate_viewer_video(&source_path) {
+    let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
+    match generate_viewer_video(&source_path, &viewer_cache_dir) {
         Ok(Some(path)) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
@@ -525,7 +534,8 @@ pub fn load_live_photo_motion(
 
     info!(asset_id, filename = %filename, file_size, "live photo motion transcode requested");
 
-    match generate_viewer_video(&source_path) {
+    let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
+    match generate_viewer_video(&source_path, &viewer_cache_dir) {
         Ok(Some(path)) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
@@ -586,7 +596,7 @@ pub fn get_live_photo_pair(asset_id: i64, state: State<AppState>) -> CommandResu
 pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
     let mut stats = state.thumbnail_cache.lock().stats();
     let (viewer_render_items, viewer_render_bytes) =
-        viewer_render_cache_stats().map_err(map_error)?;
+        viewer_render_cache_stats(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     stats.viewer_render_items = viewer_render_items;
     stats.viewer_render_bytes = viewer_render_bytes;
     Ok(stats)
@@ -607,7 +617,7 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
 
 #[tauri::command]
 pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResult<()> {
-    clear_viewer_render_cache().map_err(map_error)?;
+    clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     state
         .db
         .insert_log("info", "viewer", "cleared viewer render cache", None)
@@ -642,7 +652,7 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.thumbnail_cache.lock().clear();
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
-    clear_viewer_render_cache().map_err(map_error)?;
+    clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     state
         .db
         .insert_log(

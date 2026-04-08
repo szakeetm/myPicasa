@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, mpsc::Sender};
 
@@ -17,6 +18,7 @@ pub struct ThumbnailJob {
 #[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
+    pub app_data_dir: Arc<PathBuf>,
     pub import_status: Arc<Mutex<Option<ImportProgress>>>,
     pub thumbnail_cache: Arc<Mutex<ThumbnailCache>>,
     pub inflight_thumbnails: Arc<Mutex<HashSet<String>>>,
