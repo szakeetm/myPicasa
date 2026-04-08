@@ -5,12 +5,12 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { logClient } from "../lib/logger";
 import { api } from "../lib/tauri";
-import type { AssetDetail, AssetListItem } from "../lib/types";
+import type { AssetDetail } from "../lib/types";
+
+const VIEWER_PREVIEW_SIZE = 1024;
 
 type ViewerModalProps = {
   asset?: AssetDetail;
-  previousAsset?: AssetListItem;
-  nextAsset?: AssetListItem;
   hasPrevious: boolean;
   hasNext: boolean;
   onPrevious: () => void;
@@ -20,8 +20,6 @@ type ViewerModalProps = {
 
 export function ViewerModal({
   asset,
-  previousAsset,
-  nextAsset,
   hasPrevious,
   hasNext,
   onPrevious,
@@ -55,9 +53,6 @@ export function ViewerModal({
   const videoSourceLabelRef = useRef<string>("unset");
   const livePhotoSourceLabelRef = useRef<string>("unset");
   const imageSourceLabelRef = useRef<string>("unset");
-  const imagePrefetchCacheRef = useRef(new Map<string, string | null>());
-  const videoPrefetchCacheRef = useRef(new Map<string, string | null>());
-  const livePhotoPrefetchCacheRef = useRef(new Map<string, string | null>());
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
@@ -155,42 +150,6 @@ export function ViewerModal({
   }
 
   useEffect(() => {
-    const adjacentAssets = [previousAsset, nextAsset].filter((value): value is AssetListItem => !!value);
-    if (!assetId || adjacentAssets.length === 0) {
-      return;
-    }
-
-    for (const adjacentAsset of adjacentAssets) {
-      if (adjacentAsset.media_kind === "video") {
-        const preferOriginal = shouldPreferOriginalVideoBytesForPath(adjacentAsset.primary_path);
-        const cacheKey = buildPrefetchKey(adjacentAsset.id, preferOriginal ? "original" : "rendered");
-        if (!videoPrefetchCacheRef.current.has(cacheKey)) {
-          void api.loadViewerVideo(adjacentAsset.id, preferOriginal).then((src) => {
-            videoPrefetchCacheRef.current.set(cacheKey, src ?? null);
-          });
-        }
-        continue;
-      }
-
-      const imageCacheKey = buildPrefetchKey(adjacentAsset.id, "original");
-      if (!imagePrefetchCacheRef.current.has(imageCacheKey)) {
-        void api.loadViewerFrame(adjacentAsset.id, true).then((src) => {
-          imagePrefetchCacheRef.current.set(imageCacheKey, src ?? null);
-        });
-      }
-
-      if (adjacentAsset.has_live_photo) {
-        const livePhotoCacheKey = buildPrefetchKey(adjacentAsset.id, "original");
-        if (!livePhotoPrefetchCacheRef.current.has(livePhotoCacheKey)) {
-          void api.loadLivePhotoMotion(adjacentAsset.id, true).then((src) => {
-            livePhotoPrefetchCacheRef.current.set(livePhotoCacheKey, src ?? null);
-          });
-        }
-      }
-    }
-  }, [assetId, nextAsset, previousAsset]);
-
-  useEffect(() => {
     let cancelled = false;
     if (!assetId || !isVideo) {
       setVideoSrc(undefined);
@@ -209,37 +168,11 @@ export function ViewerModal({
       "viewer.video",
       `viewer-v2 asset ${assetId} loading backend video for ${asset?.primary_path ?? "unknown"} (${describeVideoSupport(asset?.primary_path)} source=${shouldPreferOriginalVideoBytes ? "original_bytes" : "transcode"})`,
     );
-    const cacheKey = buildPrefetchKey(assetId, shouldPreferOriginalVideoBytes ? "original" : "rendered");
-    const cached = videoPrefetchCacheRef.current.get(cacheKey);
-    if (cached !== undefined) {
-      setVideoTranscoding(false);
-      if (cached) {
-        const sourceLabel =
-          cached.startsWith("data:video/quicktime")
-            ? "original_quicktime"
-            : cached.startsWith("data:video/mp4") && shouldPreferOriginalVideoBytes
-              ? "original_mp4"
-              : "transcoded_mp4";
-        videoSourceLabelRef.current = sourceLabel;
-        void materializeVideoSrc(cached, videoObjectUrlRef).then((materialized) => {
-          if (!cancelled) {
-            setVideoSrc(materialized);
-            setVideoError(undefined);
-          }
-        });
-      } else {
-        setVideoError("Video playback unavailable");
-      }
-      return () => {
-        cancelled = true;
-      };
-    }
     void api
       .loadViewerVideo(assetId, shouldPreferOriginalVideoBytes)
       .then(async (backendPath) => {
         if (cancelled) return;
         setVideoTranscoding(false);
-        videoPrefetchCacheRef.current.set(cacheKey, backendPath ?? null);
         if (backendPath) {
           const sourceLabel =
             backendPath.startsWith("data:video/quicktime")
@@ -298,37 +231,11 @@ export function ViewerModal({
       "viewer.live_photo",
       `viewer-v2 asset ${assetId} loading backend motion for ${asset?.live_photo_video_path ?? "unknown"} (${describeVideoSupport(asset?.live_photo_video_path)} source=${shouldPreferOriginalLivePhotoBytes ? "original_bytes" : "transcode"})`,
     );
-    const cacheKey = buildPrefetchKey(assetId, shouldPreferOriginalLivePhotoBytes ? "original" : "rendered");
-    const cached = livePhotoPrefetchCacheRef.current.get(cacheKey);
-    if (cached !== undefined) {
-      setLivePhotoTranscoding(false);
-      if (cached) {
-        const sourceLabel =
-          cached.startsWith("data:video/quicktime")
-            ? "original_quicktime"
-            : cached.startsWith("data:video/mp4") && shouldPreferOriginalLivePhotoBytes
-              ? "original_mp4"
-              : "transcoded_mp4";
-        livePhotoSourceLabelRef.current = sourceLabel;
-        void materializeVideoSrc(cached, livePhotoObjectUrlRef).then((materialized) => {
-          if (!cancelled) {
-            setLivePhotoMotionSrc(materialized);
-            setLivePhotoMotionError(undefined);
-          }
-        });
-      } else {
-        setLivePhotoMotionError("Live photo playback unavailable");
-      }
-      return () => {
-        cancelled = true;
-      };
-    }
     void api
       .loadLivePhotoMotion(assetId, shouldPreferOriginalLivePhotoBytes)
       .then(async (backendPath) => {
         if (cancelled) return;
         setLivePhotoTranscoding(false);
-        livePhotoPrefetchCacheRef.current.set(cacheKey, backendPath ?? null);
         if (backendPath) {
           const sourceLabel =
             backendPath.startsWith("data:video/quicktime")
@@ -378,52 +285,109 @@ export function ViewerModal({
     }
     setImageSrc(undefined);
     setImageError(undefined);
+    const useViewerPreview = zoomMode === "fit";
     const preferOriginal = !forceRenderedFrame;
-    const imageMode: "original" | "rendered" = preferOriginal ? "original" : "rendered";
+    const imageMode: "preview" | "original" | "rendered" = useViewerPreview
+      ? "preview"
+      : preferOriginal
+        ? "original"
+        : "rendered";
     imageSourceLabelRef.current = imageMode;
     void logClient(
       "viewer.image",
       `asset ${assetId} loading backend image source=${imageSourceLabelRef.current} path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
     );
-    const imageCacheKey = buildPrefetchKey(assetId, imageMode);
-    const cached = imagePrefetchCacheRef.current.get(imageCacheKey);
-    if (cached !== undefined) {
-      if (cached) {
-        setImageSrc(cached);
-        setImageError(undefined);
-      } else {
-        setImageSrc(undefined);
-        setImageError("Image preview unavailable");
-      }
-      return () => {
-        cancelled = true;
-      };
-    }
 
-    void api
-      .loadViewerFrame(assetId, preferOriginal)
-      .then((src) => {
-        if (cancelled) return;
-        imagePrefetchCacheRef.current.set(imageCacheKey, src ?? null);
-        if (src) {
-          setImageSrc(src);
-          setImageError(undefined);
-        } else {
-          setImageSrc(undefined);
-          setImageError("Image preview unavailable");
-        }
-      })
-      .catch((error) => {
-        if (!cancelled) {
-          setImageSrc(undefined);
-          setImageError(String(error));
-        }
-      });
+    if (useViewerPreview) {
+      void api
+        .requestThumbnail(assetId, VIEWER_PREVIEW_SIZE)
+        .then((src) => {
+          if (cancelled) return;
+          if (src) {
+            void logClient(
+              "viewer.image",
+              `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
+            );
+            setImageSrc(src);
+            setImageError(undefined);
+            return;
+          }
+
+          void logClient(
+            "viewer.image",
+            `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail unavailable, falling back to original image path=${asset?.primary_path ?? "unknown"}`,
+          );
+          return api.loadViewerFrame(assetId, true).then((fullSrc) => {
+            if (cancelled) return;
+            if (fullSrc) {
+              imageSourceLabelRef.current = "original";
+              void logClient(
+                "viewer.image",
+                `asset ${assetId} original image fallback ready after missing ${VIEWER_PREVIEW_SIZE}px preview path=${asset?.primary_path ?? "unknown"}`,
+              );
+              setImageSrc(fullSrc);
+              setImageError(undefined);
+            } else {
+              void logClient(
+                "viewer.image",
+                `asset ${assetId} original image fallback unavailable after missing ${VIEWER_PREVIEW_SIZE}px preview path=${asset?.primary_path ?? "unknown"}`,
+                "error",
+              );
+              setImageSrc(undefined);
+              setImageError("Image preview unavailable");
+            }
+          });
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            void logClient(
+              "viewer.image",
+              `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview load failed: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
+              "error",
+            );
+            setImageSrc(undefined);
+            setImageError(String(error));
+          }
+        });
+    } else {
+      void api
+        .loadViewerFrame(assetId, preferOriginal)
+        .then((src) => {
+          if (cancelled) return;
+          if (src) {
+            void logClient(
+              "viewer.image",
+              `asset ${assetId} full image source ready source=${preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"}`,
+            );
+            setImageSrc(src);
+            setImageError(undefined);
+          } else {
+            void logClient(
+              "viewer.image",
+              `asset ${assetId} full image source unavailable source=${preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"}`,
+              "error",
+            );
+            setImageSrc(undefined);
+            setImageError("Image preview unavailable");
+          }
+        })
+        .catch((error) => {
+          if (!cancelled) {
+            void logClient(
+              "viewer.image",
+              `asset ${assetId} full image load failed source=${preferOriginal ? "original" : "rendered"}: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
+              "error",
+            );
+            setImageSrc(undefined);
+            setImageError(String(error));
+          }
+        });
+    }
 
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.primary_path, forceRenderedFrame, isPhoto]);
+  }, [assetId, asset?.primary_path, forceRenderedFrame, isPhoto, zoomMode]);
 
   async function fallbackVideoToBackend() {
     if (!assetId || videoFallbackAttempted) {
@@ -437,7 +401,6 @@ export function ViewerModal({
     try {
       const backendPath = await api.loadViewerVideo(assetId, false);
       setVideoTranscoding(false);
-      videoPrefetchCacheRef.current.set(buildPrefetchKey(assetId, "rendered"), backendPath ?? null);
       if (backendPath) {
         void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
         videoSourceLabelRef.current = "transcoded_mp4";
@@ -465,7 +428,6 @@ export function ViewerModal({
     try {
       const backendPath = await api.loadLivePhotoMotion(assetId, false);
       setLivePhotoTranscoding(false);
-      livePhotoPrefetchCacheRef.current.set(buildPrefetchKey(assetId, "rendered"), backendPath ?? null);
       if (backendPath) {
         void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
         livePhotoSourceLabelRef.current = "transcoded_mp4";
@@ -865,10 +827,6 @@ function inferImageFormat(src?: string | null) {
   if (!src) return undefined;
   const extension = src.split(".").pop()?.toLowerCase();
   return extension;
-}
-
-function buildPrefetchKey(assetId: number, mode: "original" | "rendered") {
-  return `${assetId}:${mode}`;
 }
 
 function formatFileSize(bytes: number) {

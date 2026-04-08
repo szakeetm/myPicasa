@@ -28,6 +28,7 @@ use tauri::Manager;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const PREVIEW_DEBUG_LOGS: bool = false;
+const VIEWER_PREVIEW_SIZE: u32 = 1024;
 
 fn preview_debug_log(message: String) {
     if PREVIEW_DEBUG_LOGS {
@@ -92,11 +93,11 @@ fn main() {
                         }
                     };
 
-                    let result = (|| -> Result<Option<Vec<u8>>, String> {
+                    let result = (|| -> Result<(Option<Vec<u8>>, Option<Vec<u8>>), String> {
                         let detail =
                             query_service::get_asset_detail(&db, job.asset_id).map_err(|error| error.to_string())?;
                         let Some(primary_path) = detail.primary_path else {
-                            return Ok(None);
+                            return Ok((None, None));
                         };
                         let filename = std::path::PathBuf::from(&primary_path)
                             .file_name()
@@ -113,13 +114,16 @@ fn main() {
                             file_size,
                             job.size
                         ));
+                        let primary_path_buf = std::path::PathBuf::from(&primary_path);
                         let generated =
-                            generate_thumbnail(
-                                &std::path::PathBuf::from(primary_path),
-                                job.size,
-                                &working_dir,
-                            )
+                            generate_thumbnail(&primary_path_buf, job.size, &working_dir)
                                 .map_err(|error| error.to_string())?;
+                        let viewer_preview = if job.size < VIEWER_PREVIEW_SIZE {
+                            generate_thumbnail(&primary_path_buf, VIEWER_PREVIEW_SIZE, &working_dir)
+                            .map_err(|error| error.to_string())?
+                        } else {
+                            None
+                        };
                         match &generated {
                             Some(bytes) => preview_debug_log(format!(
                                 "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={} elapsed_ms={}",
@@ -139,17 +143,27 @@ fn main() {
                                 started.elapsed().as_millis()
                             )),
                         }
-                        Ok(generated)
+                        Ok((generated, viewer_preview))
                     })();
 
                     match result {
-                        Ok(Some(bytes)) => {
+                        Ok((Some(bytes), viewer_preview)) => {
                             if generation.load(Ordering::SeqCst) == job.generation {
-                                cache.lock().insert(job.key.clone(), bytes);
+                                let mut cache = cache.lock();
+                                cache.insert(job.key.clone(), bytes);
+                                if let Some(preview_bytes) = viewer_preview {
+                                    cache.insert(
+                                        format!("{}:{}", job.asset_id, VIEWER_PREVIEW_SIZE),
+                                        preview_bytes,
+                                    );
+                                    failed
+                                        .lock()
+                                        .remove(&format!("{}:{}", job.asset_id, VIEWER_PREVIEW_SIZE));
+                                }
                                 failed.lock().remove(&job.key);
                             }
                         }
-                        Ok(None) => {
+                        Ok((None, _)) => {
                             if generation.load(Ordering::SeqCst) == job.generation {
                                 failed.lock().insert(job.key.clone());
                             }

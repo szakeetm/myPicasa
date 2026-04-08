@@ -313,12 +313,6 @@ export function App() {
   const selectedAssetIndex = state.selectedAsset
     ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id)
     : -1;
-  const previousAsset =
-    selectedAssetIndex > 0 ? state.assets[selectedAssetIndex - 1] : undefined;
-  const nextAsset =
-    selectedAssetIndex >= 0 && selectedAssetIndex < state.assets.length - 1
-      ? state.assets[selectedAssetIndex + 1]
-      : undefined;
 
   return (
     <div className="app-shell">
@@ -378,8 +372,6 @@ export function App() {
 
       <ViewerModal
         asset={state.selectedAsset}
-        previousAsset={previousAsset}
-        nextAsset={nextAsset}
         hasPrevious={selectedAssetIndex > 0}
         hasNext={selectedAssetIndex >= 0 && selectedAssetIndex < state.assets.length - 1}
         onPrevious={() => void handleStepAsset(-1)}
