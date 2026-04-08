@@ -46,6 +46,29 @@ fn media_debug_info(path: &str) -> (String, u64) {
     (filename, file_size)
 }
 
+fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("mp4" | "m4v" | "webm")
+    )
+}
+
+fn video_mime_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("mov") => "video/quicktime",
+        Some("webm") => "video/webm",
+        _ => "video/mp4",
+    }
+}
+
 #[tauri::command]
 pub fn refresh_index(
     request: RefreshRequest,
@@ -339,15 +362,50 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
 }
 
 #[tauri::command]
-pub fn load_viewer_video(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
+pub fn load_viewer_video(
+    asset_id: i64,
+    prefer_original: Option<bool>,
+    state: State<AppState>,
+) -> CommandResult<Option<String>> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(primary_path) = detail.primary_path else {
         return Ok(None);
     };
     let (filename, file_size) = media_debug_info(&primary_path);
+    let source_path = PathBuf::from(&primary_path);
+    let prefer_original = prefer_original.unwrap_or(false);
+
+    if prefer_original && can_stream_original_video_bytes(&source_path) {
+        info!(asset_id, filename = %filename, file_size, "viewer video original-byte load requested");
+        let bytes = fs::read(&source_path).map_err(map_error)?;
+        info!(
+            asset_id,
+            filename = %filename,
+            file_size,
+            generated_bytes = bytes.len(),
+            "viewer video original-byte load ready"
+        );
+        state
+            .db
+            .insert_log(
+                "info",
+                "viewer_video",
+                &format!(
+                    "asset_id={asset_id} filename=\"{filename}\" source=original_bytes input_bytes={file_size}"
+                ),
+                Some(asset_id),
+            )
+            .map_err(map_error)?;
+        return Ok(Some(format!(
+            "data:{};base64,{}",
+            video_mime_type(&source_path),
+            STANDARD.encode(bytes)
+        )));
+    }
+
     info!(asset_id, filename = %filename, file_size, "viewer video transcode requested");
 
-    match generate_viewer_video(&PathBuf::from(&primary_path)) {
+    match generate_viewer_video(&source_path) {
         Ok(Some(path)) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
@@ -400,15 +458,50 @@ pub fn load_viewer_video(asset_id: i64, state: State<AppState>) -> CommandResult
 }
 
 #[tauri::command]
-pub fn load_live_photo_motion(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
+pub fn load_live_photo_motion(
+    asset_id: i64,
+    prefer_original: Option<bool>,
+    state: State<AppState>,
+) -> CommandResult<Option<String>> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(motion_path) = detail.live_photo_video_path else {
         return Ok(None);
     };
     let (filename, file_size) = media_debug_info(&motion_path);
+    let source_path = PathBuf::from(&motion_path);
+    let prefer_original = prefer_original.unwrap_or(false);
+
+    if prefer_original && can_stream_original_video_bytes(&source_path) {
+        info!(asset_id, filename = %filename, file_size, "live photo motion original-byte load requested");
+        let bytes = fs::read(&source_path).map_err(map_error)?;
+        info!(
+            asset_id,
+            filename = %filename,
+            file_size,
+            generated_bytes = bytes.len(),
+            "live photo motion original-byte load ready"
+        );
+        state
+            .db
+            .insert_log(
+                "info",
+                "live_photo",
+                &format!(
+                    "asset_id={asset_id} filename=\"{filename}\" source=original_bytes input_bytes={file_size}"
+                ),
+                Some(asset_id),
+            )
+            .map_err(map_error)?;
+        return Ok(Some(format!(
+            "data:{};base64,{}",
+            video_mime_type(&source_path),
+            STANDARD.encode(bytes)
+        )));
+    }
+
     info!(asset_id, filename = %filename, file_size, "live photo motion transcode requested");
 
-    match generate_viewer_video(&PathBuf::from(&motion_path)) {
+    match generate_viewer_video(&source_path) {
         Ok(Some(path)) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);

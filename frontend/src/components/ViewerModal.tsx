@@ -36,6 +36,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const viewerMediaRef = useRef<HTMLDivElement | null>(null);
   const imageFrameRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
+  const livePhotoVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
@@ -48,8 +49,10 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     ? convertFileSrc(asset.live_photo_video_path)
     : undefined;
   const canUsePrimaryImageDirectly = isDirectImagePath(asset?.primary_path);
-  const shouldPreferBackendVideo = shouldUseBackendVideo(asset?.primary_path);
-  const shouldPreferBackendLivePhoto = shouldUseBackendVideo(asset?.live_photo_video_path);
+  const shouldPreferOriginalVideoBytes = shouldPreferOriginalVideoBytesForPath(asset?.primary_path);
+  const shouldPreferOriginalLivePhotoBytes = shouldPreferOriginalVideoBytesForPath(
+    asset?.live_photo_video_path,
+  );
 
   useEffect(() => {
     setForceRenderedFrame(false);
@@ -59,9 +62,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setVideoSrc(undefined);
     setVideoError(undefined);
     setVideoTranscoding(false);
+    setVideoFallbackAttempted(false);
     setLivePhotoMotionSrc(undefined);
     setLivePhotoMotionError(undefined);
     setLivePhotoTranscoding(false);
+    setLivePhotoFallbackAttempted(false);
     setZoomMode("fit");
     setZoom(1);
     setNaturalSize(undefined);
@@ -133,47 +138,42 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     }
 
     setVideoError(undefined);
-    if (shouldPreferBackendVideo) {
-      void logClient("viewer.video", `asset ${assetId} preferring backend playback for ${asset?.primary_path ?? "unknown"}`);
-      setVideoSrc(undefined);
-      setVideoFallbackAttempted(true);
-      setVideoTranscoding(true);
-      void api
-        .loadViewerVideo(assetId)
-        .then((backendPath) => {
-          if (cancelled) return;
+    setVideoSrc(undefined);
+    setVideoFallbackAttempted(false);
+    setVideoTranscoding(true);
+    void logClient(
+      "viewer.video",
+      `viewer-v2 asset ${assetId} loading backend video for ${asset?.primary_path ?? "unknown"} (${describeVideoSupport(asset?.primary_path)} source=${shouldPreferOriginalVideoBytes ? "original_bytes" : "transcode"})`,
+    );
+    void api
+      .loadViewerVideo(assetId, shouldPreferOriginalVideoBytes)
+      .then((backendPath) => {
+        if (cancelled) return;
+        setVideoTranscoding(false);
+        if (backendPath) {
+          void logClient(
+            "viewer.video",
+            `viewer-v2 asset ${assetId} backend video ready source=${backendPath.startsWith("data:video/quicktime") ? "original_quicktime" : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalVideoBytes ? "original_mp4" : "transcoded_mp4"}`,
+          );
+          setVideoSrc(backendPath);
+          setVideoError(undefined);
+        } else {
+          void logClient("viewer.video", `asset ${assetId} backend video unavailable`, "error");
+          setVideoError("Video playback unavailable");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
           setVideoTranscoding(false);
-          if (backendPath) {
-            void logClient("viewer.video", `asset ${assetId} backend playback ready`);
-            setVideoSrc(backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath));
-            setVideoError(undefined);
-          } else {
-            void logClient("viewer.video", `asset ${assetId} backend playback unavailable`, "error");
-            setVideoError("Video playback unavailable");
-          }
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setVideoTranscoding(false);
-            void logClient("viewer.video", `asset ${assetId} backend playback failed: ${String(error)}`, "error");
-            setVideoError(String(error));
-          }
-        });
-    } else {
-      void logClient(
-        "viewer.video",
-        `asset ${assetId} attempting native playback for ${asset?.primary_path ?? "unknown"} (${describeVideoSupport(primaryPath)})`,
-      );
-      void probeMediaFetch("viewer.video", assetId, primaryPath);
-      setVideoSrc(primaryPath);
-      setVideoFallbackAttempted(false);
-      setVideoTranscoding(false);
-    }
+          void logClient("viewer.video", `asset ${assetId} backend video failed: ${String(error)}`, "error");
+          setVideoError(String(error));
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [assetId, isVideo, primaryPath, shouldPreferBackendVideo]);
+  }, [assetId, asset?.primary_path, isVideo, shouldPreferOriginalVideoBytes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -186,49 +186,42 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     }
 
     setLivePhotoMotionError(undefined);
-    if (shouldPreferBackendLivePhoto) {
-      void logClient("viewer.live_photo", `asset ${assetId} preferring backend motion playback for ${asset?.live_photo_video_path ?? "unknown"}`);
-      setLivePhotoMotionSrc(undefined);
-      setLivePhotoFallbackAttempted(true);
-      setLivePhotoTranscoding(true);
-      void api
-        .loadLivePhotoMotion(assetId)
-        .then((backendPath) => {
-          if (cancelled) return;
+    setLivePhotoMotionSrc(undefined);
+    setLivePhotoFallbackAttempted(false);
+    setLivePhotoTranscoding(true);
+    void logClient(
+      "viewer.live_photo",
+      `viewer-v2 asset ${assetId} loading backend motion for ${asset?.live_photo_video_path ?? "unknown"} (${describeVideoSupport(asset?.live_photo_video_path)} source=${shouldPreferOriginalLivePhotoBytes ? "original_bytes" : "transcode"})`,
+    );
+    void api
+      .loadLivePhotoMotion(assetId, shouldPreferOriginalLivePhotoBytes)
+      .then((backendPath) => {
+        if (cancelled) return;
+        setLivePhotoTranscoding(false);
+        if (backendPath) {
+          void logClient(
+            "viewer.live_photo",
+            `viewer-v2 asset ${assetId} backend motion ready source=${backendPath.startsWith("data:video/quicktime") ? "original_quicktime" : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalLivePhotoBytes ? "original_mp4" : "transcoded_mp4"}`,
+          );
+          setLivePhotoMotionSrc(backendPath);
+          setLivePhotoMotionError(undefined);
+        } else {
+          void logClient("viewer.live_photo", `asset ${assetId} backend motion unavailable`, "error");
+          setLivePhotoMotionError("Live photo playback unavailable");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
           setLivePhotoTranscoding(false);
-          if (backendPath) {
-            void logClient("viewer.live_photo", `asset ${assetId} backend motion playback ready`);
-            setLivePhotoMotionSrc(
-              backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath),
-            );
-            setLivePhotoMotionError(undefined);
-          } else {
-            void logClient("viewer.live_photo", `asset ${assetId} backend motion playback unavailable`, "error");
-            setLivePhotoMotionError("Live photo playback unavailable");
-          }
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            setLivePhotoTranscoding(false);
-            void logClient("viewer.live_photo", `asset ${assetId} backend motion playback failed: ${String(error)}`, "error");
-            setLivePhotoMotionError(String(error));
-          }
-        });
-    } else {
-      void logClient(
-        "viewer.live_photo",
-        `asset ${assetId} attempting native motion playback for ${asset?.live_photo_video_path ?? "unknown"} (${describeVideoSupport(livePhotoPath)})`,
-      );
-      void probeMediaFetch("viewer.live_photo", assetId, livePhotoPath);
-      setLivePhotoMotionSrc(livePhotoPath);
-      setLivePhotoFallbackAttempted(false);
-      setLivePhotoTranscoding(false);
-    }
+          void logClient("viewer.live_photo", `asset ${assetId} backend motion failed: ${String(error)}`, "error");
+          setLivePhotoMotionError(String(error));
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [assetId, livePhotoPath, shouldPreferBackendLivePhoto]);
+  }, [assetId, asset?.live_photo_video_path, livePhotoPath, shouldPreferOriginalLivePhotoBytes]);
 
   useEffect(() => {
     let cancelled = false;
@@ -278,20 +271,20 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setVideoFallbackAttempted(true);
     setVideoError(undefined);
     setVideoTranscoding(true);
-    void logClient("viewer.video", `asset ${assetId} switching to backend playback after native error`);
+    void logClient("viewer.video", `asset ${assetId} switching to transcoded backend playback after backend-original error`);
     try {
-      const backendPath = await api.loadViewerVideo(assetId);
+      const backendPath = await api.loadViewerVideo(assetId, false);
       setVideoTranscoding(false);
       if (backendPath) {
-        void logClient("viewer.video", `asset ${assetId} backend playback ready after native error`);
-        setVideoSrc(backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath));
+        void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
+        setVideoSrc(backendPath);
         return;
       }
-      void logClient("viewer.video", `asset ${assetId} backend playback unavailable after native error`, "error");
+      void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
       setVideoError("Video playback unavailable");
     } catch (error) {
       setVideoTranscoding(false);
-      void logClient("viewer.video", `asset ${assetId} backend playback failed after native error: ${String(error)}`, "error");
+      void logClient("viewer.video", `asset ${assetId} transcoded backend playback failed after backend-original error: ${String(error)}`, "error");
       setVideoError(String(error));
     }
   }
@@ -303,22 +296,20 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setLivePhotoFallbackAttempted(true);
     setLivePhotoMotionError(undefined);
     setLivePhotoTranscoding(true);
-    void logClient("viewer.live_photo", `asset ${assetId} switching to backend motion playback after native error`);
+    void logClient("viewer.live_photo", `asset ${assetId} switching to transcoded backend motion after backend-original error`);
     try {
-      const backendPath = await api.loadLivePhotoMotion(assetId);
+      const backendPath = await api.loadLivePhotoMotion(assetId, false);
       setLivePhotoTranscoding(false);
       if (backendPath) {
-        void logClient("viewer.live_photo", `asset ${assetId} backend motion playback ready after native error`);
-        setLivePhotoMotionSrc(
-          backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath),
-        );
+        void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
+        setLivePhotoMotionSrc(backendPath);
         return;
       }
-      void logClient("viewer.live_photo", `asset ${assetId} backend motion playback unavailable after native error`, "error");
+      void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
       setLivePhotoMotionError("Live photo playback unavailable");
     } catch (error) {
       setLivePhotoTranscoding(false);
-      void logClient("viewer.live_photo", `asset ${assetId} backend motion playback failed after native error: ${String(error)}`, "error");
+      void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion failed after backend-original error: ${String(error)}`, "error");
       setLivePhotoMotionError(String(error));
     }
   }
@@ -438,12 +429,19 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           {asset.media_kind === "video" ? (
             videoSrc ? (
               <video
+                key={videoSrc}
                 ref={videoElementRef}
                 controls
                 autoPlay
+                src={videoSrc}
                 preload="metadata"
                 onLoadedMetadata={(event) => handleVideoDiagnostics("viewer.video", "loadedmetadata", event)}
-                onCanPlay={(event) => handleVideoDiagnostics("viewer.video", "canplay", event)}
+                onCanPlay={(event) => {
+                  handleVideoDiagnostics("viewer.video", "canplay", event);
+                  void event.currentTarget.play().catch((error) => {
+                    void logClient("viewer.video", `asset ${assetId} play() rejected: ${String(error)}`, "error");
+                  });
+                }}
                 onWaiting={(event) => handleVideoDiagnostics("viewer.video", "waiting", event)}
                 onStalled={(event) => handleVideoDiagnostics("viewer.video", "stalled", event)}
                 onPlay={() => {
@@ -457,9 +455,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                   }
                   setVideoError("Video playback unavailable");
                 }}
-              >
-                <source src={videoSrc} type={inferVideoSourceType(videoSrc)} />
-              </video>
+              />
             ) : videoError ? (
               <div className="muted">{videoError}</div>
             ) : videoTranscoding ? (
@@ -470,17 +466,23 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           ) : showLivePhotoMotion ? (
             livePhotoMotionSrc ? (
               <video
+                key={livePhotoMotionSrc}
+                ref={livePhotoVideoElementRef}
                 controls
                 autoPlay
                 muted
                 loop
+                src={livePhotoMotionSrc}
                 preload="metadata"
                 onLoadedMetadata={(event) =>
                   handleVideoDiagnostics("viewer.live_photo", "loadedmetadata", event)
                 }
-                onCanPlay={(event) =>
-                  handleVideoDiagnostics("viewer.live_photo", "canplay", event)
-                }
+                onCanPlay={(event) => {
+                  handleVideoDiagnostics("viewer.live_photo", "canplay", event);
+                  void event.currentTarget.play().catch((error) => {
+                    void logClient("viewer.live_photo", `asset ${assetId} live photo play() rejected: ${String(error)}`, "error");
+                  });
+                }}
                 onWaiting={(event) =>
                   handleVideoDiagnostics("viewer.live_photo", "waiting", event)
                 }
@@ -502,12 +504,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                   }
                   setLivePhotoMotionError("Live photo playback unavailable");
                 }}
-              >
-                <source
-                  src={livePhotoMotionSrc}
-                  type={inferVideoSourceType(livePhotoMotionSrc)}
-                />
-              </video>
+              />
             ) : livePhotoMotionError ? (
               <div className="muted">{livePhotoMotionError}</div>
             ) : livePhotoTranscoding ? (
@@ -599,66 +596,16 @@ function summarizeMediaSrc(src?: string) {
   return src;
 }
 
-function describeVideoSupport(src?: string) {
+function describeVideoSupport(src?: string | null) {
   if (typeof document === "undefined") {
     return "video support unknown";
   }
   const probe = document.createElement("video");
-  const requestedType = inferVideoSourceType(src) ?? "unknown";
+  const requestedType = inferVideoMimeType(src) ?? "unknown";
   const mp4 = probe.canPlayType("video/mp4") || "no";
   const mov = probe.canPlayType("video/quicktime") || "no";
   const webm = probe.canPlayType("video/webm") || "no";
   return `requested=${requestedType} canPlayType(mp4=${mp4}, mov=${mov}, webm=${webm})`;
-}
-
-async function probeMediaFetch(
-  scope: "viewer.video" | "viewer.live_photo",
-  assetId: number,
-  src?: string,
-) {
-  if (!src || src.startsWith("data:")) {
-    return;
-  }
-
-  try {
-    const response = await fetch(src, {
-      headers: {
-        Range: "bytes=0-4095",
-      },
-    });
-    const contentType = response.headers.get("content-type") ?? "unknown";
-    const contentLength = response.headers.get("content-length") ?? "unknown";
-    const contentRange = response.headers.get("content-range") ?? "none";
-    void logClient(
-      scope,
-      `asset ${assetId} fetch probe status=${response.status} ok=${response.ok} type=${contentType} length=${contentLength} range=${contentRange}`,
-      response.ok ? "info" : "error",
-    );
-  } catch (error) {
-    void logClient(
-      scope,
-      `asset ${assetId} fetch probe failed for ${summarizeMediaSrc(src)}: ${String(error)}`,
-      "error",
-    );
-  }
-}
-
-function inferVideoSourceType(src?: string) {
-  if (!src) return undefined;
-  if (src.startsWith("data:video/mp4")) return "video/mp4";
-  const extension = src.split(".").pop()?.toLowerCase();
-  switch (extension) {
-    case "mp4":
-      return "video/mp4";
-    case "m4v":
-      return "video/x-m4v";
-    case "mov":
-      return "video/quicktime";
-    case "webm":
-      return "video/webm";
-    default:
-      return undefined;
-  }
 }
 
 function isDirectImagePath(path?: string | null) {
@@ -666,9 +613,28 @@ function isDirectImagePath(path?: string | null) {
   return extension !== undefined && ["jpg", "jpeg", "png", "webp", "gif"].includes(extension);
 }
 
-function shouldUseBackendVideo(path?: string | null) {
+function shouldPreferOriginalVideoBytesForPath(path?: string | null) {
   const extension = path?.split(".").pop()?.toLowerCase();
-  return extension !== undefined && !["mp4", "m4v", "mov", "webm"].includes(extension);
+  return extension !== undefined && ["mp4", "m4v", "webm"].includes(extension);
+}
+
+function inferVideoMimeType(src?: string | null) {
+  if (!src) return undefined;
+  if (src.startsWith("data:video/")) {
+    return src.slice("data:".length).split(";")[0];
+  }
+  const extension = src.split(".").pop()?.toLowerCase();
+  switch (extension) {
+    case "mov":
+      return "video/quicktime";
+    case "webm":
+      return "video/webm";
+    case "m4v":
+    case "mp4":
+      return "video/mp4";
+    default:
+      return undefined;
+  }
 }
 
 function formatFileSize(bytes: number) {
