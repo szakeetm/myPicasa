@@ -1,9 +1,16 @@
 use std::collections::HashSet;
-use std::sync::Arc;
+use std::sync::{mpsc::Sender, Arc};
 
 use parking_lot::Mutex;
 
 use crate::{cache::thumb_cache::ThumbnailCache, db::Database, models::ImportProgress};
+
+#[derive(Clone)]
+pub struct ThumbnailJob {
+    pub asset_id: i64,
+    pub size: u32,
+    pub key: String,
+}
 
 #[derive(Clone)]
 pub struct AppState {
@@ -12,4 +19,6 @@ pub struct AppState {
     pub thumbnail_cache: Arc<Mutex<ThumbnailCache>>,
     pub inflight_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub failed_thumbnails: Arc<Mutex<HashSet<String>>>,
+    pub thumbnail_job_sender: Sender<ThumbnailJob>,
+    pub thumbnail_worker_count: usize,
 }

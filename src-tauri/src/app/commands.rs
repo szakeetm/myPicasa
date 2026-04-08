@@ -8,7 +8,7 @@ use tauri::{generate_handler, ipc::InvokeError, State};
 use tracing::{error, info};
 
 use crate::{
-    app::state::AppState,
+    app::state::{AppState, ThumbnailJob},
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
     media::thumb::{generate_thumbnail, generate_viewer_image},
@@ -33,56 +33,6 @@ fn media_debug_info(path: &str) -> (String, u64) {
         .to_string();
     let file_size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     (filename, file_size)
-}
-
-fn spawn_thumbnail_job(state: AppState, asset_id: i64, size: u32, key: String) {
-    thread::spawn(move || {
-        let result = (|| -> Result<Option<Vec<u8>>, String> {
-            let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(|error| error.to_string())?;
-            let Some(primary_path) = detail.primary_path else {
-                return Ok(None);
-            };
-            let (filename, file_size) = media_debug_info(&primary_path);
-            let started = Instant::now();
-            let generated = generate_thumbnail(&PathBuf::from(primary_path), size).map_err(|error| error.to_string())?;
-            match &generated {
-                Some(bytes) => {
-                    println!(
-                        "thumbnail_job asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={}",
-                        file_size,
-                        bytes.len(),
-                        started.elapsed().as_millis()
-                    );
-                }
-                None => {
-                    println!(
-                        "thumbnail_job asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={}",
-                        file_size,
-                        started.elapsed().as_millis()
-                    );
-                }
-            }
-            Ok(generated)
-        })();
-
-        match result {
-            Ok(Some(bytes)) => {
-                state.thumbnail_cache.lock().insert(key.clone(), bytes);
-                state.failed_thumbnails.lock().remove(&key);
-            }
-            Ok(None) => {
-                state.failed_thumbnails.lock().insert(key.clone());
-            }
-            Err(error) => {
-                let _ = state
-                    .db
-                    .insert_log("error", "thumbnail_job", &error, Some(asset_id));
-                state.failed_thumbnails.lock().insert(key.clone());
-            }
-        }
-
-        state.inflight_thumbnails.lock().remove(&key);
-    });
 }
 
 #[tauri::command]
@@ -274,7 +224,20 @@ pub fn request_thumbnails_batch(
             let mut inflight = state.inflight_thumbnails.lock();
             if inflight.insert(key.clone()) {
                 drop(inflight);
-                spawn_thumbnail_job(state.inner().clone(), asset_id, size, key.clone());
+                if let Err(error) = state.thumbnail_job_sender.send(ThumbnailJob {
+                    asset_id,
+                    size,
+                    key: key.clone(),
+                }) {
+                    state.inflight_thumbnails.lock().remove(&key);
+                    state.failed_thumbnails.lock().insert(key.clone());
+                    let _ = state.db.insert_log(
+                        "error",
+                        "thumbnail_batch",
+                        &format!("failed to enqueue thumbnail job: {error}"),
+                        Some(asset_id),
+                    );
+                }
             }
 
             ThumbnailBatchItem {
@@ -293,14 +256,15 @@ pub fn request_thumbnails_batch(
         item_count = items.len(),
         hit_count = hits,
         pending_count = pending,
+        worker_count = state.thumbnail_worker_count,
         "thumbnail batch completed"
     );
     println!(
-        "thumbnail_batch item_count={} hit_count={} pending_count={} elapsed_ms={elapsed}",
+        "thumbnail_batch item_count={} hit_count={} pending_count={} worker_count={} elapsed_ms={elapsed}",
         items.len(),
-        hits
-        ,
-        pending
+        hits,
+        pending,
+        state.thumbnail_worker_count
     );
 
     Ok(items)
