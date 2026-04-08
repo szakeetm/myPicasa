@@ -276,11 +276,19 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       return;
     }
     if (!forceRenderedFrame && canUsePrimaryImageDirectly && primaryPath) {
+      void logClient(
+        "viewer.image",
+        `asset ${assetId} using direct image path ${asset?.primary_path ?? "unknown"}`,
+      );
       setImageSrc(primaryPath);
       setImageError(undefined);
       return;
     }
 
+    void logClient(
+      "viewer.image",
+      `asset ${assetId} using rendered image fallback direct=${String(canUsePrimaryImageDirectly)} forced=${String(forceRenderedFrame)} path=${asset?.primary_path ?? "unknown"}`,
+    );
     setImageSrc(undefined);
     setImageError(undefined);
 
@@ -613,6 +621,10 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                     : undefined
                 }
                 onLoad={(event) => {
+                  void logClient(
+                    "viewer.image",
+                    `asset ${assetId} image loaded source=${imageSrc?.startsWith("data:") ? "rendered" : "direct"} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
+                  );
                   setNaturalSize({
                     width: event.currentTarget.naturalWidth,
                     height: event.currentTarget.naturalHeight,
@@ -625,9 +637,19 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                 }}
                 onError={() => {
                   if (!forceRenderedFrame && canUsePrimaryImageDirectly) {
+                    void logClient(
+                      "viewer.image",
+                      `asset ${assetId} direct image failed, switching to rendered fallback path=${asset?.primary_path ?? "unknown"}`,
+                      "error",
+                    );
                     setForceRenderedFrame(true);
                     return;
                   }
+                  void logClient(
+                    "viewer.image",
+                    `asset ${assetId} image unavailable after fallback path=${asset?.primary_path ?? "unknown"}`,
+                    "error",
+                  );
                   setImageSrc(undefined);
                   setImageError("Image preview unavailable");
                 }}

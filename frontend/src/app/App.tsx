@@ -19,6 +19,7 @@ export function App() {
   const [timelineLabel, setTimelineLabel] = useState<string>();
   const [thumbnailPreloadActive, setThumbnailPreloadActive] = useState(false);
   const [thumbnailPreloadRunId, setThumbnailPreloadRunId] = useState(0);
+  const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [thumbnailPreloadProgress, setThumbnailPreloadProgress] = useState<
     | {
         completed: number;
@@ -261,6 +262,9 @@ export function App() {
 
   async function handleClearThumbnails() {
     await api.clearThumbnailCache();
+    setThumbnailPreloadActive(false);
+    setThumbnailPreloadProgress(undefined);
+    setThumbnailResetKey((value) => value + 1);
     const cacheStats = await api.getCacheStats();
     state.setCacheStats(cacheStats);
   }
@@ -337,6 +341,7 @@ export function App() {
           <MediaGrid
             assets={state.assets}
             onSelect={handleSelectAsset}
+            thumbnailResetKey={thumbnailResetKey}
             thumbnailPreload={{
               active: thumbnailPreloadActive,
               runId: thumbnailPreloadRunId,

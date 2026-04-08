@@ -21,11 +21,11 @@ pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<
     {
         if matches!(extension.as_str(), "heic" | "heif") {
             if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(192), working_dir)? {
-                return Ok(Some(bytes));
+                return Ok(Some(normalize_image_bytes_to_jpeg(&bytes, 82)?));
             }
         }
         if let Some(bytes) = render_with_sips(path, size.max(192), 82, working_dir)? {
-            return Ok(Some(bytes));
+            return Ok(Some(normalize_image_bytes_to_jpeg(&bytes, 82)?));
         }
     }
 
@@ -545,4 +545,13 @@ fn temp_render_dir(path: &Path, working_dir: &Path) -> PathBuf {
         .unwrap_or("thumb");
     let _ = fs::create_dir_all(working_dir);
     working_dir.join(format!("mypicasa-ql-{stem}-{stamp}"))
+}
+
+fn normalize_image_bytes_to_jpeg(bytes: &[u8], quality: u8) -> Result<Vec<u8>, AppError> {
+    let image = image::load_from_memory(bytes)?;
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
+    encoder.encode_image(&image)?;
+    Ok(buffer)
 }

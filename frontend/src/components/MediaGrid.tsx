@@ -9,6 +9,7 @@ type MediaGridProps = {
   assets: AssetListItem[];
   onSelect: (assetId: number) => void;
   onLeadingDateChange?: (value?: string) => void;
+  thumbnailResetKey?: number;
   thumbnailPreload?: {
     active: boolean;
     runId: number;
@@ -35,6 +36,7 @@ export function MediaGrid({
   assets,
   onSelect,
   onLeadingDateChange,
+  thumbnailResetKey,
   thumbnailPreload,
   onThumbnailPreloadProgress,
 }: MediaGridProps) {
@@ -79,7 +81,11 @@ export function MediaGrid({
 
   useEffect(() => {
     setThumbs({});
-  }, [assets, thumbnailSize]);
+    setVisibleIds([]);
+    requestInFlightRef.current = false;
+    lastBatchLogRef.current = { signature: "", at: 0 };
+    lastProgressLogRef.current = { completed: -1, total: -1 };
+  }, [assets, thumbnailResetKey, thumbnailSize]);
 
   useEffect(() => {
     thumbsRef.current = thumbs;
