@@ -4,9 +4,17 @@ type DebugPanelProps = {
   diagnostics: DiagnosticEntry[];
   logs: LogEntry[];
   cacheStats?: CacheStats;
+  onClearDiagnostics: () => void;
+  onClearLogs: () => void;
 };
 
-export function DebugPanel({ diagnostics, logs, cacheStats }: DebugPanelProps) {
+export function DebugPanel({
+  diagnostics,
+  logs,
+  cacheStats,
+  onClearDiagnostics,
+  onClearLogs,
+}: DebugPanelProps) {
   return (
     <aside className="panel debug-panel">
       <div className="header-block">
@@ -21,7 +29,12 @@ export function DebugPanel({ diagnostics, logs, cacheStats }: DebugPanelProps) {
         ) : null}
       </div>
       <div className="debug-section">
-        <div className="eyebrow">Ingress diagnostics</div>
+        <div className="button-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+          <div className="eyebrow">Ingress diagnostics</div>
+          <button className="button-secondary" onClick={onClearDiagnostics}>
+            Clear
+          </button>
+        </div>
         {diagnostics.slice(0, 8).map((diagnostic) => (
           <div key={diagnostic.id} className="diagnostic-item">
             <strong>{diagnostic.diagnostic_type}</strong>
@@ -34,7 +47,12 @@ export function DebugPanel({ diagnostics, logs, cacheStats }: DebugPanelProps) {
         ))}
       </div>
       <div className="debug-section">
-        <div className="eyebrow">Recent logs</div>
+        <div className="button-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
+          <div className="eyebrow">Recent logs</div>
+          <button className="button-secondary" onClick={onClearLogs}>
+            Clear logs
+          </button>
+        </div>
         {logs.slice(0, 20).map((entry) => (
           <div key={entry.id} className="log-item">
             <strong>

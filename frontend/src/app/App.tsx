@@ -191,6 +191,16 @@ export function App() {
     window.location.reload();
   }
 
+  async function handleClearDiagnostics() {
+    await api.clearDiagnostics();
+    await refreshDebugSurfaces();
+  }
+
+  async function handleClearLogs() {
+    await api.clearLogs();
+    await refreshDebugSurfaces();
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -227,6 +237,8 @@ export function App() {
         diagnostics={state.diagnostics}
         logs={state.logs}
         cacheStats={state.cacheStats}
+        onClearDiagnostics={handleClearDiagnostics}
+        onClearLogs={handleClearLogs}
       />
 
       <ViewerModal

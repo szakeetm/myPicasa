@@ -379,6 +379,22 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn clear_diagnostics(state: State<AppState>) -> CommandResult<()> {
+    state.db.clear_diagnostics().map_err(map_error)?;
+    state
+        .db
+        .insert_log("info", "debug", "cleared ingress diagnostics", None)
+        .map_err(map_error)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_logs(state: State<AppState>) -> CommandResult<()> {
+    state.db.clear_logs().map_err(map_error)?;
+    Ok(())
+}
+
 pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
         refresh_index,
@@ -397,6 +413,8 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_cache_stats,
         get_recent_logs,
         record_client_log,
-        reset_local_database
+        reset_local_database,
+        clear_diagnostics,
+        clear_logs
     ]
 }

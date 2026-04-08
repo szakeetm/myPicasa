@@ -55,4 +55,16 @@ impl Database {
         schema::apply(&guard)?;
         Ok(())
     }
+
+    pub fn clear_diagnostics(&self) -> Result<(), AppError> {
+        let guard = self.conn.lock().expect("database mutex poisoned");
+        guard.execute("DELETE FROM ingress_diagnostics", [])?;
+        Ok(())
+    }
+
+    pub fn clear_logs(&self) -> Result<(), AppError> {
+        let guard = self.conn.lock().expect("database mutex poisoned");
+        guard.execute("DELETE FROM app_logs", [])?;
+        Ok(())
+    }
 }

@@ -41,6 +41,8 @@ export const api = {
     invoke<LogEntry[]>("get_recent_logs", { limit }),
   recordClientLog: (level: string, scope: string, message: string) =>
     invoke<void>("record_client_log", { level, scope, message }),
+  clearDiagnostics: () => invoke<void>("clear_diagnostics"),
+  clearLogs: () => invoke<void>("clear_logs"),
   getLivePhotoPair: (assetId: number) =>
     invoke<string | null>("get_live_photo_pair", { assetId }),
   resetLocalDatabase: () => invoke<void>("reset_local_database"),
