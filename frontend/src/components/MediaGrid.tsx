@@ -43,6 +43,8 @@ export function MediaGrid({
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
+  const [queueVersion, setQueueVersion] = useState(0);
+  const [retryTick, setRetryTick] = useState(0);
   const thumbnailQueueRef = useRef<number[]>([]);
   const processingQueueRef = useRef(false);
   const frameHandleRef = useRef<number | undefined>(undefined);
@@ -69,11 +71,20 @@ export function MediaGrid({
   useEffect(() => {
     setThumbs({});
     thumbnailQueueRef.current = [];
+    setQueueVersion((value) => value + 1);
   }, [assets, thumbnailSize]);
 
   useEffect(() => {
     thumbsRef.current = thumbs;
   }, [thumbs]);
+
+  useEffect(() => {
+    const handle = window.setInterval(() => {
+      setRetryTick((value) => value + 1);
+    }, 350);
+
+    return () => window.clearInterval(handle);
+  }, []);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -121,25 +132,26 @@ export function MediaGrid({
     return () => observer.disconnect();
   }, [assets, columns]);
 
-  useEffect(() => {
-    const prioritized = assets
-      .filter((asset) => {
-        const state = thumbsRef.current[asset.id];
-        return visibleIdSet.has(asset.id) && (!state || state.status === "pending");
-      })
-      .map((asset) => asset.id);
-    if (prioritized.length === 0) return;
-
+  function enqueueThumbnailIds(ids: number[], priority: "high" | "low") {
     const queued = new Set(thumbnailQueueRef.current);
-    const additions = prioritized.filter((id) => !queued.has(id));
-    if (additions.length === 0) return;
-    thumbnailQueueRef.current.push(...additions);
+    const additions = ids.filter((id) => {
+      const state = thumbsRef.current[id];
+      return !queued.has(id) && (!state || state.status === "pending");
+    });
+    if (additions.length === 0) {
+      return;
+    }
 
-    const currentBatch = additions.slice(0, 24);
+    thumbnailQueueRef.current =
+      priority === "high"
+        ? [...additions, ...thumbnailQueueRef.current.filter((id) => !additions.includes(id))]
+        : [...thumbnailQueueRef.current, ...additions];
+    setQueueVersion((value) => value + 1);
+
     startTransition(() => {
       setThumbs((current) => {
         const next = { ...current };
-        for (const id of currentBatch) {
+        for (const id of additions) {
           if (!next[id]) {
             next[id] = { status: "pending" };
           }
@@ -147,7 +159,17 @@ export function MediaGrid({
         return next;
       });
     });
-  }, [assets, visibleIdSet]);
+  }
+
+  useEffect(() => {
+    const prioritized = assets
+      .filter((asset) => {
+        const state = thumbsRef.current[asset.id];
+        return visibleIdSet.has(asset.id) && (!state || state.status === "pending");
+      })
+      .map((asset) => asset.id);
+    enqueueThumbnailIds(prioritized, "high");
+  }, [assets, retryTick, visibleIdSet]);
 
   useEffect(() => {
     let disposed = false;
@@ -181,6 +203,7 @@ export function MediaGrid({
             if (disposed) {
               return;
             }
+            const pendingIds: number[] = [];
             startTransition(() => {
               setThumbs((current) => {
                 const next = { ...current };
@@ -189,13 +212,19 @@ export function MediaGrid({
                     next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
                   } else if (item.status === "unavailable") {
                     next[item.asset_id] = { status: "unavailable", src: null };
-                  } else if (!next[item.asset_id]) {
-                    next[item.asset_id] = { status: "pending" };
+                  } else {
+                    pendingIds.push(item.asset_id);
+                    if (!next[item.asset_id]) {
+                      next[item.asset_id] = { status: "pending" };
+                    }
                   }
                 }
                 return next;
               });
             });
+            if (pendingIds.length > 0) {
+              enqueueThumbnailIds(pendingIds, "low");
+            }
           } catch (error) {
             await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
             if (disposed) {
@@ -248,7 +277,7 @@ export function MediaGrid({
         }
       }
     };
-  }, [assetOrder, thumbnailSize]);
+  }, [assetOrder, queueVersion, thumbnailSize]);
 
   useEffect(() => {
     const firstVisibleAsset = assets.find((asset) => visibleIdSet.has(asset.id)) ?? assets[0];
@@ -261,84 +290,29 @@ export function MediaGrid({
       return;
     }
 
-    let cancelled = false;
-    const total = assets.length;
+    const preloadIds = assets
+      .filter((asset) => {
+        const state = thumbsRef.current[asset.id];
+        return !state || state.status === "pending";
+      })
+      .slice(0, 48)
+      .map((asset) => asset.id);
+    enqueueThumbnailIds(preloadIds, "low");
+  }, [assets, retryTick, thumbnailPreload?.active, thumbnailPreload?.runId]);
 
-    async function runPreload() {
-      while (!cancelled) {
-        const remainingIds = assets
-          .filter((asset) => {
-            const state = thumbsRef.current[asset.id];
-            return !state || state.status === "pending";
-          })
-          .map((asset) => asset.id);
-
-        const completed = total - remainingIds.length;
-        onThumbnailPreloadProgress?.({ completed, total });
-
-        if (remainingIds.length === 0) {
-          break;
-        }
-
-        const batchIds = remainingIds.slice(0, 16);
-        startTransition(() => {
-          setThumbs((current) => {
-            const next = { ...current };
-            for (const id of batchIds) {
-              if (!next[id]) {
-                next[id] = { status: "pending" };
-              }
-            }
-            return next;
-          });
-        });
-
-        try {
-          const batch = await api.requestThumbnailsBatch(batchIds, thumbnailSize);
-          if (cancelled) return;
-          startTransition(() => {
-            setThumbs((current) => {
-              const next = { ...current };
-              for (const item of batch) {
-                if (item.status === "ready") {
-                  next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
-                } else if (item.status === "unavailable") {
-                  next[item.asset_id] = { status: "unavailable", src: null };
-                } else if (!next[item.asset_id]) {
-                  next[item.asset_id] = { status: "pending" };
-                }
-              }
-              return next;
-            });
-          });
-        } catch (error) {
-          await logClient("grid", `manual thumbnail fill failed: ${String(error)}`, "error");
-          if (cancelled) return;
-          startTransition(() => {
-            setThumbs((current) => {
-              const next = { ...current };
-              for (const id of batchIds) {
-                next[id] = { status: "unavailable", src: null };
-              }
-              return next;
-            });
-          });
-        }
-
-        await new Promise((resolve) => window.setTimeout(resolve, 120));
-      }
-
-      if (!cancelled) {
-        onThumbnailPreloadProgress?.({ completed: total, total });
-      }
+  useEffect(() => {
+    if (!thumbnailPreload?.active) {
+      onThumbnailPreloadProgress?.(undefined);
+      return;
     }
 
-    void runPreload();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [assets, onThumbnailPreloadProgress, thumbnailPreload?.active, thumbnailPreload?.runId, thumbnailSize]);
+    const total = assets.length;
+    const completed = assets.filter((asset) => {
+      const state = thumbs[asset.id];
+      return state?.status === "ready" || state?.status === "unavailable";
+    }).length;
+    onThumbnailPreloadProgress?.({ completed, total });
+  }, [assets, onThumbnailPreloadProgress, thumbnailPreload?.active, thumbs]);
 
   if (assets.length === 0) {
     return <div className="empty-state">No indexed assets match the current view.</div>;
