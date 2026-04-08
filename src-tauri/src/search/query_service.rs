@@ -1,6 +1,8 @@
 use crate::{
     db::{Database, DatabaseQueries},
-    models::{AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, DiagnosticEntry, LogEntry},
+    models::{
+        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, DiagnosticEntry, LogEntry,
+    },
     util::errors::AppError,
 };
 
@@ -8,7 +10,10 @@ pub fn list_albums(db: &Database) -> Result<Vec<AlbumSummary>, AppError> {
     db.list_albums()
 }
 
-pub fn list_assets_by_date(db: &Database, request: AssetListRequest) -> Result<AssetListResponse, AppError> {
+pub fn list_assets_by_date(
+    db: &Database,
+    request: AssetListRequest,
+) -> Result<AssetListResponse, AppError> {
     db.list_assets_by_date(request)
 }
 
@@ -20,7 +25,10 @@ pub fn list_assets_by_album(
     db.list_assets_by_album(album_id, request)
 }
 
-pub fn search_assets(db: &Database, request: AssetListRequest) -> Result<AssetListResponse, AppError> {
+pub fn search_assets(
+    db: &Database,
+    request: AssetListRequest,
+) -> Result<AssetListResponse, AppError> {
     db.search_assets(request)
 }
 

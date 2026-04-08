@@ -22,6 +22,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const [zoomAssetId, setZoomAssetId] = useState<number>();
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
+  const primaryPath = asset?.primary_path ? convertFileSrc(asset.primary_path) : undefined;
+  const livePhotoPath = asset?.live_photo_video_path
+    ? convertFileSrc(asset.live_photo_video_path)
+    : undefined;
+  const canUsePrimaryImageDirectly = isDirectImagePath(asset?.primary_path);
 
   if (assetId !== zoomAssetId) {
     setZoomAssetId(assetId);
@@ -33,8 +38,18 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   useEffect(() => {
     let cancelled = false;
     if (!assetId || !isPhoto) {
+      setImageSrc(undefined);
+      setImageError(undefined);
       return;
     }
+    if (canUsePrimaryImageDirectly && primaryPath) {
+      setImageSrc(primaryPath);
+      setImageError(undefined);
+      return;
+    }
+
+    setImageSrc(undefined);
+    setImageError(undefined);
 
     void api
       .loadViewerFrame(assetId)
@@ -58,7 +73,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     return () => {
       cancelled = true;
     };
-  }, [assetId, isPhoto]);
+  }, [assetId, canUsePrimaryImageDirectly, isPhoto, primaryPath]);
 
   useEffect(() => {
     if (!asset) return;
@@ -88,11 +103,6 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   }, [asset, hasNext, hasPrevious, isPhoto, onClose, onNext, onPrevious]);
 
   if (!asset) return null;
-
-  const primaryPath = asset.primary_path ? convertFileSrc(asset.primary_path) : undefined;
-  const livePhotoPath = asset.live_photo_video_path
-    ? convertFileSrc(asset.live_photo_video_path)
-    : undefined;
 
   return (
     <div className="viewer-backdrop" onClick={onClose}>
@@ -163,4 +173,9 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       </div>
     </div>
   );
+}
+
+function isDirectImagePath(path?: string | null) {
+  const extension = path?.split(".").pop()?.toLowerCase();
+  return extension !== undefined && ["jpg", "jpeg", "png", "webp", "gif"].includes(extension);
 }

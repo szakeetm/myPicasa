@@ -84,6 +84,7 @@ pub struct AssetListItem {
     pub title: Option<String>,
     pub media_kind: String,
     pub taken_at_utc: Option<String>,
+    pub duration_ms: Option<i64>,
     pub primary_path: String,
     pub albums: Vec<String>,
 }

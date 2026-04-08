@@ -30,11 +30,11 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const columns = columnCount(width);
   const rowHeight = useMemo(() => {
-    const horizontalPadding = 12;
-    const gap = 6 * Math.max(columns - 1, 0);
-    const columnWidth = Math.max((width - horizontalPadding - gap) / columns, 120);
-    const metadataHeight = 62;
-    return Math.ceil(columnWidth + metadataHeight);
+    const rowPadding = 12;
+    const interColumnGap = 6 * Math.max(columns - 1, 0);
+    const columnWidth = Math.max((width - rowPadding - interColumnGap) / columns, 120);
+    const metadataHeight = 70;
+    return Math.ceil(columnWidth + metadataHeight + rowPadding);
   }, [columns, width]);
   const rows = useMemo(() => {
     const output: AssetListItem[][] = [];
@@ -167,6 +167,7 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
             <div
               className="grid-row"
               key={virtualRow.key}
+              ref={rowVirtualizer.measureElement}
               style={{
                 transform: `translateY(${virtualRow.start}px)`,
                 gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
@@ -182,6 +183,17 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
                     ) : (
                       <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
                     )}
+                    {asset.media_kind === "video" ? (
+                      <>
+                        <div className="thumb-play-badge" aria-hidden="true">
+                          <span className="thumb-play-icon">▶</span>
+                          <span>Video</span>
+                        </div>
+                        {asset.duration_ms ? (
+                          <div className="thumb-duration-badge">{formatDuration(asset.duration_ms)}</div>
+                        ) : null}
+                      </>
+                    ) : null}
                   </div>
                   <div className="tile-body">
                     <strong>{asset.title ?? "Untitled asset"}</strong>
@@ -205,4 +217,17 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
       </div>
     </div>
   );
+}
+
+function formatDuration(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }

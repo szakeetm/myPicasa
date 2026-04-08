@@ -38,6 +38,7 @@ export type AssetListItem = {
   title?: string | null;
   media_kind: string;
   taken_at_utc?: string | null;
+  duration_ms?: number | null;
   primary_path: string;
   albums: string[];
 };

@@ -14,14 +14,17 @@ use std::collections::HashSet;
 use std::sync::mpsc;
 use std::{fs, path::PathBuf, sync::Arc, thread};
 
-use app::{commands::command_handlers, state::{AppState, ThumbnailJob}};
+use app::{
+    commands::command_handlers,
+    state::{AppState, ThumbnailJob},
+};
 use cache::thumb_cache::ThumbnailCache;
 use db::{Database, DatabaseQueries};
+use media::thumb::generate_thumbnail;
 use parking_lot::Mutex;
 use search::query_service;
 use tauri::Manager;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
-use media::thumb::generate_thumbnail;
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 fn main() {
     tracing_subscriber::registry()

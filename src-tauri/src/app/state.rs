@@ -1,5 +1,5 @@
 use std::collections::HashSet;
-use std::sync::{mpsc::Sender, Arc};
+use std::sync::{Arc, mpsc::Sender};
 
 use parking_lot::Mutex;
 

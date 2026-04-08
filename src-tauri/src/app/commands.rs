@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Instant;
 
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use tauri::{generate_handler, ipc::InvokeError, State};
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use tauri::{State, generate_handler, ipc::InvokeError};
 use tracing::{error, info};
 
 use crate::{
@@ -13,8 +13,8 @@ use crate::{
     import::refresher::refresh_takeout_index,
     media::thumb::{generate_thumbnail, generate_viewer_image},
     models::{
-        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats, DiagnosticEntry,
-        ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
+        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
+        DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
     },
     search::query_service,
 };
@@ -36,7 +36,10 @@ fn media_debug_info(path: &str) -> (String, u64) {
 }
 
 #[tauri::command]
-pub fn refresh_index(request: RefreshRequest, state: State<AppState>) -> CommandResult<ImportProgress> {
+pub fn refresh_index(
+    request: RefreshRequest,
+    state: State<AppState>,
+) -> CommandResult<ImportProgress> {
     info!(roots = ?request.roots, "refresh_index");
     let progress = refresh_takeout_index(&state, request).map_err(map_error)?;
     Ok(progress)
@@ -45,7 +48,11 @@ pub fn refresh_index(request: RefreshRequest, state: State<AppState>) -> Command
 #[tauri::command]
 pub fn start_refresh_index(request: RefreshRequest, state: State<AppState>) -> CommandResult<()> {
     if matches!(
-        state.import_status.lock().as_ref().map(|item| item.status.as_str()),
+        state
+            .import_status
+            .lock()
+            .as_ref()
+            .map(|item| item.status.as_str()),
         Some("running")
     ) {
         return Err(map_error("an import is already running"));
@@ -73,9 +80,12 @@ pub fn start_refresh_index(request: RefreshRequest, state: State<AppState>) -> C
                 worker_count: 0,
                 message: Some(message.clone()),
             });
-            let _ = state
-                .db
-                .insert_log("error", "import", &format!("background refresh failed: {message}"), None);
+            let _ = state.db.insert_log(
+                "error",
+                "import",
+                &format!("background refresh failed: {message}"),
+                None,
+            );
         }
     });
 
@@ -139,7 +149,10 @@ pub fn request_thumbnail(
         let elapsed = started.elapsed().as_millis();
         info!(asset_id, elapsed_ms = elapsed, "thumbnail cache hit");
         println!("thumbnail asset_id={asset_id} cache_hit elapsed_ms={elapsed}");
-        return Ok(Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))));
+        return Ok(Some(format!(
+            "data:image/jpeg;base64,{}",
+            STANDARD.encode(bytes)
+        )));
     }
 
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
@@ -165,7 +178,10 @@ pub fn request_thumbnail(
                 file_size,
                 bytes.len()
             );
-            Ok(Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))))
+            Ok(Some(format!(
+                "data:image/jpeg;base64,{}",
+                STANDARD.encode(bytes)
+            )))
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
@@ -324,7 +340,10 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
                 file_size,
                 bytes.len()
             );
-            Ok(Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))))
+            Ok(Some(format!(
+                "data:image/jpeg;base64,{}",
+                STANDARD.encode(bytes)
+            )))
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
@@ -386,7 +405,12 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.thumbnail_cache.lock().clear();
     state
         .db
-        .insert_log("warning", "reset", "local database reset to default state", None)
+        .insert_log(
+            "warning",
+            "reset",
+            "local database reset to default state",
+            None,
+        )
         .map_err(map_error)?;
     Ok(())
 }

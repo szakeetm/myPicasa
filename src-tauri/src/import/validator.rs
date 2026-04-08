@@ -2,9 +2,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 use crate::{
-    db::DatabaseQueries,
-    import::sidecar::parse_sidecar,
-    models::FileScanRecord,
+    db::DatabaseQueries, import::sidecar::parse_sidecar, models::FileScanRecord,
     util::errors::AppError,
 };
 
@@ -21,8 +19,18 @@ pub fn validate_import(
         if scan.candidate_type == "json" {
             sidecars += 1;
             let sidecar = parse_sidecar(scan).ok().flatten();
+            if sidecar
+                .as_ref()
+                .map(|item| item.json_kind == "album")
+                .unwrap_or(false)
+            {
+                continue;
+            }
             let candidate_names = build_candidate_names(&scan.path, sidecar.as_ref());
-            if db.resolve_sidecar_target(&scan.path, &candidate_names)?.is_none() {
+            if db
+                .resolve_sidecar_target(&scan.path, &candidate_names)?
+                .is_none()
+            {
                 println!(
                     "ambiguous_json_target path=\"{}\" candidates={:?}",
                     scan.path, candidate_names
@@ -78,7 +86,10 @@ fn guessed_target_name(path: &str) -> String {
         .to_string()
 }
 
-fn build_candidate_names(path: &str, sidecar: Option<&crate::models::ParsedSidecar>) -> Vec<String> {
+fn build_candidate_names(
+    path: &str,
+    sidecar: Option<&crate::models::ParsedSidecar>,
+) -> Vec<String> {
     let mut candidates = vec![guessed_target_name(path)];
     if let Some(title_hint) = sidecar.and_then(|item| item.title_hint.as_ref()) {
         let trimmed = title_hint.trim().to_string();

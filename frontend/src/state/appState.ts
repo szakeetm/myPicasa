@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { createJSONStorage, persist } from "zustand/middleware";
 
 import type {
   AlbumSummary,
@@ -43,29 +44,40 @@ type AppState = {
   setImportStatus: (value?: ImportProgress | null) => void;
 };
 
-export const useAppState = create<AppState>((set) => ({
-  rootsInput: "",
-  query: "",
-  mediaKind: "",
-  dateFrom: "",
-  dateTo: "",
-  viewMode: "timeline",
-  albums: [],
-  assets: [],
-  diagnostics: [],
-  logs: [],
-  setRootsInput: (rootsInput) => set({ rootsInput }),
-  setQuery: (query) => set({ query }),
-  setMediaKind: (mediaKind) => set({ mediaKind }),
-  setDateFrom: (dateFrom) => set({ dateFrom }),
-  setDateTo: (dateTo) => set({ dateTo }),
-  setViewMode: (viewMode) => set({ viewMode }),
-  setSelectedAlbumId: (selectedAlbumId) => set({ selectedAlbumId }),
-  setAlbums: (albums) => set({ albums }),
-  setAssets: (assets) => set({ assets }),
-  setSelectedAsset: (selectedAsset) => set({ selectedAsset }),
-  setDiagnostics: (diagnostics) => set({ diagnostics }),
-  setLogs: (logs) => set({ logs }),
-  setCacheStats: (cacheStats) => set({ cacheStats }),
-  setImportStatus: (importStatus) => set({ importStatus }),
-}));
+export const useAppState = create<AppState>()(
+  persist(
+    (set) => ({
+      rootsInput: "",
+      query: "",
+      mediaKind: "",
+      dateFrom: "",
+      dateTo: "",
+      viewMode: "timeline",
+      albums: [],
+      assets: [],
+      diagnostics: [],
+      logs: [],
+      setRootsInput: (rootsInput) => set({ rootsInput }),
+      setQuery: (query) => set({ query }),
+      setMediaKind: (mediaKind) => set({ mediaKind }),
+      setDateFrom: (dateFrom) => set({ dateFrom }),
+      setDateTo: (dateTo) => set({ dateTo }),
+      setViewMode: (viewMode) => set({ viewMode }),
+      setSelectedAlbumId: (selectedAlbumId) => set({ selectedAlbumId }),
+      setAlbums: (albums) => set({ albums }),
+      setAssets: (assets) => set({ assets }),
+      setSelectedAsset: (selectedAsset) => set({ selectedAsset }),
+      setDiagnostics: (diagnostics) => set({ diagnostics }),
+      setLogs: (logs) => set({ logs }),
+      setCacheStats: (cacheStats) => set({ cacheStats }),
+      setImportStatus: (importStatus) => set({ importStatus }),
+    }),
+    {
+      name: "mypicasa-app-state",
+      storage: createJSONStorage(() => localStorage),
+      partialize: (state) => ({
+        rootsInput: state.rootsInput,
+      }),
+    },
+  ),
+);

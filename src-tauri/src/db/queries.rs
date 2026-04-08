@@ -1,8 +1,10 @@
 use std::path::Path;
 
-use rusqlite::{params, OptionalExtension};
+use rusqlite::{OptionalExtension, params};
 
 use crate::{
+    import::sidecar::takeout_match_score,
+    media::thumb::probe_media_duration_ms,
     models::{
         AlbumSummary, AssetDetail, AssetListItem, AssetListRequest, AssetListResponse,
         DiagnosticEntry, FileScanRecord, ImportProgress, LogEntry, ParsedSidecar,
@@ -52,7 +54,8 @@ pub trait DatabaseQueries {
         candidate_names: &[String],
     ) -> Result<Option<(i64, i64)>, AppError>;
     fn list_albums(&self) -> Result<Vec<AlbumSummary>, AppError>;
-    fn list_assets_by_date(&self, request: AssetListRequest) -> Result<AssetListResponse, AppError>;
+    fn list_assets_by_date(&self, request: AssetListRequest)
+    -> Result<AssetListResponse, AppError>;
     fn list_assets_by_album(
         &self,
         album_id: i64,
@@ -247,13 +250,18 @@ impl DatabaseQueries for super::Database {
                 .and_then(|item| item.photo_taken_time_utc.clone())
                 .unwrap_or_else(|| scan.mtime_utc.clone());
             let title = scan.filename.clone();
+            let duration_ms = if scan.candidate_type == "video" {
+                probe_media_duration_ms(Path::new(&scan.path))?
+            } else {
+                None
+            };
 
             if let Some(asset_id) = existing {
                 conn.execute(
                     "UPDATE assets
-                     SET media_kind = ?2, title = ?3, taken_at_utc = ?4, updated_at = ?5
+                     SET media_kind = ?2, title = ?3, taken_at_utc = ?4, duration_ms = ?5, updated_at = ?6
                      WHERE id = ?1",
-                    params![asset_id, scan.candidate_type, title, taken_at, utc_now()],
+                    params![asset_id, scan.candidate_type, title, taken_at, duration_ms, utc_now()],
                 )?;
                 Ok(asset_id)
             } else {
@@ -262,12 +270,13 @@ impl DatabaseQueries for super::Database {
                      (primary_file_id, media_kind, display_type, title, taken_at_utc, taken_at_local, timezone_hint,
                       width, height, duration_ms, orientation, gps_lat, gps_lon, gps_alt, camera_make, camera_model,
                       is_favorite, is_deleted, created_at, updated_at)
-                     VALUES (?1, ?2, 'original', ?3, ?4, NULL, NULL, NULL, NULL, NULL, NULL, ?5, ?6, ?7, NULL, NULL, 0, 0, ?8, ?8)",
+                     VALUES (?1, ?2, 'original', ?3, ?4, NULL, NULL, NULL, NULL, ?5, NULL, ?6, ?7, ?8, NULL, NULL, 0, 0, ?9, ?9)",
                     params![
                         file_id,
                         scan.candidate_type,
                         title,
                         taken_at,
+                        duration_ms,
                         sidecar.and_then(|item| item.geo_lat),
                         sidecar.and_then(|item| item.geo_lon),
                         sidecar.and_then(|item| item.geo_alt),
@@ -385,7 +394,14 @@ impl DatabaseQueries for super::Database {
                 "INSERT INTO ingress_diagnostics
                  (import_id, severity, diagnostic_type, related_path, message, created_at)
                  VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-                params![import_id, severity, diagnostic_type, related_path, message, utc_now()],
+                params![
+                    import_id,
+                    severity,
+                    diagnostic_type,
+                    related_path,
+                    message,
+                    utc_now()
+                ],
             )?;
             Ok(())
         })
@@ -409,6 +425,7 @@ impl DatabaseQueries for super::Database {
         }
         self.with_connection(|conn| {
             let parent_path = path.parent().and_then(|item| item.to_str()).unwrap_or("");
+            let mut best_match: Option<(usize, i64, i64)> = None;
 
             for candidate in &candidates {
                 let direct_match = conn
@@ -429,26 +446,36 @@ impl DatabaseQueries for super::Database {
                     return Ok(direct_match);
                 }
 
-                let prefix_match = conn
-                    .query_row(
-                        "SELECT a.id, f.id
-                         FROM file_entries f
-                         JOIN asset_files af ON af.file_id = f.id
-                         JOIN assets a ON a.id = af.asset_id
-                         WHERE f.parent_path = ?1
-                           AND f.filename LIKE ?2
-                           AND f.is_deleted = 0
-                         LIMIT 1",
-                        params![parent_path, format!("{candidate}.%")],
-                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
-                    )
-                    .optional()?;
-                if prefix_match.is_some() {
-                    return Ok(prefix_match);
+                let mut stmt = conn.prepare(
+                    "SELECT a.id, f.id, f.filename
+                     FROM file_entries f
+                     JOIN asset_files af ON af.file_id = f.id
+                     JOIN assets a ON a.id = af.asset_id
+                     WHERE f.parent_path = ?1
+                       AND f.is_deleted = 0",
+                )?;
+                let rows = stmt.query_map(params![parent_path], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, i64>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?;
+                for row in rows {
+                    let (asset_id, file_id, filename) = row?;
+                    if let Some(score) = takeout_match_score(candidate, &filename) {
+                        if best_match
+                            .as_ref()
+                            .map(|(current, _, _)| score > *current)
+                            .unwrap_or(true)
+                        {
+                            best_match = Some((score, asset_id, file_id));
+                        }
+                    }
                 }
             }
 
-            Ok(None)
+            Ok(best_match.map(|(_, asset_id, file_id)| (asset_id, file_id)))
         })
     }
 
@@ -473,10 +500,13 @@ impl DatabaseQueries for super::Database {
         })
     }
 
-    fn list_assets_by_date(&self, request: AssetListRequest) -> Result<AssetListResponse, AppError> {
+    fn list_assets_by_date(
+        &self,
+        request: AssetListRequest,
+    ) -> Result<AssetListResponse, AppError> {
         paged_asset_query(
             self,
-            "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+            "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path, COALESCE(group_concat(DISTINCT al.name), '')
              FROM assets a
              JOIN file_entries f ON f.id = a.primary_file_id
              LEFT JOIN album_assets aa ON aa.asset_id = a.id
@@ -495,7 +525,7 @@ impl DatabaseQueries for super::Database {
         paged_asset_query(
             self,
             &format!(
-                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path, COALESCE(group_concat(DISTINCT al.name), '')
                  FROM assets a
                  JOIN album_assets aa_filter ON aa_filter.asset_id = a.id AND aa_filter.album_id = {album_id}
                  JOIN file_entries f ON f.id = a.primary_file_id
@@ -514,14 +544,14 @@ impl DatabaseQueries for super::Database {
             let offset = request.cursor.unwrap_or_default();
             let limit = request.limit.unwrap_or(200) as i64;
             let mut stmt = conn.prepare(
-                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path, COALESCE(group_concat(DISTINCT al.name), '')
                  FROM search_fts s
                  JOIN assets a ON a.id = s.asset_id
                  JOIN file_entries f ON f.id = a.primary_file_id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
                  WHERE search_fts MATCH ?1 AND a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')
-                 GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, f.path
+                 GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path
                  ORDER BY rank
                  LIMIT ?2 OFFSET ?3",
             )?;
@@ -670,13 +700,17 @@ fn paged_asset_query(
         }
         if let Some(query) = request.query.as_deref() {
             let escaped = query.replace('\'', "''");
-            filters.push(format!("(a.title LIKE '%{escaped}%' OR f.filename LIKE '%{escaped}%')"));
+            filters.push(format!(
+                "(a.title LIKE '%{escaped}%' OR f.filename LIKE '%{escaped}%')"
+            ));
         }
         if !filters.is_empty() {
             sql.push_str(" AND ");
             sql.push_str(&filters.join(" AND "));
         }
-        sql.push_str(" GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, f.path");
+        sql.push_str(
+            " GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path",
+        );
         sql.push_str(order_sql);
         sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
 
@@ -696,8 +730,9 @@ fn map_asset_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetListIte
         title: row.get(1)?,
         media_kind: row.get(2)?,
         taken_at_utc: row.get(3)?,
-        primary_path: row.get(4)?,
-        albums: split_csv(row.get::<_, String>(5)?),
+        duration_ms: row.get(4)?,
+        primary_path: row.get(5)?,
+        albums: split_csv(row.get::<_, String>(6)?),
     })
 }
 

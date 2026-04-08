@@ -1,18 +1,21 @@
-use std::{fs, io::Cursor, path::{Path, PathBuf}, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
+use std::{
+    fs,
+    io::Cursor,
+    path::{Path, PathBuf},
+    process::{Command, Stdio},
+    time::{SystemTime, UNIX_EPOCH},
+};
 
-use image::{codecs::jpeg::JpegEncoder, ImageReader};
+use image::{ImageReader, codecs::jpeg::JpegEncoder};
 
 use crate::util::errors::AppError;
 
 pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, AppError> {
-    let extension = path
-        .extension()
-        .and_then(|item| item.to_str())
-        .unwrap_or_default()
-        .to_lowercase();
-    if matches!(extension.as_str(), "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm") {
-        return Ok(None);
+    if is_video_path(path) {
+        return render_video_thumbnail_with_ffmpeg(path, size);
     }
+
+    let extension = normalized_extension(path);
 
     #[cfg(target_os = "macos")]
     {
@@ -36,12 +39,8 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
 }
 
 pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<Vec<u8>>, AppError> {
-    let extension = path
-        .extension()
-        .and_then(|item| item.to_str())
-        .unwrap_or_default()
-        .to_lowercase();
-    if matches!(extension.as_str(), "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm") {
+    let extension = normalized_extension(path);
+    if is_video_extension(&extension) {
         return Ok(None);
     }
 
@@ -53,7 +52,11 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<V
 
     let image = load_image(path, max_dimension)?;
     let fitted = if image.width() > max_dimension || image.height() > max_dimension {
-        image.resize(max_dimension, max_dimension, image::imageops::FilterType::Lanczos3)
+        image.resize(
+            max_dimension,
+            max_dimension,
+            image::imageops::FilterType::Lanczos3,
+        )
     } else {
         image
     };
@@ -62,6 +65,80 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<V
     let mut cursor = Cursor::new(&mut buffer);
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 90);
     encoder.encode_image(&fitted)?;
+    Ok(Some(buffer))
+}
+
+pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
+    if !is_video_path(path) {
+        return Ok(None);
+    }
+
+    let Some(ffprobe) = find_command_binary("ffprobe") else {
+        return Ok(None);
+    };
+
+    let output = Command::new(ffprobe)
+        .arg("-v")
+        .arg("error")
+        .arg("-show_entries")
+        .arg("format=duration")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1:nokey=1")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let duration = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .parse::<f64>()
+        .ok();
+
+    Ok(duration
+        .filter(|value| value.is_finite() && *value >= 0.0)
+        .map(|value| (value * 1000.0).round() as i64))
+}
+
+fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<Vec<u8>>, AppError> {
+    let ffmpeg = match find_command_binary("ffmpeg") {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+
+    let seek_time = probe_video_seek_seconds(path).unwrap_or(1.0).max(0.0);
+    let output = Command::new(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-ss")
+        .arg(format!("{seek_time:.3}"))
+        .arg("-i")
+        .arg(path)
+        .arg("-frames:v")
+        .arg("1")
+        .arg("-f")
+        .arg("image2pipe")
+        .arg("-vcodec")
+        .arg("mjpeg")
+        .arg("-")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+
+    if !output.status.success() || output.stdout.is_empty() {
+        return Ok(None);
+    }
+
+    let image = image::load_from_memory(&output.stdout)?;
+    let thumb = image.thumbnail(size, size);
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 82);
+    encoder.encode_image(&thumb)?;
     Ok(Some(buffer))
 }
 
@@ -84,7 +161,50 @@ fn load_image(path: &Path, size_hint: u32) -> Result<image::DynamicImage, AppErr
     }
 }
 
-fn load_image_with_sips(path: &Path, size_hint: u32) -> Result<Option<image::DynamicImage>, AppError> {
+fn probe_video_seek_seconds(path: &Path) -> Option<f64> {
+    let duration = probe_media_duration_ms(path).ok().flatten()? as f64 / 1000.0;
+    if duration <= 0.0 {
+        return Some(0.0);
+    }
+
+    Some(if duration < 1.0 {
+        0.0
+    } else {
+        (duration * 0.1).clamp(0.5, 2.0)
+    })
+}
+
+fn find_command_binary(name: &str) -> Option<PathBuf> {
+    if let Some(paths) = std::env::var_os("PATH") {
+        for path in std::env::split_paths(&paths) {
+            let candidate = path.join(name);
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+    None
+}
+
+fn normalized_extension(path: &Path) -> String {
+    path.extension()
+        .and_then(|item| item.to_str())
+        .unwrap_or_default()
+        .to_lowercase()
+}
+
+fn is_video_path(path: &Path) -> bool {
+    is_video_extension(&normalized_extension(path))
+}
+
+fn is_video_extension(extension: &str) -> bool {
+    matches!(extension, "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm")
+}
+
+fn load_image_with_sips(
+    path: &Path,
+    size_hint: u32,
+) -> Result<Option<image::DynamicImage>, AppError> {
     #[cfg(target_os = "macos")]
     {
         if let Some(bytes) = render_with_sips(path, size_hint.max(512), 90)? {
@@ -164,11 +284,7 @@ fn render_thumbnail_with_quicklook(path: &Path, width: u32) -> Result<Option<Vec
             .filter_map(Result::ok)
             .find_map(|entry| {
                 let path = entry.path();
-                if path.is_file() {
-                    Some(path)
-                } else {
-                    None
-                }
+                if path.is_file() { Some(path) } else { None }
             });
 
         let Some(generated_file) = generated_file else {
@@ -193,7 +309,10 @@ fn temp_jpeg_path(path: &Path) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    let stem = path.file_stem().and_then(|item| item.to_str()).unwrap_or("thumb");
+    let stem = path
+        .file_stem()
+        .and_then(|item| item.to_str())
+        .unwrap_or("thumb");
     std::env::temp_dir().join(format!("mypicasa-{stem}-{stamp}.jpg"))
 }
 
@@ -202,6 +321,9 @@ fn temp_render_dir(path: &Path) -> PathBuf {
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_nanos())
         .unwrap_or_default();
-    let stem = path.file_stem().and_then(|item| item.to_str()).unwrap_or("thumb");
+    let stem = path
+        .file_stem()
+        .and_then(|item| item.to_str())
+        .unwrap_or("thumb");
     std::env::temp_dir().join(format!("mypicasa-ql-{stem}-{stamp}"))
 }

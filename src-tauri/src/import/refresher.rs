@@ -7,7 +7,11 @@ use tracing::info;
 use crate::{
     app::state::AppState,
     db::DatabaseQueries,
-    import::{scanner::scan_roots, sidecar::parse_sidecar, validator::validate_import},
+    import::{
+        scanner::scan_roots,
+        sidecar::{parse_sidecar, takeout_match_score},
+        validator::validate_import,
+    },
     models::{ImportProgress, ParsedSidecar, RefreshRequest},
     util::errors::AppError,
 };
@@ -23,12 +27,17 @@ pub fn refresh_takeout_index(
         .filter(|item| !item.trim().is_empty())
         .collect::<Vec<_>>();
     if roots.is_empty() {
-        return Err(AppError::Message("at least one takeout root is required".to_string()));
+        return Err(AppError::Message(
+            "at least one takeout root is required".to_string(),
+        ));
     }
 
-    state
-        .db
-        .insert_log("info", "import", &format!("starting refresh for {} roots", roots.len()), None)?;
+    state.db.insert_log(
+        "info",
+        "import",
+        &format!("starting refresh for {} roots", roots.len()),
+        None,
+    )?;
     info!("refresh_takeout_index: starting for {} roots", roots.len());
     println!("refresh_takeout_index: starting for {} roots", roots.len());
 
@@ -68,10 +77,13 @@ pub fn refresh_takeout_index(
     progress.message = Some(format!("scanned {} files", progress.files_scanned));
     *state.import_status.lock() = Some(progress.clone());
 
-    let mut sidecars = HashMap::<String, ParsedSidecar>::new();
+    let mut sidecars_by_parent = HashMap::<String, Vec<(String, ParsedSidecar)>>::new();
     for scan in &scans {
         if let Ok(Some(sidecar)) = parse_sidecar(scan) {
-            sidecars.insert(scan.path.clone(), sidecar);
+            sidecars_by_parent
+                .entry(scan.parent_path.clone())
+                .or_default()
+                .push((scan.path.clone(), sidecar));
         }
     }
 
@@ -94,7 +106,7 @@ pub fn refresh_takeout_index(
             continue;
         }
 
-        let sidecar = find_sidecar_for(scan, &sidecars);
+        let sidecar = find_sidecar_for(scan, &sidecars_by_parent);
         let asset_id = state.db.upsert_asset_for_file(file_id, scan, sidecar)?;
         state.db.attach_asset_file(asset_id, file_id, "primary")?;
         state.db.attach_album_asset(album_id, asset_id)?;
@@ -135,9 +147,12 @@ pub fn refresh_takeout_index(
         started.elapsed().as_millis()
     ));
     state.db.finish_import(&progress)?;
-    state
-        .db
-        .insert_log("info", "import", &format!("completed import {}", import_id), None)?;
+    state.db.insert_log(
+        "info",
+        "import",
+        &format!("completed import {}", import_id),
+        None,
+    )?;
     info!(
         import_id,
         scanned = progress.files_scanned,
@@ -171,24 +186,34 @@ fn progress_message(progress: &ImportProgress) -> String {
 
 fn find_sidecar_for<'a>(
     scan: &crate::models::FileScanRecord,
-    sidecars: &'a HashMap<String, ParsedSidecar>,
+    sidecars_by_parent: &'a HashMap<String, Vec<(String, ParsedSidecar)>>,
 ) -> Option<&'a ParsedSidecar> {
     let parent = std::path::Path::new(&scan.path).parent()?.to_str()?;
+    let folder_sidecars = sidecars_by_parent.get(parent)?;
 
     for candidate_filename in sidecar_candidate_filenames(&scan.filename) {
         let candidate_path = format!("{parent}/{candidate_filename}");
         let json_path = format!("{candidate_path}.json");
-        if let Some(sidecar) = sidecars.get(&json_path) {
+        if let Some((_, sidecar)) = folder_sidecars.iter().find(|(path, _)| path == &json_path) {
             return Some(sidecar);
         }
 
         let supplemental = format!("{candidate_path}.supplemental-metadata.json");
-        if let Some(sidecar) = sidecars.get(&supplemental) {
+        if let Some((_, sidecar)) = folder_sidecars
+            .iter()
+            .find(|(path, _)| path == &supplemental)
+        {
             return Some(sidecar);
         }
     }
 
-    None
+    folder_sidecars
+        .iter()
+        .filter_map(|(_, sidecar)| {
+            score_sidecar_match(&scan.filename, sidecar).map(|score| (score, sidecar))
+        })
+        .max_by_key(|(score, _)| *score)
+        .map(|(_, sidecar)| sidecar)
 }
 
 fn sidecar_candidate_filenames(filename: &str) -> Vec<String> {
@@ -204,7 +229,10 @@ fn sidecar_candidate_filenames(filename: &str) -> Vec<String> {
 fn strip_edited_marker(filename: &str) -> Option<String> {
     let path = std::path::Path::new(filename);
     let stem = path.file_stem()?.to_str()?;
-    let extension = path.extension().and_then(|item| item.to_str()).unwrap_or_default();
+    let extension = path
+        .extension()
+        .and_then(|item| item.to_str())
+        .unwrap_or_default();
 
     let normalized = if let Some(stripped) = stem.strip_suffix("-edited") {
         stripped.to_string()
@@ -225,6 +253,25 @@ fn strip_edited_marker(filename: &str) -> Option<String> {
     }
 }
 
+fn score_sidecar_match(filename: &str, sidecar: &ParsedSidecar) -> Option<usize> {
+    let mut best = sidecar
+        .guessed_target_stem
+        .as_deref()
+        .and_then(|candidate| takeout_match_score(filename, candidate));
+
+    if let Some(title_hint) = sidecar.title_hint.as_deref() {
+        let title_score = takeout_match_score(filename, title_hint);
+        best = match (best, title_score) {
+            (Some(current), Some(candidate)) => Some(current.max(candidate)),
+            (None, Some(candidate)) => Some(candidate),
+            (Some(current), None) => Some(current),
+            (None, None) => None,
+        };
+    }
+
+    best
+}
+
 fn is_live_photo_video(scan: &crate::models::FileScanRecord) -> bool {
     let lowercase = scan.filename.to_lowercase();
     scan.candidate_type == "video" && (lowercase.contains("motion") || lowercase.contains("live"))
@@ -243,7 +290,7 @@ fn find_still_pair_asset_id(
         .trim_end_matches("-live")
         .to_string();
     state.db.with_connection(|conn| {
-        use rusqlite::{params, OptionalExtension};
+        use rusqlite::{OptionalExtension, params};
         conn.query_row(
             "SELECT a.id
              FROM assets a
