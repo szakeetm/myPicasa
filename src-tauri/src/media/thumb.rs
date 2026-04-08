@@ -108,7 +108,7 @@ pub fn generate_viewer_image_file(
     Ok(Some(output_path))
 }
 
-pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<PathBuf>, AppError> {
+pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(PathBuf, bool)>, AppError> {
     if !is_video_path(path) {
         return Ok(None);
     }
@@ -133,7 +133,7 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<Pat
     ));
 
     if output_path.is_file() {
-        return Ok(Some(output_path));
+        return Ok(Some((output_path, true)));
     }
 
     let temp_output = output_path.with_extension("tmp.mp4");
@@ -171,7 +171,7 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<Pat
     }
 
     fs::rename(&temp_output, &output_path)?;
-    Ok(Some(output_path))
+    Ok(Some((output_path, false)))
 }
 
 pub fn viewer_render_cache_stats(cache_dir: &Path) -> Result<(u32, u64), AppError> {

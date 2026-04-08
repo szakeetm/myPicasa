@@ -553,25 +553,37 @@ pub fn load_viewer_video(
 
     let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
     match generate_viewer_video(&source_path, &viewer_cache_dir) {
-        Ok(Some(path)) => {
+        Ok(Some((path, cache_hit))) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-            info!(
-                asset_id,
-                filename = %filename,
-                file_size,
-                generated_bytes,
-                output_path = %path.display(),
-                "viewer video transcode ready"
-            );
+            if cache_hit {
+                info!(
+                    asset_id,
+                    filename = %filename,
+                    file_size,
+                    generated_bytes,
+                    output_path = %path.display(),
+                    "viewer video cache hit"
+                );
+            } else {
+                info!(
+                    asset_id,
+                    filename = %filename,
+                    file_size,
+                    generated_bytes,
+                    output_path = %path.display(),
+                    "viewer video transcode ready"
+                );
+            }
             state
                 .db
                 .insert_log(
                     "info",
                     "viewer_video",
                     &format!(
-                        "asset_id={asset_id} filename=\"{filename}\" input_bytes={file_size} output_bytes={generated_bytes} output_path={}",
-                        path.display()
+                        "asset_id={asset_id} filename=\"{filename}\" source={} input_bytes={file_size} output_bytes={generated_bytes} output_path={}",
+                        if cache_hit { "cache_hit" } else { "transcoded" },
+                        path.display(),
                     ),
                     Some(asset_id),
                 )
@@ -669,25 +681,37 @@ pub fn load_live_photo_motion(
 
     let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
     match generate_viewer_video(&source_path, &viewer_cache_dir) {
-        Ok(Some(path)) => {
+        Ok(Some((path, cache_hit))) => {
             let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
-            info!(
-                asset_id,
-                filename = %filename,
-                file_size,
-                generated_bytes,
-                output_path = %path.display(),
-                "live photo motion transcode ready"
-            );
+            if cache_hit {
+                info!(
+                    asset_id,
+                    filename = %filename,
+                    file_size,
+                    generated_bytes,
+                    output_path = %path.display(),
+                    "live photo motion cache hit"
+                );
+            } else {
+                info!(
+                    asset_id,
+                    filename = %filename,
+                    file_size,
+                    generated_bytes,
+                    output_path = %path.display(),
+                    "live photo motion transcode ready"
+                );
+            }
             state
                 .db
                 .insert_log(
                     "info",
                     "live_photo",
                     &format!(
-                        "asset_id={asset_id} filename=\"{filename}\" input_bytes={file_size} output_bytes={generated_bytes} output_path={}",
-                        path.display()
+                        "asset_id={asset_id} filename=\"{filename}\" source={} input_bytes={file_size} output_bytes={generated_bytes} output_path={}",
+                        if cache_hit { "cache_hit" } else { "transcoded" },
+                        path.display(),
                     ),
                     Some(asset_id),
                 )
