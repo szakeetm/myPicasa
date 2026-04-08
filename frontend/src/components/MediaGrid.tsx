@@ -107,8 +107,6 @@ export function MediaGrid({
 
   useEffect(() => {
     let disposed = false;
-    let idleHandle: number | undefined;
-    let timeoutHandle: number | undefined;
 
     async function processPreviewPass() {
       if (previewRequestInFlightRef.current) {
@@ -210,35 +208,16 @@ export function MediaGrid({
         await logClient("grid", `viewer preview batch failed requested=${targetIds.length}: ${String(error)}`, "error");
       } finally {
         previewRequestInFlightRef.current = false;
-        schedule();
       }
     }
-
-    function schedule() {
-      if (disposed) {
-        return;
-      }
-      if (typeof window !== "undefined" && "requestIdleCallback" in window) {
-        idleHandle = window.requestIdleCallback(() => {
-          void processPreviewPass();
-        }, { timeout: thumbnailPreload?.active ? 1500 : 2500 });
-      } else {
-        timeoutHandle = setTimeout(() => {
-          void processPreviewPass();
-        }, thumbnailPreload?.active ? 240 : 420);
-      }
-    }
-
-    schedule();
+    void processPreviewPass();
+    const handle = window.setInterval(() => {
+      void processPreviewPass();
+    }, thumbnailPreload?.active ? 140 : 320);
 
     return () => {
       disposed = true;
-      if (idleHandle !== undefined && typeof window !== "undefined" && "cancelIdleCallback" in window) {
-        window.cancelIdleCallback(idleHandle);
-      }
-      if (timeoutHandle !== undefined) {
-        clearTimeout(timeoutHandle);
-      }
+      window.clearInterval(handle);
     };
   }, [assets, thumbnailPreload?.active, visibleIdSet]);
 
