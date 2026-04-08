@@ -103,3 +103,8 @@ export type ThumbnailBatchItem = {
   status: "ready" | "pending" | "unavailable";
   data_url?: string | null;
 };
+
+export type ViewerMediaSource = {
+  src: string;
+  source: string;
+};

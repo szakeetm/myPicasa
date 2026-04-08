@@ -19,6 +19,7 @@ use crate::{
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
         DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
+        ViewerMediaSource,
     },
     search::query_service,
 };
@@ -492,7 +493,7 @@ pub fn load_viewer_video(
     asset_id: i64,
     prefer_original: Option<bool>,
     state: State<AppState>,
-) -> CommandResult<Option<String>> {
+) -> CommandResult<Option<ViewerMediaSource>> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(primary_path) = detail.primary_path else {
         return Ok(None);
@@ -523,11 +524,18 @@ pub fn load_viewer_video(
                 Some(asset_id),
             )
             .map_err(map_error)?;
-        return Ok(Some(format!(
-            "data:{};base64,{}",
-            video_mime_type(&source_path),
-            STANDARD.encode(bytes)
-        )));
+        return Ok(Some(ViewerMediaSource {
+            src: format!(
+                "data:{};base64,{}",
+                video_mime_type(&source_path),
+                STANDARD.encode(bytes)
+            ),
+            source: match video_mime_type(&source_path) {
+                "video/quicktime" => "original_quicktime".to_string(),
+                "video/webm" => "original_webm".to_string(),
+                _ => "original_mp4".to_string(),
+            },
+        }));
     } else if prefer_original {
         info!(
             asset_id,
@@ -565,10 +573,10 @@ pub fn load_viewer_video(
                     Some(asset_id),
                 )
                 .map_err(map_error)?;
-            Ok(Some(format!(
-                "data:video/mp4;base64,{}",
-                STANDARD.encode(bytes)
-            )))
+            Ok(Some(ViewerMediaSource {
+                src: format!("data:video/mp4;base64,{}", STANDARD.encode(bytes)),
+                source: "transcoded_mp4".to_string(),
+            }))
         }
         Ok(None) => {
             state
@@ -598,7 +606,7 @@ pub fn load_live_photo_motion(
     asset_id: i64,
     prefer_original: Option<bool>,
     state: State<AppState>,
-) -> CommandResult<Option<String>> {
+) -> CommandResult<Option<ViewerMediaSource>> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(motion_path) = detail.live_photo_video_path else {
         return Ok(None);
@@ -629,11 +637,18 @@ pub fn load_live_photo_motion(
                 Some(asset_id),
             )
             .map_err(map_error)?;
-        return Ok(Some(format!(
-            "data:{};base64,{}",
-            video_mime_type(&source_path),
-            STANDARD.encode(bytes)
-        )));
+        return Ok(Some(ViewerMediaSource {
+            src: format!(
+                "data:{};base64,{}",
+                video_mime_type(&source_path),
+                STANDARD.encode(bytes)
+            ),
+            source: match video_mime_type(&source_path) {
+                "video/quicktime" => "original_quicktime".to_string(),
+                "video/webm" => "original_webm".to_string(),
+                _ => "original_mp4".to_string(),
+            },
+        }));
     } else if prefer_original {
         info!(
             asset_id,
@@ -671,10 +686,10 @@ pub fn load_live_photo_motion(
                     Some(asset_id),
                 )
                 .map_err(map_error)?;
-            Ok(Some(format!(
-                "data:video/mp4;base64,{}",
-                STANDARD.encode(bytes)
-            )))
+            Ok(Some(ViewerMediaSource {
+                src: format!("data:video/mp4;base64,{}", STANDARD.encode(bytes)),
+                source: "transcoded_mp4".to_string(),
+            }))
         }
         Ok(None) => {
             state

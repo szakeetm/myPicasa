@@ -149,3 +149,9 @@ pub struct ThumbnailBatchItem {
     pub status: String,
     pub data_url: Option<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewerMediaSource {
+    pub src: String,
+    pub source: String,
+}

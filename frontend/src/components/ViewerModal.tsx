@@ -197,22 +197,16 @@ export function ViewerModal({
     );
     void api
       .loadViewerVideo(assetId, shouldPreferOriginalVideoBytes)
-      .then(async (backendPath) => {
+      .then(async (backendMedia) => {
         if (cancelled) return;
         setVideoTranscoding(false);
-        if (backendPath) {
-          const sourceLabel =
-            backendPath.startsWith("data:video/quicktime")
-              ? "original_quicktime"
-              : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalVideoBytes
-                ? "original_mp4"
-                : "transcoded_mp4";
+        if (backendMedia) {
           void logClient(
             "viewer.video",
-            `viewer-v2 asset ${assetId} backend video ready source=${sourceLabel}`,
+            `viewer-v2 asset ${assetId} backend video ready source=${backendMedia.source}`,
           );
-          setVideoSourceLabel(sourceLabel);
-          const materialized = await materializeVideoSrc(backendPath, videoObjectUrlRef);
+          setVideoSourceLabel(backendMedia.source);
+          const materialized = await materializeVideoSrc(backendMedia.src, videoObjectUrlRef);
           if (cancelled) {
             if (materialized.startsWith("blob:")) {
               URL.revokeObjectURL(materialized);
@@ -260,22 +254,16 @@ export function ViewerModal({
     );
     void api
       .loadLivePhotoMotion(assetId, shouldPreferOriginalLivePhotoBytes)
-      .then(async (backendPath) => {
+      .then(async (backendMedia) => {
         if (cancelled) return;
         setLivePhotoTranscoding(false);
-        if (backendPath) {
-          const sourceLabel =
-            backendPath.startsWith("data:video/quicktime")
-              ? "original_quicktime"
-              : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalLivePhotoBytes
-                ? "original_mp4"
-                : "transcoded_mp4";
+        if (backendMedia) {
           void logClient(
             "viewer.live_photo",
-            `viewer-v2 asset ${assetId} backend motion ready source=${sourceLabel}`,
+            `viewer-v2 asset ${assetId} backend motion ready source=${backendMedia.source}`,
           );
-          setLivePhotoSourceLabel(sourceLabel);
-          const materialized = await materializeVideoSrc(backendPath, livePhotoObjectUrlRef);
+          setLivePhotoSourceLabel(backendMedia.source);
+          const materialized = await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef);
           if (cancelled) {
             if (materialized.startsWith("blob:")) {
               URL.revokeObjectURL(materialized);
@@ -422,12 +410,12 @@ export function ViewerModal({
     setVideoTranscoding(true);
     void logClient("viewer.video", `asset ${assetId} switching to transcoded backend playback after backend-original error`);
     try {
-      const backendPath = await api.loadViewerVideo(assetId, false);
+      const backendMedia = await api.loadViewerVideo(assetId, false);
       setVideoTranscoding(false);
-      if (backendPath) {
+      if (backendMedia) {
         void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
-        setVideoSourceLabel("transcoded_mp4");
-        setVideoSrc(await materializeVideoSrc(backendPath, videoObjectUrlRef));
+        setVideoSourceLabel(backendMedia.source);
+        setVideoSrc(await materializeVideoSrc(backendMedia.src, videoObjectUrlRef));
         return;
       }
       void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
@@ -449,12 +437,12 @@ export function ViewerModal({
     setLivePhotoTranscoding(true);
     void logClient("viewer.live_photo", `asset ${assetId} switching to transcoded backend motion after backend-original error`);
     try {
-      const backendPath = await api.loadLivePhotoMotion(assetId, false);
+      const backendMedia = await api.loadLivePhotoMotion(assetId, false);
       setLivePhotoTranscoding(false);
-      if (backendPath) {
+      if (backendMedia) {
         void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
-        setLivePhotoSourceLabel("transcoded_mp4");
-        setLivePhotoMotionSrc(await materializeVideoSrc(backendPath, livePhotoObjectUrlRef));
+        setLivePhotoSourceLabel(backendMedia.source);
+        setLivePhotoMotionSrc(await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef));
         return;
       }
       void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
@@ -917,6 +905,8 @@ function formatViewerSourceLabel(label: string) {
       return "Original Video (MP4)";
     case "original_quicktime":
       return "Original Video (MOV)";
+    case "original_webm":
+      return "Original Video (WEBM)";
     case "transcoded_mp4":
       return "Transcoded Video";
     case "unset":
