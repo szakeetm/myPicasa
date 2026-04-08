@@ -10,6 +10,7 @@ mod models;
 mod search;
 mod util;
 
+use std::collections::HashSet;
 use std::{fs, path::PathBuf, sync::Arc};
 
 use app::{commands::command_handlers, state::AppState};
@@ -44,6 +45,8 @@ fn main() {
                 db: Arc::new(database),
                 import_status: Arc::new(Mutex::new(None)),
                 thumbnail_cache: Arc::new(Mutex::new(ThumbnailCache::new(256 * 1024 * 1024))),
+                inflight_thumbnails: Arc::new(Mutex::new(HashSet::new())),
+                failed_thumbnails: Arc::new(Mutex::new(HashSet::new())),
             };
 
             state

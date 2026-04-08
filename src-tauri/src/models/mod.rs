@@ -135,5 +135,6 @@ pub struct LogEntry {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ThumbnailBatchItem {
     pub asset_id: i64,
+    pub status: String,
     pub data_url: Option<String>,
 }

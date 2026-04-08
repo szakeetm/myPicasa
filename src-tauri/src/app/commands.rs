@@ -4,7 +4,6 @@ use std::thread;
 use std::time::Instant;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use rayon::prelude::*;
 use tauri::{generate_handler, ipc::InvokeError, State};
 use tracing::{error, info};
 
@@ -34,6 +33,56 @@ fn media_debug_info(path: &str) -> (String, u64) {
         .to_string();
     let file_size = fs::metadata(path).map(|meta| meta.len()).unwrap_or(0);
     (filename, file_size)
+}
+
+fn spawn_thumbnail_job(state: AppState, asset_id: i64, size: u32, key: String) {
+    thread::spawn(move || {
+        let result = (|| -> Result<Option<Vec<u8>>, String> {
+            let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(|error| error.to_string())?;
+            let Some(primary_path) = detail.primary_path else {
+                return Ok(None);
+            };
+            let (filename, file_size) = media_debug_info(&primary_path);
+            let started = Instant::now();
+            let generated = generate_thumbnail(&PathBuf::from(primary_path), size).map_err(|error| error.to_string())?;
+            match &generated {
+                Some(bytes) => {
+                    println!(
+                        "thumbnail_job asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={}",
+                        file_size,
+                        bytes.len(),
+                        started.elapsed().as_millis()
+                    );
+                }
+                None => {
+                    println!(
+                        "thumbnail_job asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={}",
+                        file_size,
+                        started.elapsed().as_millis()
+                    );
+                }
+            }
+            Ok(generated)
+        })();
+
+        match result {
+            Ok(Some(bytes)) => {
+                state.thumbnail_cache.lock().insert(key.clone(), bytes);
+                state.failed_thumbnails.lock().remove(&key);
+            }
+            Ok(None) => {
+                state.failed_thumbnails.lock().insert(key.clone());
+            }
+            Err(error) => {
+                let _ = state
+                    .db
+                    .insert_log("error", "thumbnail_job", &error, Some(asset_id));
+                state.failed_thumbnails.lock().insert(key.clone());
+            }
+        }
+
+        state.inflight_thumbnails.lock().remove(&key);
+    });
 }
 
 #[tauri::command]
@@ -199,89 +248,59 @@ pub fn request_thumbnails_batch(
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
     let started = Instant::now();
-    let db = state.db.clone();
     let cache = state.thumbnail_cache.clone();
 
     let items = asset_ids
-        .into_par_iter()
+        .into_iter()
         .map(|asset_id| {
             let key = format!("{asset_id}:{size}");
 
             if let Some(bytes) = cache.lock().get(&key) {
                 return ThumbnailBatchItem {
                     asset_id,
+                    status: "ready".to_string(),
                     data_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))),
                 };
             }
 
-            let detail = match query_service::get_asset_detail(&db, asset_id) {
-                Ok(detail) => detail,
-                Err(error) => {
-                    let _ = db.insert_log(
-                        "error",
-                        "thumbnail_batch",
-                        &format!("detail lookup failed for {asset_id}: {error}"),
-                        Some(asset_id),
-                    );
-                    return ThumbnailBatchItem {
-                        asset_id,
-                        data_url: None,
-                    };
-                }
-            };
-
-            let Some(primary_path) = detail.primary_path else {
+            if state.failed_thumbnails.lock().contains(&key) {
                 return ThumbnailBatchItem {
                     asset_id,
+                    status: "unavailable".to_string(),
                     data_url: None,
                 };
-            };
-            let (filename, file_size) = media_debug_info(&primary_path);
+            }
 
-            match generate_thumbnail(&PathBuf::from(primary_path), size) {
-                Ok(Some(bytes)) => {
-                    cache.lock().insert(key, bytes.clone());
-                    println!(
-                        "thumbnail_batch_item asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={}",
-                        file_size,
-                        bytes.len()
-                    );
-                    ThumbnailBatchItem {
-                        asset_id,
-                        data_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))),
-                    }
-                }
-                Ok(None) => ThumbnailBatchItem {
-                    asset_id,
-                    data_url: None,
-                },
-                Err(error) => {
-                    let _ = db.insert_log(
-                        "error",
-                        "thumbnail_batch",
-                        &error.to_string(),
-                        Some(asset_id),
-                    );
-                    println!(
-                        "thumbnail_batch_item asset_id={asset_id} filename=\"{filename}\" file_size={} failed error={error}",
-                        file_size
-                    );
-                    ThumbnailBatchItem {
-                        asset_id,
-                        data_url: None,
-                    }
-                }
+            let mut inflight = state.inflight_thumbnails.lock();
+            if inflight.insert(key.clone()) {
+                drop(inflight);
+                spawn_thumbnail_job(state.inner().clone(), asset_id, size, key.clone());
+            }
+
+            ThumbnailBatchItem {
+                asset_id,
+                status: "pending".to_string(),
+                data_url: None,
             }
         })
         .collect::<Vec<_>>();
 
     let elapsed = started.elapsed().as_millis();
-    let hits = items.iter().filter(|item| item.data_url.is_some()).count();
-    info!(elapsed_ms = elapsed, item_count = items.len(), hit_count = hits, "thumbnail batch completed");
+    let hits = items.iter().filter(|item| item.status == "ready").count();
+    let pending = items.iter().filter(|item| item.status == "pending").count();
+    info!(
+        elapsed_ms = elapsed,
+        item_count = items.len(),
+        hit_count = hits,
+        pending_count = pending,
+        "thumbnail batch completed"
+    );
     println!(
-        "thumbnail_batch item_count={} hit_count={} elapsed_ms={elapsed}",
+        "thumbnail_batch item_count={} hit_count={} pending_count={} elapsed_ms={elapsed}",
         items.len(),
         hits
+        ,
+        pending
     );
 
     Ok(items)

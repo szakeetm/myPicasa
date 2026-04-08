@@ -23,6 +23,7 @@ function columnCount(width: number) {
 export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(1200);
+  const [requestTick, setRequestTick] = useState(0);
   const [thumbs, setThumbs] = useState<Record<number, string | null>>({});
   const columns = columnCount(width);
   const rows = useMemo(() => {
@@ -60,6 +61,13 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   );
 
   useEffect(() => {
+    const timer = window.setInterval(() => {
+      setRequestTick((value) => value + 1);
+    }, 500);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  useEffect(() => {
     if (visibleIds.length === 0) return;
     const timer = window.setTimeout(async () => {
       const pending = visibleIds.filter((id) => thumbs[id] === undefined);
@@ -68,7 +76,9 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
       let entries: Array<readonly [number, string | null]> = [];
       try {
         const batch = await api.requestThumbnailsBatch(pending, 256);
-        entries = batch.map((item) => [item.asset_id, item.data_url ?? null] as const);
+        entries = batch
+          .filter((item) => item.status !== "pending")
+          .map((item) => [item.asset_id, item.status === "ready" ? item.data_url ?? null : null] as const);
       } catch (error) {
         await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
         entries = pending.map((id) => [id, null] as const);
@@ -81,7 +91,7 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     }, 150);
 
     return () => window.clearTimeout(timer);
-  }, [thumbs, visibleIds]);
+  }, [requestTick, thumbs, visibleIds]);
 
   if (assets.length === 0) {
     return <div className="empty-state">No indexed assets match the current view.</div>;
