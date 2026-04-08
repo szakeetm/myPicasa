@@ -201,6 +201,21 @@ pub fn request_thumbnail(
 ) -> CommandResult<Option<String>> {
     let key = format!("{asset_id}:{size}");
     if let Some(bytes) = state.thumbnail_cache.lock().get(&key) {
+        let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
+        let (filename, file_size) = detail
+            .primary_path
+            .as_deref()
+            .map(media_debug_info)
+            .unwrap_or_else(|| (asset_id.to_string(), 0));
+        info!(
+            asset_id,
+            size,
+            bytes = bytes.len(),
+            filename = %filename,
+            file_size,
+            source = "cache",
+            "thumbnail load ready"
+        );
         return Ok(Some(format!(
             "data:image/jpeg;base64,{}",
             STANDARD.encode(bytes)
@@ -216,13 +231,25 @@ pub fn request_thumbnail(
     let working_dir = state.app_data_dir.join("working");
     match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
         Ok(Some(bytes)) => {
+            info!(
+                asset_id,
+                size,
+                bytes = bytes.len(),
+                filename = %filename,
+                file_size,
+                source = "generated",
+                "thumbnail load ready"
+            );
             state.thumbnail_cache.lock().insert(key, bytes.clone());
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
             )))
         }
-        Ok(None) => Ok(None),
+        Ok(None) => {
+            info!(asset_id, size, filename = %filename, file_size, "thumbnail unavailable");
+            Ok(None)
+        }
         Err(error) => {
             error!(asset_id, %error, "thumbnail generation failed");
             preview_debug_log(format!(
@@ -342,6 +369,13 @@ pub fn load_viewer_frame(
     let (filename, file_size) = media_debug_info(&primary_path);
     let source_path = PathBuf::from(&primary_path);
     let prefer_original = prefer_original.unwrap_or(false);
+    info!(
+        asset_id,
+        filename = %filename,
+        file_size,
+        source = if prefer_original { "original" } else { "rendered" },
+        "viewer image load requested"
+    );
 
     if prefer_original {
         let bytes = fs::read(&source_path).map_err(map_error)?;
@@ -352,6 +386,7 @@ pub fn load_viewer_frame(
             bytes = bytes.len(),
             filename = %filename,
             file_size,
+            source = "original",
             "viewer image original-byte load ready"
         );
         return Ok(Some(format!(
@@ -379,6 +414,7 @@ pub fn load_viewer_frame(
                 bytes = generated_bytes,
                 filename = %filename,
                 file_size,
+                source = "rendered",
                 "viewer image generated"
             );
             preview_debug_log(format!(
@@ -393,7 +429,14 @@ pub fn load_viewer_frame(
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
-            info!(asset_id, elapsed_ms = elapsed, filename = %filename, file_size, "viewer image unavailable");
+            info!(
+                asset_id,
+                elapsed_ms = elapsed,
+                filename = %filename,
+                file_size,
+                source = "rendered",
+                "viewer image unavailable"
+            );
             preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={elapsed}",
                 file_size
