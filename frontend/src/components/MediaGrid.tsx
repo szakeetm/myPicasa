@@ -124,7 +124,6 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
         return next;
       });
 
-      await logClient("grid", `requesting batch of ${pending.length} visible thumbnails`);
       console.info("thumbnail_visible_assets", {
         visibleIds,
         visibleTitles,

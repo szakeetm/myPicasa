@@ -18,6 +18,7 @@ type ViewerModalProps = {
 export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, onClose }: ViewerModalProps) {
   const [imageSrc, setImageSrc] = useState<string>();
   const [imageError, setImageError] = useState<string>();
+  const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [zoomAssetId, setZoomAssetId] = useState<number>();
   const assetId = asset?.id;
@@ -30,6 +31,9 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
 
   if (assetId !== zoomAssetId) {
     setZoomAssetId(assetId);
+    if (forceRenderedFrame) {
+      setForceRenderedFrame(false);
+    }
     if (zoom !== 1) {
       setZoom(1);
     }
@@ -42,7 +46,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setImageError(undefined);
       return;
     }
-    if (canUsePrimaryImageDirectly && primaryPath) {
+    if (!forceRenderedFrame && canUsePrimaryImageDirectly && primaryPath) {
       setImageSrc(primaryPath);
       setImageError(undefined);
       return;
@@ -73,7 +77,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     return () => {
       cancelled = true;
     };
-  }, [assetId, canUsePrimaryImageDirectly, isPhoto, primaryPath]);
+  }, [assetId, canUsePrimaryImageDirectly, forceRenderedFrame, isPhoto, primaryPath]);
 
   useEffect(() => {
     if (!asset) return;
@@ -145,6 +149,14 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                 style={{
                   width: `${zoom * 100}%`,
                   maxWidth: "none",
+                }}
+                onError={() => {
+                  if (!forceRenderedFrame && canUsePrimaryImageDirectly) {
+                    setForceRenderedFrame(true);
+                    return;
+                  }
+                  setImageSrc(undefined);
+                  setImageError("Image preview unavailable");
                 }}
               />
             </div>

@@ -563,44 +563,34 @@ impl DatabaseQueries for super::Database {
     }
 
     fn search_assets(&self, request: AssetListRequest) -> Result<AssetListResponse, AppError> {
-        let query = request.query.clone().unwrap_or_default();
-        self.with_connection(|conn| {
-            let offset = request.cursor.unwrap_or_default();
-            let limit = request.limit.unwrap_or(200) as i64;
-            let mut stmt = conn.prepare(
+        let query = request.query.clone().unwrap_or_default().replace('\'', "''");
+        paged_asset_query(
+            self,
+            &format!(
                 "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
-                        EXISTS(
-                          SELECT 1 FROM asset_files af_live
-                          WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
-                        ),
-                        f.path, COALESCE(group_concat(DISTINCT al.name), '')
-                 FROM search_fts s
-                 JOIN assets a ON a.id = s.asset_id
-                 JOIN file_entries f ON f.id = a.primary_file_id
-                 LEFT JOIN album_assets aa ON aa.asset_id = a.id
-                 LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE search_fts MATCH ?1
-                   AND a.is_deleted = 0
-                   AND a.media_kind IN ('photo', 'video', 'live_photo')
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM asset_files af_hidden
-                     WHERE af_hidden.file_id = a.primary_file_id
-                       AND af_hidden.role = 'live_photo_video'
-                   )
-                 GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path
-                 ORDER BY rank
-                 LIMIT ?2 OFFSET ?3",
-            )?;
-            let rows = stmt.query_map(params![query, limit, offset], |row| {
-                map_asset_list_item(row)
-            })?;
-            let items: Vec<_> = rows.filter_map(Result::ok).collect();
-            Ok(AssetListResponse {
-                items,
-                next_cursor: Some(offset + limit as u32),
-            })
-        })
+                    EXISTS(
+                      SELECT 1 FROM asset_files af_live
+                      WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
+                    ),
+                    f.path, COALESCE(group_concat(DISTINCT al.name), '')
+             FROM search_fts s
+             JOIN assets a ON a.id = s.asset_id
+             JOIN file_entries f ON f.id = a.primary_file_id
+             LEFT JOIN album_assets aa ON aa.asset_id = a.id
+             LEFT JOIN albums al ON al.id = aa.album_id
+             WHERE a.is_deleted = 0
+               AND a.media_kind IN ('photo', 'video', 'live_photo')
+               AND NOT EXISTS (
+                 SELECT 1
+                 FROM asset_files af_hidden
+                 WHERE af_hidden.file_id = a.primary_file_id
+                   AND af_hidden.role = 'live_photo_video'
+               )
+               AND search_fts MATCH '{query}'"
+            ),
+            " ORDER BY rank",
+            request,
+        )
     }
 
     fn get_asset_detail(&self, asset_id: i64) -> Result<AssetDetail, AppError> {
@@ -729,7 +719,7 @@ fn paged_asset_query(
         let mut filters = Vec::<String>::new();
 
         if let Some(kind) = request.media_kind.as_deref() {
-            filters.push(format!("a.media_kind = '{}'", kind.replace('\'', "''")));
+            filters.push(media_kind_filter_sql(kind));
         }
         if let Some(start) = request.date_from.as_deref() {
             filters.push(format!("a.taken_at_utc >= '{}'", start.replace('\'', "''")));
@@ -761,6 +751,14 @@ fn paged_asset_query(
             next_cursor: Some(offset + limit as u32),
         })
     })
+}
+
+fn media_kind_filter_sql(kind: &str) -> String {
+    match kind {
+        "photo" => "a.media_kind IN ('photo', 'live_photo')".to_string(),
+        "video" => "a.media_kind = 'video'".to_string(),
+        other => format!("a.media_kind = '{}'", other.replace('\'', "''")),
+    }
 }
 
 fn map_asset_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetListItem> {
