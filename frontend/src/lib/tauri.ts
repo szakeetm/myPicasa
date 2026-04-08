@@ -37,6 +37,7 @@ export const api = {
   getDiagnostics: () =>
     invoke<DiagnosticEntry[]>("get_ingress_diagnostics"),
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),
+  clearThumbnailCache: () => invoke<void>("clear_thumbnail_cache"),
   getRecentLogs: (limit = 150) =>
     invoke<LogEntry[]>("get_recent_logs", { limit }),
   recordClientLog: (level: string, scope: string, message: string) =>

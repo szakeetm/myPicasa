@@ -211,6 +211,12 @@ export function App() {
     await refreshDebugSurfaces();
   }
 
+  async function handleClearThumbnails() {
+    await api.clearThumbnailCache();
+    const cacheStats = await api.getCacheStats();
+    state.setCacheStats(cacheStats);
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -248,6 +254,7 @@ export function App() {
         diagnostics={state.diagnostics}
         logs={state.logs}
         cacheStats={state.cacheStats}
+        onClearThumbnails={handleClearThumbnails}
         onClearDiagnostics={handleClearDiagnostics}
         onClearLogs={handleClearLogs}
       />

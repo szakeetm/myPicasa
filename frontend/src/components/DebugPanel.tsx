@@ -4,6 +4,7 @@ type DebugPanelProps = {
   diagnostics: DiagnosticEntry[];
   logs: LogEntry[];
   cacheStats?: CacheStats;
+  onClearThumbnails: () => void;
   onClearDiagnostics: () => void;
   onClearLogs: () => void;
 };
@@ -12,6 +13,7 @@ export function DebugPanel({
   diagnostics,
   logs,
   cacheStats,
+  onClearThumbnails,
   onClearDiagnostics,
   onClearLogs,
 }: DebugPanelProps) {
@@ -21,10 +23,15 @@ export function DebugPanel({
         <div className="eyebrow">Debug</div>
         <div className="title">Diagnostics and logs</div>
         {cacheStats ? (
-          <div className="muted">
-            cache: {cacheStats.thumbnail_items} thumbs •{" "}
-            {Math.round(cacheStats.thumbnail_bytes / 1024 / 1024)} /{" "}
-            {Math.round(cacheStats.thumbnail_budget_bytes / 1024 / 1024)} MB
+          <div className="debug-cache-summary">
+            <div className="muted">
+              thumbnails: {cacheStats.thumbnail_items} items •{" "}
+              {Math.round((cacheStats.thumbnail_bytes / 1024 / 1024) * 10) / 10} /{" "}
+              {Math.round(cacheStats.thumbnail_budget_bytes / 1024 / 1024)} MB
+            </div>
+            <button className="button-secondary" onClick={onClearThumbnails}>
+              Clear thumbnails
+            </button>
           </div>
         ) : null}
       </div>

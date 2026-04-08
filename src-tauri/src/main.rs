@@ -54,10 +54,14 @@ fn main() {
             fs::create_dir_all(&app_data_dir)?;
 
             let db_path = app_data_dir.join("my_picasa.sqlite");
+            let thumbnail_cache_dir = app_data_dir.join("thumbnail-cache");
             let database = Database::new(&db_path)?;
             let (thumbnail_job_sender, thumbnail_job_receiver) = mpsc::channel::<ThumbnailJob>();
             let thumbnail_job_receiver = Arc::new(Mutex::new(thumbnail_job_receiver));
-            let thumbnail_cache = Arc::new(Mutex::new(ThumbnailCache::new(256 * 1024 * 1024)));
+            let thumbnail_cache = Arc::new(Mutex::new(ThumbnailCache::new(
+                thumbnail_cache_dir,
+                256 * 1024 * 1024,
+            )));
             let inflight_thumbnails = Arc::new(Mutex::new(HashSet::new()));
             let failed_thumbnails = Arc::new(Mutex::new(HashSet::new()));
             let worker_count = std::thread::available_parallelism()

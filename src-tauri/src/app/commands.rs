@@ -389,6 +389,18 @@ pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
 }
 
 #[tauri::command]
+pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
+    state.thumbnail_cache.lock().clear();
+    state.inflight_thumbnails.lock().clear();
+    state.failed_thumbnails.lock().clear();
+    state
+        .db
+        .insert_log("info", "thumbnail", "cleared thumbnail cache", None)
+        .map_err(map_error)?;
+    Ok(())
+}
+
+#[tauri::command]
 pub fn get_recent_logs(limit: Option<u32>, state: State<AppState>) -> CommandResult<Vec<LogEntry>> {
     query_service::get_recent_logs(&state.db, limit.unwrap_or(300)).map_err(map_error)
 }
@@ -456,6 +468,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         load_viewer_frame,
         get_live_photo_pair,
         get_cache_stats,
+        clear_thumbnail_cache,
         get_recent_logs,
         record_client_log,
         reset_local_database,
