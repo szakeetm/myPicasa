@@ -451,6 +451,15 @@ button {
   margin: 0 auto;
 }
 
+.viewer-loading-state {
+  min-height: calc(68vh - 24px);
+  display: grid;
+  place-items: center;
+  color: rgba(255, 250, 243, 0.82);
+  font-size: 1rem;
+  letter-spacing: 0.02em;
+}
+
 .viewer-meta {
   padding: 18px 20px 22px;
 }

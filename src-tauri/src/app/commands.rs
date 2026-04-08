@@ -344,10 +344,50 @@ pub fn load_viewer_video(asset_id: i64, state: State<AppState>) -> CommandResult
     let Some(primary_path) = detail.primary_path else {
         return Ok(None);
     };
+    let (filename, file_size) = media_debug_info(&primary_path);
+    info!(asset_id, filename = %filename, file_size, "viewer video transcode requested");
 
     match generate_viewer_video(&PathBuf::from(&primary_path)) {
-        Ok(Some(path)) => Ok(Some(path.to_string_lossy().to_string())),
-        Ok(None) => Ok(None),
+        Ok(Some(path)) => {
+            let bytes = fs::read(&path).map_err(map_error)?;
+            let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            info!(
+                asset_id,
+                filename = %filename,
+                file_size,
+                generated_bytes,
+                output_path = %path.display(),
+                "viewer video transcode ready"
+            );
+            state
+                .db
+                .insert_log(
+                    "info",
+                    "viewer_video",
+                    &format!(
+                        "asset_id={asset_id} filename=\"{filename}\" input_bytes={file_size} output_bytes={generated_bytes} output_path={}",
+                        path.display()
+                    ),
+                    Some(asset_id),
+                )
+                .map_err(map_error)?;
+            Ok(Some(format!(
+                "data:video/mp4;base64,{}",
+                STANDARD.encode(bytes)
+            )))
+        }
+        Ok(None) => {
+            state
+                .db
+                .insert_log(
+                    "warning",
+                    "viewer_video",
+                    &format!("asset_id={asset_id} filename=\"{filename}\" transcode unavailable"),
+                    Some(asset_id),
+                )
+                .map_err(map_error)?;
+            Ok(None)
+        }
         Err(error) => {
             error!(asset_id, %error, "viewer video load failed");
             state
@@ -365,10 +405,50 @@ pub fn load_live_photo_motion(asset_id: i64, state: State<AppState>) -> CommandR
     let Some(motion_path) = detail.live_photo_video_path else {
         return Ok(None);
     };
+    let (filename, file_size) = media_debug_info(&motion_path);
+    info!(asset_id, filename = %filename, file_size, "live photo motion transcode requested");
 
     match generate_viewer_video(&PathBuf::from(&motion_path)) {
-        Ok(Some(path)) => Ok(Some(path.to_string_lossy().to_string())),
-        Ok(None) => Ok(None),
+        Ok(Some(path)) => {
+            let bytes = fs::read(&path).map_err(map_error)?;
+            let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
+            info!(
+                asset_id,
+                filename = %filename,
+                file_size,
+                generated_bytes,
+                output_path = %path.display(),
+                "live photo motion transcode ready"
+            );
+            state
+                .db
+                .insert_log(
+                    "info",
+                    "live_photo",
+                    &format!(
+                        "asset_id={asset_id} filename=\"{filename}\" input_bytes={file_size} output_bytes={generated_bytes} output_path={}",
+                        path.display()
+                    ),
+                    Some(asset_id),
+                )
+                .map_err(map_error)?;
+            Ok(Some(format!(
+                "data:video/mp4;base64,{}",
+                STANDARD.encode(bytes)
+            )))
+        }
+        Ok(None) => {
+            state
+                .db
+                .insert_log(
+                    "warning",
+                    "live_photo",
+                    &format!("asset_id={asset_id} filename=\"{filename}\" transcode unavailable"),
+                    Some(asset_id),
+                )
+                .map_err(map_error)?;
+            Ok(None)
+        }
         Err(error) => {
             error!(asset_id, %error, "live photo motion load failed");
             state

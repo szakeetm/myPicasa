@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
+import { logClient } from "../lib/logger";
 import { api } from "../lib/tauri";
 import type { AssetDetail } from "../lib/types";
 
@@ -21,9 +22,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const [videoSrc, setVideoSrc] = useState<string>();
   const [videoError, setVideoError] = useState<string>();
   const [videoFallbackAttempted, setVideoFallbackAttempted] = useState(false);
+  const [videoTranscoding, setVideoTranscoding] = useState(false);
   const [livePhotoMotionSrc, setLivePhotoMotionSrc] = useState<string>();
   const [livePhotoMotionError, setLivePhotoMotionError] = useState<string>();
   const [livePhotoFallbackAttempted, setLivePhotoFallbackAttempted] = useState(false);
+  const [livePhotoTranscoding, setLivePhotoTranscoding] = useState(false);
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -32,9 +35,14 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>();
   const viewerMediaRef = useRef<HTMLDivElement | null>(null);
   const imageFrameRef = useRef<HTMLDivElement | null>(null);
+  const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
+  const canFullscreenVideo =
+    isVideo &&
+    typeof document !== "undefined" &&
+    typeof document.fullscreenEnabled !== "undefined";
   const primaryPath = asset?.primary_path ? convertFileSrc(asset.primary_path) : undefined;
   const livePhotoPath = asset?.live_photo_video_path
     ? convertFileSrc(asset.live_photo_video_path)
@@ -50,8 +58,10 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setShowLivePhotoMotion(false);
     setVideoSrc(undefined);
     setVideoError(undefined);
+    setVideoTranscoding(false);
     setLivePhotoMotionSrc(undefined);
     setLivePhotoMotionError(undefined);
+    setLivePhotoTranscoding(false);
     setZoomMode("fit");
     setZoom(1);
     setNaturalSize(undefined);
@@ -118,32 +128,42 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setVideoSrc(undefined);
       setVideoError(undefined);
       setVideoFallbackAttempted(false);
+      setVideoTranscoding(false);
       return;
     }
 
     setVideoError(undefined);
     if (shouldPreferBackendVideo) {
+      void logClient("viewer.video", `asset ${assetId} preferring backend playback for ${asset?.primary_path ?? "unknown"}`);
       setVideoSrc(undefined);
       setVideoFallbackAttempted(true);
+      setVideoTranscoding(true);
       void api
         .loadViewerVideo(assetId)
         .then((backendPath) => {
           if (cancelled) return;
+          setVideoTranscoding(false);
           if (backendPath) {
-            setVideoSrc(convertFileSrc(backendPath));
+            void logClient("viewer.video", `asset ${assetId} backend playback ready`);
+            setVideoSrc(backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath));
             setVideoError(undefined);
           } else {
+            void logClient("viewer.video", `asset ${assetId} backend playback unavailable`, "error");
             setVideoError("Video playback unavailable");
           }
         })
         .catch((error) => {
           if (!cancelled) {
+            setVideoTranscoding(false);
+            void logClient("viewer.video", `asset ${assetId} backend playback failed: ${String(error)}`, "error");
             setVideoError(String(error));
           }
         });
     } else {
+      void logClient("viewer.video", `asset ${assetId} attempting native playback for ${asset?.primary_path ?? "unknown"}`);
       setVideoSrc(primaryPath);
       setVideoFallbackAttempted(false);
+      setVideoTranscoding(false);
     }
 
     return () => {
@@ -157,32 +177,44 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setLivePhotoMotionSrc(undefined);
       setLivePhotoMotionError(undefined);
       setLivePhotoFallbackAttempted(false);
+      setLivePhotoTranscoding(false);
       return;
     }
 
     setLivePhotoMotionError(undefined);
     if (shouldPreferBackendLivePhoto) {
+      void logClient("viewer.live_photo", `asset ${assetId} preferring backend motion playback for ${asset?.live_photo_video_path ?? "unknown"}`);
       setLivePhotoMotionSrc(undefined);
       setLivePhotoFallbackAttempted(true);
+      setLivePhotoTranscoding(true);
       void api
         .loadLivePhotoMotion(assetId)
         .then((backendPath) => {
           if (cancelled) return;
+          setLivePhotoTranscoding(false);
           if (backendPath) {
-            setLivePhotoMotionSrc(convertFileSrc(backendPath));
+            void logClient("viewer.live_photo", `asset ${assetId} backend motion playback ready`);
+            setLivePhotoMotionSrc(
+              backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath),
+            );
             setLivePhotoMotionError(undefined);
           } else {
+            void logClient("viewer.live_photo", `asset ${assetId} backend motion playback unavailable`, "error");
             setLivePhotoMotionError("Live photo playback unavailable");
           }
         })
         .catch((error) => {
           if (!cancelled) {
+            setLivePhotoTranscoding(false);
+            void logClient("viewer.live_photo", `asset ${assetId} backend motion playback failed: ${String(error)}`, "error");
             setLivePhotoMotionError(String(error));
           }
         });
     } else {
+      void logClient("viewer.live_photo", `asset ${assetId} attempting native motion playback for ${asset?.live_photo_video_path ?? "unknown"}`);
       setLivePhotoMotionSrc(livePhotoPath);
       setLivePhotoFallbackAttempted(false);
+      setLivePhotoTranscoding(false);
     }
 
     return () => {
@@ -237,14 +269,21 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     }
     setVideoFallbackAttempted(true);
     setVideoError(undefined);
+    setVideoTranscoding(true);
+    void logClient("viewer.video", `asset ${assetId} switching to backend playback after native error`);
     try {
       const backendPath = await api.loadViewerVideo(assetId);
+      setVideoTranscoding(false);
       if (backendPath) {
-        setVideoSrc(convertFileSrc(backendPath));
+        void logClient("viewer.video", `asset ${assetId} backend playback ready after native error`);
+        setVideoSrc(backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath));
         return;
       }
+      void logClient("viewer.video", `asset ${assetId} backend playback unavailable after native error`, "error");
       setVideoError("Video playback unavailable");
     } catch (error) {
+      setVideoTranscoding(false);
+      void logClient("viewer.video", `asset ${assetId} backend playback failed after native error: ${String(error)}`, "error");
       setVideoError(String(error));
     }
   }
@@ -255,16 +294,37 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     }
     setLivePhotoFallbackAttempted(true);
     setLivePhotoMotionError(undefined);
+    setLivePhotoTranscoding(true);
+    void logClient("viewer.live_photo", `asset ${assetId} switching to backend motion playback after native error`);
     try {
       const backendPath = await api.loadLivePhotoMotion(assetId);
+      setLivePhotoTranscoding(false);
       if (backendPath) {
-        setLivePhotoMotionSrc(convertFileSrc(backendPath));
+        void logClient("viewer.live_photo", `asset ${assetId} backend motion playback ready after native error`);
+        setLivePhotoMotionSrc(
+          backendPath.startsWith("data:") ? backendPath : convertFileSrc(backendPath),
+        );
         return;
       }
+      void logClient("viewer.live_photo", `asset ${assetId} backend motion playback unavailable after native error`, "error");
       setLivePhotoMotionError("Live photo playback unavailable");
     } catch (error) {
+      setLivePhotoTranscoding(false);
+      void logClient("viewer.live_photo", `asset ${assetId} backend motion playback failed after native error: ${String(error)}`, "error");
       setLivePhotoMotionError(String(error));
     }
+  }
+
+  async function toggleVideoFullscreen() {
+    const element = videoElementRef.current;
+    if (!element || typeof document === "undefined") {
+      return;
+    }
+    if (document.fullscreenElement === element) {
+      await document.exitFullscreen();
+      return;
+    }
+    await element.requestFullscreen();
   }
 
   useEffect(() => {
@@ -305,6 +365,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
         <div className="viewer-toolbar">
           <strong>{asset.title ?? "Untitled asset"}</strong>
           <div className="button-row">
+            {canFullscreenVideo ? (
+              <button className="button-secondary" onClick={() => void toggleVideoFullscreen()}>
+                Fullscreen
+              </button>
+            ) : null}
             {isPhoto ? (
               <>
                 {livePhotoPath ? (
@@ -341,10 +406,15 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           {asset.media_kind === "video" ? (
             videoSrc ? (
               <video
+                ref={videoElementRef}
                 src={videoSrc}
                 controls
                 autoPlay
+                onPlay={() => {
+                  void logClient("viewer.video", `asset ${assetId} video started playing`);
+                }}
                 onError={() => {
+                  void logClient("viewer.video", `asset ${assetId} native video element error for ${videoSrc ?? "unknown"}`, "error");
                   if (!videoFallbackAttempted) {
                     void fallbackVideoToBackend();
                     return;
@@ -354,6 +424,8 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
               />
             ) : videoError ? (
               <div className="muted">{videoError}</div>
+            ) : videoTranscoding ? (
+              <div className="viewer-loading-state">Transcoding video...</div>
             ) : (
               <div className="muted">Loading video…</div>
             )
@@ -365,7 +437,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                 autoPlay
                 muted
                 loop
+                onPlay={() => {
+                  void logClient("viewer.live_photo", `asset ${assetId} live photo motion started playing`);
+                }}
                 onError={() => {
+                  void logClient("viewer.live_photo", `asset ${assetId} live photo motion element error for ${livePhotoMotionSrc ?? "unknown"}`, "error");
                   if (!livePhotoFallbackAttempted) {
                     void fallbackLivePhotoToBackend();
                     return;
@@ -375,6 +451,8 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
               />
             ) : livePhotoMotionError ? (
               <div className="muted">{livePhotoMotionError}</div>
+            ) : livePhotoTranscoding ? (
+              <div className="viewer-loading-state">Transcoding live photo...</div>
             ) : (
               <div className="muted">Loading live photo…</div>
             )

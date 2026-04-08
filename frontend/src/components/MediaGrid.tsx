@@ -208,7 +208,7 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
                   ◎
                 </div>
               ) : null}
-              {(asset.media_kind === "video" || asset.has_live_photo) ? (
+              {asset.media_kind === "video" ? (
                 <button
                   className="thumb-player-button"
                   type="button"
@@ -216,8 +216,8 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
                     event.stopPropagation();
                     onSelect(asset.id);
                   }}
-                  aria-label={asset.media_kind === "video" ? "Play video" : "Play live photo"}
-                  title={asset.media_kind === "video" ? "Play video" : "Play live photo"}
+                  aria-label="Play video"
+                  title="Play video"
                 >
                   <span className="thumb-player-icon" aria-hidden="true">
                     ▶
