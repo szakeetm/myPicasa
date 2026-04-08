@@ -22,8 +22,10 @@ export function App() {
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [thumbnailPreloadProgress, setThumbnailPreloadProgress] = useState<
     | {
-        completed: number;
-        total: number;
+        thumbsCompleted: number;
+        thumbsTotal: number;
+        previewsCompleted: number;
+        previewsTotal: number;
       }
     | undefined
   >();
@@ -285,27 +287,37 @@ export function App() {
     setThumbnailPreloadRunId((value) => value + 1);
     setThumbnailPreloadActive(true);
     setThumbnailPreloadProgress({
-      completed: 0,
-      total: state.assets.length,
+      thumbsCompleted: 0,
+      thumbsTotal: state.assets.length,
+      previewsCompleted: 0,
+      previewsTotal: state.assets.length,
     });
   }
 
   function handleThumbnailPreloadProgress(
     progress?: {
-      completed: number;
-      total: number;
+      thumbsCompleted: number;
+      thumbsTotal: number;
+      previewsCompleted: number;
+      previewsTotal: number;
     },
   ) {
     setThumbnailPreloadProgress((current) => {
       if (
-        current?.completed === progress?.completed &&
-        current?.total === progress?.total
+        current?.thumbsCompleted === progress?.thumbsCompleted &&
+        current?.thumbsTotal === progress?.thumbsTotal &&
+        current?.previewsCompleted === progress?.previewsCompleted &&
+        current?.previewsTotal === progress?.previewsTotal
       ) {
         return current;
       }
       return progress;
     });
-    if (progress && progress.completed >= progress.total) {
+    if (
+      progress &&
+      progress.thumbsCompleted >= progress.thumbsTotal &&
+      progress.previewsCompleted >= progress.previewsTotal
+    ) {
       setThumbnailPreloadActive(false);
     }
   }

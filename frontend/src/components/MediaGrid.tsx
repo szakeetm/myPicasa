@@ -15,8 +15,10 @@ type MediaGridProps = {
     runId: number;
   };
   onThumbnailPreloadProgress?: (value?: {
-    completed: number;
-    total: number;
+    thumbsCompleted: number;
+    thumbsTotal: number;
+    previewsCompleted: number;
+    previewsTotal: number;
   }) => void;
 };
 
@@ -57,11 +59,15 @@ export function MediaGrid({
     at: 0,
   });
   const lastProgressLogRef = useRef<{
-    completed: number;
-    total: number;
+    thumbsCompleted: number;
+    thumbsTotal: number;
+    previewsCompleted: number;
+    previewsTotal: number;
   }>({
-    completed: -1,
-    total: -1,
+    thumbsCompleted: -1,
+    thumbsTotal: -1,
+    previewsCompleted: -1,
+    previewsTotal: -1,
   });
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
@@ -87,7 +93,12 @@ export function MediaGrid({
     requestInFlightRef.current = false;
     previewRequestInFlightRef.current = false;
     lastBatchLogRef.current = { signature: "", at: 0 };
-    lastProgressLogRef.current = { completed: -1, total: -1 };
+    lastProgressLogRef.current = {
+      thumbsCompleted: -1,
+      thumbsTotal: -1,
+      previewsCompleted: -1,
+      previewsTotal: -1,
+    };
   }, [assets, thumbnailResetKey, thumbnailSize]);
 
   useEffect(() => {
@@ -383,36 +394,66 @@ export function MediaGrid({
 
   useEffect(() => {
     if (!thumbnailPreload?.active) {
-      lastProgressLogRef.current = { completed: -1, total: -1 };
+      lastProgressLogRef.current = {
+        thumbsCompleted: -1,
+        thumbsTotal: -1,
+        previewsCompleted: -1,
+        previewsTotal: -1,
+      };
       onThumbnailPreloadProgress?.(undefined);
       return;
     }
 
-    const total = assets.length;
-    const completed = assets.filter((asset) => {
+    const thumbsTotal = assets.length;
+    const thumbsCompleted = assets.filter((asset) => {
       const state = thumbs[asset.id];
       return state?.status === "ready" || state?.status === "unavailable";
     }).length;
+    const previewsTotal = assets.length;
+    const previewsCompleted = assets.filter((asset) => {
+      const state = thumbs[asset.id];
+      return state?.previewStatus === "ready" || state?.previewStatus === "unavailable";
+    }).length;
 
     const previous = lastProgressLogRef.current;
-    const changed = completed !== previous.completed || total !== previous.total;
+    const changed =
+      thumbsCompleted !== previous.thumbsCompleted ||
+      thumbsTotal !== previous.thumbsTotal ||
+      previewsCompleted !== previous.previewsCompleted ||
+      previewsTotal !== previous.previewsTotal;
     if (!changed) {
       return;
     }
 
-    lastProgressLogRef.current = { completed, total };
+    lastProgressLogRef.current = {
+      thumbsCompleted,
+      thumbsTotal,
+      previewsCompleted,
+      previewsTotal,
+    };
 
     if (
-      completed === total ||
-      previous.completed < 0 ||
-      completed === 0 ||
-      completed - previous.completed >= 24 ||
-      total !== previous.total
+      (thumbsCompleted === thumbsTotal && previewsCompleted === previewsTotal) ||
+      previous.thumbsCompleted < 0 ||
+      thumbsCompleted === 0 ||
+      previewsCompleted === 0 ||
+      thumbsCompleted - previous.thumbsCompleted >= 24 ||
+      previewsCompleted - previous.previewsCompleted >= 24 ||
+      thumbsTotal !== previous.thumbsTotal ||
+      previewsTotal !== previous.previewsTotal
     ) {
-      void logClient("grid", `thumb preload progress completed=${completed} total=${total}`);
+      void logClient(
+        "grid",
+        `media preload progress thumbs=${thumbsCompleted}/${thumbsTotal} previews=${previewsCompleted}/${previewsTotal}`,
+      );
     }
 
-    onThumbnailPreloadProgress?.({ completed, total });
+    onThumbnailPreloadProgress?.({
+      thumbsCompleted,
+      thumbsTotal,
+      previewsCompleted,
+      previewsTotal,
+    });
   }, [assets, onThumbnailPreloadProgress, thumbnailPreload?.active, thumbs]);
 
   if (assets.length === 0) {
