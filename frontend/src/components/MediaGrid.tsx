@@ -71,6 +71,16 @@ export function MediaGrid({
   });
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+  const bootstrapVisibleIds = useMemo(
+    () => assets.slice(0, Math.max(columns * 3, 12)).map((asset) => asset.id),
+    [assets, columns],
+  );
+  const effectiveVisibleIdSet = useMemo(() => {
+    if (visibleIdSet.size > 0) {
+      return visibleIdSet;
+    }
+    return new Set(bootstrapVisibleIds);
+  }, [bootstrapVisibleIds, visibleIdSet]);
   const thumbnailSize = useMemo(() => {
     const devicePixelRatio =
       typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
@@ -117,7 +127,7 @@ export function MediaGrid({
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
           return (
-            visibleIdSet.has(asset.id) &&
+            effectiveVisibleIdSet.has(asset.id) &&
             state?.status === "ready" &&
             !state.previewStatus
           );
@@ -130,7 +140,7 @@ export function MediaGrid({
             .filter((asset) => {
               const state = thumbsRef.current[asset.id];
               return (
-                !visibleIdSet.has(asset.id) &&
+                !effectiveVisibleIdSet.has(asset.id) &&
                 state?.status === "ready" &&
                 !state.previewStatus
               );
@@ -219,7 +229,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, thumbnailPreload?.active, visibleIdSet]);
+  }, [assets, effectiveVisibleIdSet, thumbnailPreload?.active]);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -278,7 +288,7 @@ export function MediaGrid({
       const visiblePendingIds = assets
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
-          return visibleIdSet.has(asset.id) && (!state || state.status === "pending");
+          return effectiveVisibleIdSet.has(asset.id) && (!state || state.status === "pending");
         })
         .slice(0, 12)
         .map((asset) => asset.id);
@@ -287,7 +297,7 @@ export function MediaGrid({
         ? assets
             .filter((asset) => {
               const state = thumbsRef.current[asset.id];
-              return !visibleIdSet.has(asset.id) && (!state || state.status === "pending");
+              return !effectiveVisibleIdSet.has(asset.id) && (!state || state.status === "pending");
             })
             .slice(0, Math.max(0, 12 - visiblePendingIds.length))
             .map((asset) => asset.id)
@@ -381,12 +391,13 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, thumbnailPreload?.active, thumbnailSize, visibleIdSet]);
+  }, [assets, effectiveVisibleIdSet, thumbnailPreload?.active, thumbnailSize]);
 
   useEffect(() => {
-    const firstVisibleAsset = assets.find((asset) => visibleIdSet.has(asset.id)) ?? assets[0];
+    const firstVisibleAsset =
+      assets.find((asset) => effectiveVisibleIdSet.has(asset.id)) ?? assets[0];
     onLeadingDateChange?.(firstVisibleAsset?.taken_at_utc ?? undefined);
-  }, [assets, onLeadingDateChange, visibleIdSet]);
+  }, [assets, effectiveVisibleIdSet, onLeadingDateChange]);
 
   useEffect(() => {
     if (!thumbnailPreload?.active) {
