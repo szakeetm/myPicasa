@@ -28,8 +28,8 @@ export const api = {
     invoke<AssetListResponse>("search_assets", { request }),
   getAssetDetail: (assetId: number) =>
     invoke<AssetDetail>("get_asset_detail", { assetId }),
-  loadViewerFrame: (assetId: number) =>
-    invoke<string | null>("load_viewer_frame", { assetId }),
+  loadViewerFrame: (assetId: number, preferOriginal?: boolean) =>
+    invoke<string | null>("load_viewer_frame", { assetId, preferOriginal }),
   loadViewerVideo: (assetId: number, preferOriginal?: boolean) =>
     invoke<string | null>("load_viewer_video", { assetId, preferOriginal }),
   loadLivePhotoMotion: (assetId: number, preferOriginal?: boolean) =>

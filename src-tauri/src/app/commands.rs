@@ -75,6 +75,22 @@ fn video_mime_type(path: &std::path::Path) -> &'static str {
     }
 }
 
+fn image_mime_type(path: &std::path::Path) -> &'static str {
+    match path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("png") => "image/png",
+        Some("gif") => "image/gif",
+        Some("webp") => "image/webp",
+        Some("heic") => "image/heic",
+        Some("heif") => "image/heif",
+        _ => "image/jpeg",
+    }
+}
+
 #[tauri::command]
 pub fn refresh_index(
     request: RefreshRequest,
@@ -313,18 +329,42 @@ pub fn request_thumbnails_batch(
 }
 
 #[tauri::command]
-pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
+pub fn load_viewer_frame(
+    asset_id: i64,
+    prefer_original: Option<bool>,
+    state: State<AppState>,
+) -> CommandResult<Option<String>> {
     let started = Instant::now();
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(primary_path) = detail.primary_path else {
         return Ok(None);
     };
     let (filename, file_size) = media_debug_info(&primary_path);
+    let source_path = PathBuf::from(&primary_path);
+    let prefer_original = prefer_original.unwrap_or(false);
+
+    if prefer_original {
+        let bytes = fs::read(&source_path).map_err(map_error)?;
+        let elapsed = started.elapsed().as_millis();
+        info!(
+            asset_id,
+            elapsed_ms = elapsed,
+            bytes = bytes.len(),
+            filename = %filename,
+            file_size,
+            "viewer image original-byte load ready"
+        );
+        return Ok(Some(format!(
+            "data:{};base64,{}",
+            image_mime_type(&source_path),
+            STANDARD.encode(bytes)
+        )));
+    }
 
     let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
     let working_dir = state.app_data_dir.join("working");
     match generate_viewer_image_file(
-        &PathBuf::from(primary_path),
+        &source_path,
         2400,
         &viewer_cache_dir,
         &working_dir,

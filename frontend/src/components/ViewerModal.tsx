@@ -43,6 +43,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const livePhotoObjectUrlRef = useRef<string | undefined>(undefined);
   const videoSourceLabelRef = useRef<string>("unset");
   const livePhotoSourceLabelRef = useRef<string>("unset");
+  const imageSourceLabelRef = useRef<string>("unset");
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
@@ -50,11 +51,9 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     isVideo &&
     typeof document !== "undefined" &&
     typeof document.fullscreenEnabled !== "undefined";
-  const primaryPath = asset?.primary_path ? convertFileSrc(asset.primary_path) : undefined;
   const livePhotoPath = asset?.live_photo_video_path
     ? convertFileSrc(asset.live_photo_video_path)
     : undefined;
-  const canUsePrimaryImageDirectly = isDirectImagePath(asset?.primary_path);
   const shouldPreferOriginalVideoBytes = shouldPreferOriginalVideoBytesForPath(asset?.primary_path);
   const shouldPreferOriginalLivePhotoBytes = shouldPreferOriginalVideoBytesForPath(
     asset?.live_photo_video_path,
@@ -275,29 +274,21 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setNaturalSize(undefined);
       return;
     }
-    if (!forceRenderedFrame && canUsePrimaryImageDirectly && primaryPath) {
-      void logClient(
-        "viewer.image",
-        `asset ${assetId} using direct image path ${asset?.primary_path ?? "unknown"}`,
-      );
-      setImageSrc(primaryPath);
-      setImageError(undefined);
-      return;
-    }
-
-    void logClient(
-      "viewer.image",
-      `asset ${assetId} using rendered image fallback direct=${String(canUsePrimaryImageDirectly)} forced=${String(forceRenderedFrame)} path=${asset?.primary_path ?? "unknown"}`,
-    );
     setImageSrc(undefined);
     setImageError(undefined);
+    const preferOriginal = !forceRenderedFrame;
+    imageSourceLabelRef.current = preferOriginal ? "original" : "rendered";
+    void logClient(
+      "viewer.image",
+      `asset ${assetId} loading backend image source=${imageSourceLabelRef.current} path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
+    );
 
     void api
-      .loadViewerFrame(assetId)
+      .loadViewerFrame(assetId, preferOriginal)
       .then((src) => {
         if (cancelled) return;
         if (src) {
-          setImageSrc(src.startsWith("data:") ? src : convertFileSrc(src));
+          setImageSrc(src);
           setImageError(undefined);
         } else {
           setImageSrc(undefined);
@@ -314,7 +305,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     return () => {
       cancelled = true;
     };
-  }, [assetId, canUsePrimaryImageDirectly, forceRenderedFrame, isPhoto, primaryPath]);
+  }, [assetId, asset?.primary_path, forceRenderedFrame, isPhoto]);
 
   async function fallbackVideoToBackend() {
     if (!assetId || videoFallbackAttempted) {
@@ -623,7 +614,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                 onLoad={(event) => {
                   void logClient(
                     "viewer.image",
-                    `asset ${assetId} image loaded source=${imageSrc?.startsWith("data:") ? "rendered" : "direct"} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
+                    `asset ${assetId} image loaded source=${imageSourceLabelRef.current} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
                   );
                   setNaturalSize({
                     width: event.currentTarget.naturalWidth,
@@ -636,10 +627,10 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                   }
                 }}
                 onError={() => {
-                  if (!forceRenderedFrame && canUsePrimaryImageDirectly) {
+                  if (!forceRenderedFrame) {
                     void logClient(
                       "viewer.image",
-                      `asset ${assetId} direct image failed, switching to rendered fallback path=${asset?.primary_path ?? "unknown"}`,
+                      `asset ${assetId} backend original image failed, switching to rendered fallback path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
                       "error",
                     );
                     setForceRenderedFrame(true);
@@ -719,9 +710,11 @@ function describeVideoSupport(src?: string | null) {
   return `requested=${requestedType} canPlayType(mp4=${mp4}, mov=${mov}, webm=${webm})`;
 }
 
-function isDirectImagePath(path?: string | null) {
-  const extension = path?.split(".").pop()?.toLowerCase();
-  return extension !== undefined && ["jpg", "jpeg", "png", "webp", "gif"].includes(extension);
+function describeImageSupport(src?: string | null) {
+  if (typeof navigator === "undefined") {
+    return `image support unknown format=${inferImageFormat(src) ?? "unknown"}`;
+  }
+  return `format=${inferImageFormat(src) ?? "unknown"} userAgent=${navigator.userAgent}`;
 }
 
 function shouldPreferOriginalVideoBytesForPath(path?: string | null) {
@@ -746,6 +739,12 @@ function inferVideoMimeType(src?: string | null) {
     default:
       return undefined;
   }
+}
+
+function inferImageFormat(src?: string | null) {
+  if (!src) return undefined;
+  const extension = src.split(".").pop()?.toLowerCase();
+  return extension;
 }
 
 function formatFileSize(bytes: number) {
