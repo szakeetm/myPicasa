@@ -13,7 +13,8 @@ use crate::{
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
     media::thumb::{
-        clear_viewer_render_cache, generate_thumbnail, generate_viewer_image_file,
+        clear_viewer_render_cache, generate_thumbnail, generate_viewer_image,
+        generate_viewer_image_file,
         generate_viewer_video, probe_primary_video_codec, viewer_render_cache_stats,
     },
     models::{
@@ -91,6 +92,16 @@ fn image_mime_type(path: &std::path::Path) -> &'static str {
         Some("heif") => "image/heif",
         _ => "image/jpeg",
     }
+}
+
+fn image_requires_backend_orientation(path: &std::path::Path) -> bool {
+    matches!(
+        path.extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase())
+            .as_deref(),
+        Some("jpg" | "jpeg" | "heic" | "heif" | "tif" | "tiff")
+    )
 }
 
 #[tauri::command]
@@ -357,6 +368,17 @@ pub fn load_viewer_frame(
     let prefer_original = prefer_original.unwrap_or(false);
 
     if prefer_original {
+        if image_requires_backend_orientation(&source_path) {
+            let working_dir = state.app_data_dir.join("working");
+            if let Some(bytes) =
+                generate_viewer_image(&source_path, u32::MAX, &working_dir).map_err(map_error)?
+            {
+                return Ok(Some(format!(
+                    "data:image/jpeg;base64,{}",
+                    STANDARD.encode(bytes)
+                )));
+            }
+        }
         let bytes = fs::read(&source_path).map_err(map_error)?;
         return Ok(Some(format!(
             "data:{};base64,{}",

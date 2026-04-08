@@ -76,6 +76,15 @@ export function MediaGrid({
     previewsCompleted: -1,
     previewsTotal: -1,
   });
+  const lastIdleLogRef = useRef<{
+    thumbSignature: string;
+    previewSignature: string;
+    at: number;
+  }>({
+    thumbSignature: "",
+    previewSignature: "",
+    at: 0,
+  });
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
   const bootstrapVisibleIds = useMemo(
@@ -116,6 +125,11 @@ export function MediaGrid({
       previewsCompleted: -1,
       previewsTotal: -1,
     };
+    lastIdleLogRef.current = {
+      thumbSignature: "",
+      previewSignature: "",
+      at: 0,
+    };
   }, [thumbnailResetKey, thumbnailSize]);
 
   useEffect(() => {
@@ -142,11 +156,90 @@ export function MediaGrid({
     thumbsRef.current = thumbs;
   }, [thumbs]);
 
+  function summarizeThumbStates() {
+    let ready = 0;
+    let unavailable = 0;
+    let pending = 0;
+    let missing = 0;
+
+    for (const asset of assets) {
+      const status = thumbsRef.current[asset.id]?.status;
+      if (status === "ready") {
+        ready += 1;
+      } else if (status === "unavailable") {
+        unavailable += 1;
+      } else if (status === "pending") {
+        pending += 1;
+      } else {
+        missing += 1;
+      }
+    }
+
+    return { ready, unavailable, pending, missing };
+  }
+
+  function summarizePreviewStates() {
+    let ready = 0;
+    let unavailable = 0;
+    let pending = 0;
+    let waitingForThumb = 0;
+    let missing = 0;
+
+    for (const asset of assets) {
+      const state = thumbsRef.current[asset.id];
+      const previewStatus = state?.previewStatus;
+      if (previewStatus === "ready") {
+        ready += 1;
+      } else if (previewStatus === "unavailable") {
+        unavailable += 1;
+      } else if (previewStatus === "pending") {
+        pending += 1;
+      } else if (state?.status === "ready") {
+        missing += 1;
+      } else {
+        waitingForThumb += 1;
+      }
+    }
+
+    return { ready, unavailable, pending, waitingForThumb, missing };
+  }
+
+  function logIdleSnapshot(kind: "thumb" | "preview", reason: string) {
+    if (!thumbnailPreload?.active || assets.length === 0) {
+      return;
+    }
+
+    const thumbSummary = summarizeThumbStates();
+    const previewSummary = summarizePreviewStates();
+    const signature = `${reason}|t:${thumbSummary.ready}/${thumbSummary.unavailable}/${thumbSummary.pending}/${thumbSummary.missing}|p:${previewSummary.ready}/${previewSummary.unavailable}/${previewSummary.pending}/${previewSummary.waitingForThumb}/${previewSummary.missing}|v:${visibleIds.length}|a:${assets.length}`;
+    const now = Date.now();
+    const previousSignature =
+      kind === "thumb" ? lastIdleLogRef.current.thumbSignature : lastIdleLogRef.current.previewSignature;
+
+    if (previousSignature === signature && now - lastIdleLogRef.current.at < 5000) {
+      return;
+    }
+
+    lastIdleLogRef.current = {
+      ...lastIdleLogRef.current,
+      at: now,
+      ...(kind === "thumb"
+        ? { thumbSignature: signature }
+        : { previewSignature: signature }),
+    };
+
+    void logClient(
+      "grid",
+      `${kind} preload idle reason=${reason} visible=${visibleIds.length}/${assets.length} thumbs ready=${thumbSummary.ready} unavailable=${thumbSummary.unavailable} pending=${thumbSummary.pending} missing=${thumbSummary.missing} previews ready=${previewSummary.ready} unavailable=${previewSummary.unavailable} pending=${previewSummary.pending} waiting_for_thumb=${previewSummary.waitingForThumb} missing=${previewSummary.missing}`,
+    );
+  }
+
   useEffect(() => {
     let disposed = false;
 
     async function processPreviewPass() {
       if (previewRequestInFlightRef.current) {
+        logIdleSnapshot("preview", "request_in_flight");
         return;
       }
 
@@ -178,6 +271,7 @@ export function MediaGrid({
 
       const targetIds = [...visiblePreviewIds, ...preloadPreviewIds];
       if (targetIds.length === 0) {
+        logIdleSnapshot("preview", "no_preview_targets");
         return;
       }
 
@@ -333,6 +427,7 @@ export function MediaGrid({
 
     async function processBatch() {
       if (requestInFlightRef.current) {
+        logIdleSnapshot("thumb", "request_in_flight");
         return;
       }
 
@@ -356,6 +451,7 @@ export function MediaGrid({
 
       const requestIds = [...visiblePendingIds, ...preloadPendingIds];
       if (requestIds.length === 0) {
+        logIdleSnapshot("thumb", "no_thumb_targets");
         return;
       }
 

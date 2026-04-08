@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use image::{ImageReader, codecs::jpeg::JpegEncoder};
+use image::{DynamicImage, ImageDecoder, ImageReader, codecs::jpeg::JpegEncoder};
 
 use crate::util::errors::AppError;
 
@@ -343,7 +343,8 @@ fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<V
 }
 
 fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::DynamicImage, AppError> {
-    match ImageReader::open(path)?.with_guessed_format()?.decode() {
+    let reader = ImageReader::open(path)?.with_guessed_format()?;
+    match decode_with_orientation(reader) {
         Ok(image) => Ok(image),
         Err(error) => {
             let extension = path
@@ -359,6 +360,14 @@ fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::
             Err(AppError::Image(error))
         }
     }
+}
+
+fn decode_with_orientation(reader: ImageReader<std::io::BufReader<std::fs::File>>) -> Result<DynamicImage, image::ImageError> {
+    let mut decoder = reader.into_decoder()?;
+    let orientation = decoder.orientation()?;
+    let mut image = DynamicImage::from_decoder(decoder)?;
+    image.apply_orientation(orientation);
+    Ok(image)
 }
 
 fn probe_video_seek_seconds(path: &Path) -> Option<f64> {
