@@ -51,6 +51,8 @@ export function App() {
     void logClient("ui.bootstrap", "frontend booted");
     void refreshDebugSurfaces();
     void refreshAllAssets();
+    // Initial bootstrap is intentionally one-shot.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function handleRefreshIndex() {
