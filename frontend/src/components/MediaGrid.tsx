@@ -11,8 +11,6 @@ type MediaGridProps = {
   onSelect: (assetId: number) => void;
 };
 
-const ROW_HEIGHT = 228;
-
 type ThumbnailState = {
   status: "pending" | "ready" | "unavailable";
   src?: string | null;
@@ -31,6 +29,13 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const [requestTick, setRequestTick] = useState(0);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const columns = columnCount(width);
+  const rowHeight = useMemo(() => {
+    const horizontalPadding = 16;
+    const gap = 8 * Math.max(columns - 1, 0);
+    const columnWidth = Math.max((width - horizontalPadding - gap) / columns, 120);
+    const metadataHeight = 84;
+    return Math.ceil(columnWidth + metadataHeight);
+  }, [columns, width]);
   const rows = useMemo(() => {
     const output: AssetListItem[][] = [];
     for (let index = 0; index < assets.length; index += columns) {
@@ -52,7 +57,7 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const rowVirtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
-    estimateSize: () => ROW_HEIGHT,
+    estimateSize: () => rowHeight,
     overscan: 4,
   });
 
@@ -94,6 +99,15 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
       await logClient("grid", `requesting batch of ${pending.length} visible thumbnails`);
       try {
         const batch = await api.requestThumbnailsBatch(pending, 256);
+        const readyIds = batch.filter((item) => item.status === "ready").map((item) => item.asset_id);
+        const pendingIds = batch.filter((item) => item.status === "pending").map((item) => item.asset_id);
+        const unavailableIds = batch.filter((item) => item.status === "unavailable").map((item) => item.asset_id);
+        console.info("thumbnail_batch_client", {
+          requested: pending,
+          readyIds,
+          pendingIds,
+          unavailableIds,
+        });
         setThumbs((current) => {
           const next = { ...current };
           for (const item of batch) {

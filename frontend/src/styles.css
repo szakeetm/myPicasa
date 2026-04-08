@@ -210,11 +210,14 @@ button {
   overflow: hidden;
   display: flex;
   flex-direction: column;
-  min-height: 192px;
+  min-height: 0;
+  height: fit-content;
 }
 
 .thumb {
   aspect-ratio: 1 / 1;
+  width: 100%;
+  flex: 0 0 auto;
   background:
     linear-gradient(135deg, rgba(33, 80, 186, 0.16), rgba(248, 207, 110, 0.18)),
     rgba(90, 67, 40, 0.08);
