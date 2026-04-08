@@ -197,6 +197,16 @@ export function App() {
       return;
     }
 
+    state.setAssets([]);
+    state.setSelectedAsset(undefined);
+    state.setAlbums([]);
+    state.setDiagnostics([]);
+    state.setLogs([]);
+    state.setCacheStats(undefined);
+    state.setImportStatus(undefined);
+    state.setSelectedAlbumId(undefined);
+    state.setViewMode("timeline");
+
     await api.resetLocalDatabase();
     window.location.reload();
   }
