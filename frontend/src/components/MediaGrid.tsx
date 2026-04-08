@@ -11,7 +11,7 @@ type MediaGridProps = {
   onSelect: (assetId: number) => void;
 };
 
-const ROW_HEIGHT = 260;
+const ROW_HEIGHT = 228;
 
 function columnCount(width: number) {
   if (width < 640) return 1;
