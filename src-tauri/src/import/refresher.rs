@@ -1,4 +1,5 @@
 use std::collections::{HashMap, HashSet};
+use std::sync::atomic::Ordering;
 use std::time::Instant;
 
 use rayon::current_num_threads;
@@ -12,6 +13,7 @@ use crate::{
         sidecar::{parse_sidecar, takeout_match_score},
         validator::validate_import_with_progress,
     },
+    media::thumb::clear_viewer_render_cache,
     models::{ImportProgress, ParsedSidecar, RefreshRequest},
     util::errors::AppError,
 };
@@ -125,24 +127,47 @@ pub fn refresh_takeout_index(
     }
 
     progress.phase = "validating".to_string();
-    progress.message = Some("ingress validation 1/3: pairing live photos".to_string());
+    progress.message = Some("ingress cleanup 1/4: removing missing files".to_string());
     *state.import_status.lock() = Some(progress.clone());
 
+    progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
+    let (deleted_asset_ids, reindexed_asset_ids) =
+        state.db.reconcile_assets_after_file_deletions()?;
+    progress.assets_deleted = deleted_asset_ids.len() as u32;
+
+    for asset_id in reindexed_asset_ids {
+        state.db.replace_search_row(asset_id)?;
+    }
+
+    if progress.files_deleted > 0 || progress.assets_deleted > 0 {
+        clear_deleted_asset_caches(state)?;
+        state.db.insert_log(
+            "info",
+            "import.cleanup",
+            &format!(
+                "removed {} files and {} assets; cleared derived caches",
+                progress.files_deleted, progress.assets_deleted
+            ),
+            None,
+        )?;
+    }
+
+    progress.message = Some("ingress cleanup 2/4: pairing live photos".to_string());
+    *state.import_status.lock() = Some(progress.clone());
     attach_live_photo_pairs(state, &scans)?;
 
-    progress.message = Some("ingress validation 2/3: merging duplicate assets".to_string());
+    progress.message = Some("ingress cleanup 3/4: merging duplicate assets".to_string());
     *state.import_status.lock() = Some(progress.clone());
     merge_duplicate_assets_by_hash(state, &scans)?;
 
-    progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
     progress.message = Some(format!(
-        "ingress validation 3/3: checked 0 / {} scans",
+        "ingress validation 4/4: checked 0 / {} scans",
         scans.len()
     ));
     *state.import_status.lock() = Some(progress.clone());
     validate_import_with_progress(&state.db, import_id, &scans, |processed, total| {
         progress.message = Some(format!(
-            "ingress validation 3/3: checked {processed} / {total} scans"
+            "ingress validation 4/4: checked {processed} / {total} scans"
         ));
         *state.import_status.lock() = Some(progress.clone());
     })?;
@@ -179,6 +204,16 @@ pub fn refresh_takeout_index(
 
 fn should_publish_progress(index: usize, total: usize) -> bool {
     index == 0 || index + 1 == total || (index + 1) % 100 == 0
+}
+
+fn clear_deleted_asset_caches(state: &AppState) -> Result<(), AppError> {
+    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
+    state.inflight_thumbnails.lock().clear();
+    state.failed_thumbnails.lock().clear();
+    state.thumbnail_cache.lock().clear();
+    state.preview_cache.lock().clear();
+    clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache"))?;
+    Ok(())
 }
 
 fn progress_message(progress: &ImportProgress) -> String {

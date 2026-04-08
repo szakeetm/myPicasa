@@ -24,6 +24,7 @@ pub trait DatabaseQueries {
     fn finish_import(&self, import: &ImportProgress) -> Result<(), AppError>;
     fn upsert_file_entry(&self, import_id: i64, scan: &FileScanRecord) -> Result<i64, AppError>;
     fn soft_delete_missing_files(&self, import_id: i64, roots: &[String]) -> Result<u32, AppError>;
+    fn reconcile_assets_after_file_deletions(&self) -> Result<(Vec<i64>, Vec<i64>), AppError>;
     fn upsert_album(&self, source_path: &str) -> Result<i64, AppError>;
     fn upsert_asset_for_file(
         &self,
@@ -121,7 +122,7 @@ impl DatabaseQueries for super::Database {
     }
 
     fn upsert_file_entry(&self, import_id: i64, scan: &FileScanRecord) -> Result<i64, AppError> {
-        self.with_connection(|conn| {
+        let (file_id, should_log_update) = self.with_connection(|conn| {
             let existing = conn
                 .query_row(
                     "SELECT id, file_size, mtime_utc FROM file_entries WHERE path = ?1",
@@ -161,10 +162,7 @@ impl DatabaseQueries for super::Database {
                         now
                     ],
                 )?;
-                if old_size != scan.file_size || old_mtime != scan.mtime_utc {
-                    self.insert_log("debug", "import.file", &format!("updated {}", scan.path), None)?;
-                }
-                Ok(id)
+                Ok((id, old_size != scan.file_size || old_mtime != scan.mtime_utc))
             } else {
                 conn.execute(
                     "INSERT INTO file_entries
@@ -187,9 +185,15 @@ impl DatabaseQueries for super::Database {
                         now
                     ],
                 )?;
-                Ok(conn.last_insert_rowid())
+                Ok((conn.last_insert_rowid(), false))
             }
-        })
+        })?;
+
+        if should_log_update {
+            self.insert_log("debug", "import.file", &format!("updated {}", scan.path), None)?;
+        }
+
+        Ok(file_id)
     }
 
     fn soft_delete_missing_files(&self, import_id: i64, roots: &[String]) -> Result<u32, AppError> {
@@ -203,6 +207,76 @@ impl DatabaseQueries for super::Database {
                 )? as u32;
             }
             Ok(count)
+        })
+    }
+
+    fn reconcile_assets_after_file_deletions(&self) -> Result<(Vec<i64>, Vec<i64>), AppError> {
+        self.with_connection(|conn| {
+            let mut stmt =
+                conn.prepare("SELECT id, primary_file_id FROM assets WHERE is_deleted = 0")?;
+            let assets = stmt
+                .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            let now = utc_now();
+            let mut deleted_asset_ids = Vec::new();
+            let mut reindexed_asset_ids = Vec::new();
+
+            for (asset_id, primary_file_id) in assets {
+                let replacement = conn
+                    .query_row(
+                        "SELECT f.id, f.filename
+                         FROM asset_files af
+                         JOIN file_entries f ON f.id = af.file_id
+                         WHERE af.asset_id = ?1
+                           AND af.role != 'live_photo_video'
+                           AND f.is_deleted = 0
+                         ORDER BY CASE af.role
+                             WHEN 'primary' THEN 0
+                             WHEN 'original' THEN 1
+                             WHEN 'edited' THEN 2
+                             WHEN 'duplicate' THEN 3
+                             ELSE 4
+                         END,
+                         f.id
+                         LIMIT 1",
+                        params![asset_id],
+                        |row| Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?)),
+                    )
+                    .optional()?;
+
+                if let Some((replacement_file_id, replacement_filename)) = replacement {
+                    if replacement_file_id != primary_file_id {
+                        conn.execute(
+                            "UPDATE assets
+                             SET primary_file_id = ?2, title = ?3, updated_at = ?4
+                             WHERE id = ?1",
+                            params![asset_id, replacement_file_id, replacement_filename, now],
+                        )?;
+                        reindexed_asset_ids.push(asset_id);
+                    }
+                    continue;
+                }
+
+                conn.execute(
+                    "DELETE FROM search_fts WHERE asset_id = ?1",
+                    params![asset_id],
+                )?;
+                conn.execute(
+                    "DELETE FROM asset_relationships
+                     WHERE src_asset_id = ?1 OR dst_asset_id = ?1",
+                    params![asset_id],
+                )?;
+                conn.execute(
+                    "UPDATE assets
+                     SET is_deleted = 1, updated_at = ?2
+                     WHERE id = ?1",
+                    params![asset_id, now],
+                )?;
+                deleted_asset_ids.push(asset_id);
+            }
+
+            Ok((deleted_asset_ids, reindexed_asset_ids))
         })
     }
 
@@ -259,9 +333,18 @@ impl DatabaseQueries for super::Database {
             if let Some(asset_id) = existing {
                 conn.execute(
                     "UPDATE assets
-                     SET media_kind = ?2, title = ?3, taken_at_utc = ?4, duration_ms = ?5, updated_at = ?6
+                     SET primary_file_id = ?2, media_kind = ?3, title = ?4, taken_at_utc = ?5,
+                         duration_ms = ?6, is_deleted = 0, updated_at = ?7
                      WHERE id = ?1",
-                    params![asset_id, scan.candidate_type, title, taken_at, duration_ms, utc_now()],
+                    params![
+                        asset_id,
+                        file_id,
+                        scan.candidate_type,
+                        title,
+                        taken_at,
+                        duration_ms,
+                        utc_now()
+                    ],
                 )?;
                 Ok(asset_id)
             } else {
