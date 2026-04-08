@@ -69,18 +69,25 @@ export function App() {
   }
 
   async function handleBrowseRoot() {
-    const selected = await open({
-      directory: true,
-      multiple: false,
-      title: "Choose Google Photos Takeout root",
-    });
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose Google Photos Takeout root",
+      });
 
-    if (!selected || Array.isArray(selected)) {
-      return;
+      if (!selected || Array.isArray(selected)) {
+        await logClient("ui.import", "browse dialog cancelled");
+        return;
+      }
+
+      state.setRootsInput(selected);
+      await logClient("ui.import", `selected takeout root ${selected}`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      await logClient("ui.import", `browse dialog failed: ${message}`, "error");
+      window.alert(`Browse failed: ${message}`);
     }
-
-    state.setRootsInput(selected);
-    await logClient("ui.import", `selected takeout root ${selected}`);
   }
 
   async function handleSelectAlbum(albumId: number) {
