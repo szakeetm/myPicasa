@@ -31,4 +31,28 @@ impl Database {
         let guard = self.conn.lock().expect("database mutex poisoned");
         work(&guard)
     }
+
+    pub fn reset(&self) -> Result<(), AppError> {
+        let guard = self.conn.lock().expect("database mutex poisoned");
+        guard.execute_batch(
+            "
+            PRAGMA foreign_keys = OFF;
+            DELETE FROM album_assets;
+            DELETE FROM asset_relationships;
+            DELETE FROM asset_files;
+            DELETE FROM sidecar_metadata;
+            DELETE FROM ingress_diagnostics;
+            DELETE FROM search_fts;
+            DELETE FROM assets;
+            DELETE FROM file_entries;
+            DELETE FROM albums;
+            DELETE FROM imports;
+            DELETE FROM app_logs;
+            DELETE FROM sqlite_sequence;
+            PRAGMA foreign_keys = ON;
+            ",
+        )?;
+        schema::apply(&guard)?;
+        Ok(())
+    }
 }

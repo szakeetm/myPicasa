@@ -152,6 +152,18 @@ pub fn record_client_log(
     Ok(())
 }
 
+#[tauri::command]
+pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
+    state.db.reset().map_err(map_error)?;
+    *state.import_status.lock() = None;
+    state.thumbnail_cache.lock().clear();
+    state
+        .db
+        .insert_log("warning", "reset", "local database reset to default state", None)
+        .map_err(map_error)?;
+    Ok(())
+}
+
 pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
         refresh_index,
@@ -167,6 +179,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_live_photo_pair,
         get_cache_stats,
         get_recent_logs,
-        record_client_log
+        record_client_log,
+        reset_local_database
     ]
 }

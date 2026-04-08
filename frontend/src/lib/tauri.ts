@@ -36,4 +36,5 @@ export const api = {
     invoke<void>("record_client_log", { level, scope, message }),
   getLivePhotoPair: (assetId: number) =>
     invoke<string | null>("get_live_photo_pair", { assetId }),
+  resetLocalDatabase: () => invoke<void>("reset_local_database"),
 };

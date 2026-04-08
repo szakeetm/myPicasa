@@ -61,4 +61,10 @@ impl ThumbnailCache {
             thumbnail_budget_bytes: self.max_bytes as u64,
         }
     }
+
+    pub fn clear(&mut self) {
+        self.current_bytes = 0;
+        self.order.clear();
+        self.values.clear();
+    }
 }

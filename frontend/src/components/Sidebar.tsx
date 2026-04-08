@@ -8,6 +8,7 @@ type SidebarProps = {
   onRootsInputChange: (value: string) => void;
   onBrowseRoot: () => void;
   onRefresh: () => void;
+  onResetDatabase: () => void;
   onShowTimeline: () => void;
   onSelectAlbum: (albumId: number) => void;
 };
@@ -20,6 +21,7 @@ export function Sidebar({
   onRootsInputChange,
   onBrowseRoot,
   onRefresh,
+  onResetDatabase,
   onShowTimeline,
   onSelectAlbum,
 }: SidebarProps) {
@@ -71,6 +73,13 @@ export function Sidebar({
           <button className="button-secondary" onClick={onShowTimeline}>
             Timeline
           </button>
+        </div>
+        <button className="button-danger" onClick={onResetDatabase}>
+          Clear Local Database
+        </button>
+        <div className="muted">
+          Removes the local SQLite index, logs, albums, diagnostics, and cached app state.
+          Source Takeout files are not touched.
         </div>
       </div>
 

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import { open } from "@tauri-apps/plugin-dialog";
+import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { Sidebar } from "../components/Sidebar";
 import { Toolbar } from "../components/Toolbar";
@@ -142,6 +142,26 @@ export function App() {
     await logClient("ui.viewer", `opened asset ${assetId}`);
   }
 
+  async function handleResetDatabase() {
+    const accepted = await confirm(
+      "This will permanently delete the local index, logs, diagnostics, and cached app data, then reload the app. Your original Takeout files will not be modified. Continue?",
+      {
+        title: "Clear local database?",
+        kind: "warning",
+        okLabel: "Clear Database",
+        cancelLabel: "Cancel",
+      },
+    );
+
+    if (!accepted) {
+      await logClient("ui.reset", "local database reset cancelled");
+      return;
+    }
+
+    await api.resetLocalDatabase();
+    window.location.reload();
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -152,6 +172,7 @@ export function App() {
         onRootsInputChange={state.setRootsInput}
         onBrowseRoot={handleBrowseRoot}
         onRefresh={handleRefreshIndex}
+        onResetDatabase={handleResetDatabase}
         onShowTimeline={handleShowTimeline}
         onSelectAlbum={handleSelectAlbum}
       />
