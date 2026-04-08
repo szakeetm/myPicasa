@@ -28,22 +28,32 @@ export function App() {
   >();
   const didInitFilterEffect = useRef(false);
 
-  async function refreshAllAssets() {
+  async function refreshAllAssets(options?: {
+    viewMode?: "timeline" | "album";
+    selectedAlbumId?: number;
+    query?: string;
+    mediaKind?: string;
+  }) {
+    const viewMode = options?.viewMode ?? state.viewMode;
+    const selectedAlbumId =
+      options && "selectedAlbumId" in options ? options.selectedAlbumId : state.selectedAlbumId;
+    const query = options?.query ?? state.query;
+    const mediaKind = options?.mediaKind ?? state.mediaKind;
     const request: AssetListRequest = {
       limit: 400,
-      query: state.query || undefined,
-      media_kind: state.mediaKind || undefined,
+      query: query || undefined,
+      media_kind: mediaKind || undefined,
     };
 
     const response =
-      state.viewMode === "album" && state.selectedAlbumId
-        ? await api.listAssetsByAlbum(state.selectedAlbumId, request)
-        : state.query
+      viewMode === "album" && selectedAlbumId
+        ? await api.listAssetsByAlbum(selectedAlbumId, request)
+        : query
           ? await api.searchAssets(request)
           : await api.listAssetsByDate(request);
     state.setAssets(response.items);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
-    await logClient("ui.refresh", `loaded ${response.items.length} assets in ${state.viewMode} mode`);
+    await logClient("ui.refresh", `loaded ${response.items.length} assets in ${viewMode} mode`);
   }
 
   async function refreshDebugSurfaces() {
@@ -177,14 +187,20 @@ export function App() {
     state.setSelectedAlbumId(albumId);
     state.setViewMode("album");
     await logClient("ui.album", `selected album ${albumId}`);
-    await refreshAllAssets();
+    await refreshAllAssets({
+      viewMode: "album",
+      selectedAlbumId: albumId,
+    });
   }
 
   async function handleShowTimeline() {
     state.setSelectedAlbumId(undefined);
     state.setViewMode("timeline");
     await logClient("ui.timeline", "switched to timeline");
-    await refreshAllAssets();
+    await refreshAllAssets({
+      viewMode: "timeline",
+      selectedAlbumId: undefined,
+    });
   }
 
   async function handleSelectAsset(assetId: number) {
