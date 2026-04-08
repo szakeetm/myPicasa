@@ -6,16 +6,21 @@ use crate::{
     util::errors::AppError,
 };
 
-pub fn validate_import(
+pub fn validate_import_with_progress<F>(
     db: &crate::db::Database,
     import_id: i64,
     scans: &[FileScanRecord],
-) -> Result<(), AppError> {
+    mut on_progress: F,
+) -> Result<(), AppError>
+where
+    F: FnMut(usize, usize),
+{
     let mut sidecars = 0_usize;
     let mut unmatched = Vec::new();
     let mut duplicate_hashes = HashSet::new();
+    let total = scans.len();
 
-    for scan in scans {
+    for (index, scan) in scans.iter().enumerate() {
         if scan.candidate_type == "json" {
             sidecars += 1;
             let sidecar = parse_sidecar(scan).ok().flatten();
@@ -50,6 +55,11 @@ pub fn validate_import(
                     "quick hash collision suggests a duplicate candidate",
                 )?;
             }
+        }
+
+        let processed = index + 1;
+        if processed == 1 || processed == total || processed % 100 == 0 {
+            on_progress(processed, total);
         }
     }
 

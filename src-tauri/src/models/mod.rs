@@ -97,6 +97,7 @@ pub struct AssetDetail {
     pub media_kind: String,
     pub display_type: String,
     pub taken_at_utc: Option<String>,
+    pub file_size: Option<i64>,
     pub width: Option<i64>,
     pub height: Option<i64>,
     pub duration_ms: Option<i64>,

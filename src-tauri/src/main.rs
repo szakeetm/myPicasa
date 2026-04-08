@@ -169,7 +169,6 @@ fn main() {
                 failed_thumbnails,
                 thumbnail_generation,
                 thumbnail_job_sender,
-                thumbnail_worker_count: worker_count,
             };
 
             state

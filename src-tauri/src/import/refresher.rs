@@ -10,7 +10,7 @@ use crate::{
     import::{
         scanner::scan_roots,
         sidecar::{parse_sidecar, takeout_match_score},
-        validator::validate_import,
+        validator::validate_import_with_progress,
     },
     models::{ImportProgress, ParsedSidecar, RefreshRequest},
     util::errors::AppError,
@@ -125,14 +125,27 @@ pub fn refresh_takeout_index(
     }
 
     progress.phase = "validating".to_string();
-    progress.message = Some("running ingress validation".to_string());
+    progress.message = Some("ingress validation 1/3: pairing live photos".to_string());
     *state.import_status.lock() = Some(progress.clone());
 
     attach_live_photo_pairs(state, &scans)?;
+
+    progress.message = Some("ingress validation 2/3: merging duplicate assets".to_string());
+    *state.import_status.lock() = Some(progress.clone());
     merge_duplicate_assets_by_hash(state, &scans)?;
 
     progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
-    validate_import(&state.db, import_id, &scans)?;
+    progress.message = Some(format!(
+        "ingress validation 3/3: checked 0 / {} scans",
+        scans.len()
+    ));
+    *state.import_status.lock() = Some(progress.clone());
+    validate_import_with_progress(&state.db, import_id, &scans, |processed, total| {
+        progress.message = Some(format!(
+            "ingress validation 3/3: checked {processed} / {total} scans"
+        ));
+        *state.import_status.lock() = Some(progress.clone());
+    })?;
 
     progress.status = "completed".to_string();
     progress.phase = "completed".to_string();
@@ -363,11 +376,11 @@ fn merge_asset_group_for_hash(
     hash: &[u8],
     media_kind: &str,
 ) -> Result<(), AppError> {
-    let merged_asset_ids = state.db.with_connection(|conn| {
+    let merged_assets = state.db.with_connection(|conn| {
         use rusqlite::{OptionalExtension, params};
 
         let mut stmt = conn.prepare(
-            "SELECT DISTINCT a.id
+            "SELECT DISTINCT a.id, f.path
              FROM assets a
              JOIN file_entries f ON f.id = a.primary_file_id
              WHERE a.is_deleted = 0
@@ -375,16 +388,18 @@ fn merge_asset_group_for_hash(
                AND f.quick_hash = ?1
              ORDER BY a.id",
         )?;
-        let asset_ids = stmt
-            .query_map(params![hash, media_kind], |row| row.get::<_, i64>(0))?
+        let assets = stmt
+            .query_map(params![hash, media_kind], |row| {
+                Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            })?
             .filter_map(Result::ok)
             .collect::<Vec<_>>();
 
-        if asset_ids.len() <= 1 {
+        if assets.len() <= 1 {
             return Ok(Vec::new());
         }
 
-        let canonical_asset_id = asset_ids[0];
+        let canonical_asset_id = assets[0].0;
         let canonical_has_sidecar = conn
             .query_row(
                 "SELECT 1 FROM sidecar_metadata WHERE asset_id = ?1 LIMIT 1",
@@ -397,7 +412,7 @@ fn merge_asset_group_for_hash(
         let mut canonical_has_sidecar = canonical_has_sidecar;
         let mut merged = Vec::new();
 
-        for duplicate_asset_id in asset_ids.into_iter().skip(1) {
+        for (duplicate_asset_id, duplicate_path) in assets.iter().skip(1) {
             conn.execute(
                 "INSERT OR IGNORE INTO album_assets (album_id, asset_id, position_hint, added_at)
                  SELECT album_id, ?1, position_hint, added_at
@@ -462,22 +477,28 @@ fn merge_asset_group_for_hash(
                  WHERE id = ?1",
                 params![duplicate_asset_id, crate::util::time::utc_now()],
             )?;
-            merged.push(duplicate_asset_id);
+            merged.push((*duplicate_asset_id, duplicate_path.clone()));
         }
 
-        Ok(std::iter::once(canonical_asset_id)
+        Ok(std::iter::once(assets[0].clone())
             .chain(merged)
             .collect::<Vec<_>>())
     })?;
 
-    if let Some(canonical_asset_id) = merged_asset_ids.first().copied() {
+    if let Some((canonical_asset_id, canonical_path)) = merged_assets.first().cloned() {
         state.db.replace_search_row(canonical_asset_id)?;
+        let merged_paths = merged_assets
+            .iter()
+            .skip(1)
+            .map(|(_, path)| format!("merged: {path}"))
+            .collect::<Vec<_>>();
         state.db.insert_log(
             "info",
             "merge",
             &format!(
-                "merged {} duplicate assets for media_kind={media_kind}",
-                merged_asset_ids.len() - 1
+                "merged {} duplicate assets for media_kind={media_kind}\nkept: {canonical_path}\n{}",
+                merged_assets.len() - 1,
+                merged_paths.join("\n")
             ),
             Some(canonical_asset_id),
         )?;

@@ -23,5 +23,4 @@ pub struct AppState {
     pub failed_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub thumbnail_generation: Arc<AtomicU64>,
     pub thumbnail_job_sender: Sender<ThumbnailJob>,
-    pub thumbnail_worker_count: usize,
 }

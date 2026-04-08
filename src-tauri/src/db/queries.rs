@@ -596,14 +596,14 @@ impl DatabaseQueries for super::Database {
     fn get_asset_detail(&self, asset_id: i64) -> Result<AssetDetail, AppError> {
         self.with_connection(|conn| {
             let detail = conn.query_row(
-                "SELECT a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, a.width, a.height, a.duration_ms,
+                "SELECT a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, f.file_size, a.width, a.height, a.duration_ms,
                         a.gps_lat, a.gps_lon, f.path, COALESCE(group_concat(DISTINCT al.name), '')
                  FROM assets a
                  JOIN file_entries f ON f.id = a.primary_file_id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
                  WHERE a.id = ?1
-                 GROUP BY a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, a.width, a.height, a.duration_ms,
+                 GROUP BY a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, f.file_size, a.width, a.height, a.duration_ms,
                           a.gps_lat, a.gps_lon, f.path",
                 params![asset_id],
                 |row| {
@@ -613,13 +613,14 @@ impl DatabaseQueries for super::Database {
                         media_kind: row.get(2)?,
                         display_type: row.get(3)?,
                         taken_at_utc: row.get(4)?,
-                        width: row.get(5)?,
-                        height: row.get(6)?,
-                        duration_ms: row.get(7)?,
-                        gps_lat: row.get(8)?,
-                        gps_lon: row.get(9)?,
-                        primary_path: row.get(10)?,
-                        albums: split_csv(row.get::<_, String>(11)?),
+                        file_size: row.get(5)?,
+                        width: row.get(6)?,
+                        height: row.get(7)?,
+                        duration_ms: row.get(8)?,
+                        gps_lat: row.get(9)?,
+                        gps_lon: row.get(10)?,
+                        primary_path: row.get(11)?,
+                        albums: split_csv(row.get::<_, String>(12)?),
                         live_photo_video_path: None,
                     })
                 },

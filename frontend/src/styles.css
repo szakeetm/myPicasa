@@ -399,6 +399,7 @@ button {
 }
 
 .viewer-image-frame {
+  width: max-content;
   min-width: 100%;
   min-height: calc(68vh - 24px);
   display: flex;
@@ -411,18 +412,17 @@ button {
   justify-content: flex-start;
 }
 
-.viewer-media img,
-.viewer-media video {
-  max-height: 68vh;
-  display: block;
-}
-
 .viewer-image-frame img {
+  display: block;
+  max-width: none;
+  max-height: none;
   height: auto;
 }
 
 .viewer-media video {
   max-width: 100%;
+  max-height: 68vh;
+  display: block;
   margin: 0 auto;
 }
 

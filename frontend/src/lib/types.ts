@@ -55,6 +55,7 @@ export type AssetDetail = {
   media_kind: string;
   display_type: string;
   taken_at_utc?: string | null;
+  file_size?: number | null;
   width?: number | null;
   height?: number | null;
   duration_ms?: number | null;

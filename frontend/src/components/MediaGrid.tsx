@@ -32,6 +32,12 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+  const thumbnailSize = useMemo(() => {
+    const devicePixelRatio =
+      typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
+    const estimatedTileWidth = Math.max(width / columns, 160);
+    return Math.min(1024, Math.max(256, Math.ceil(estimatedTileWidth * devicePixelRatio)));
+  }, [columns, width]);
 
   useEffect(() => {
     const element = parentRef.current;
@@ -42,14 +48,6 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
     return () => observer.disconnect();
   }, []);
 
-  const visibleTitles = useMemo(
-    () =>
-      assets
-        .filter((asset) => visibleIdSet.has(asset.id))
-        .map((asset) => asset.title ?? `asset-${asset.id}`),
-    [assets, visibleIdSet],
-  );
-
   useEffect(() => {
     const timer = window.setInterval(() => {
       setRequestTick((value) => value + 1);
@@ -59,7 +57,7 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
 
   useEffect(() => {
     setThumbs({});
-  }, [assets]);
+  }, [assets, thumbnailSize]);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -125,24 +123,8 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
         return next;
       });
 
-      console.info("thumbnail_visible_assets", {
-        visibleIds,
-        visibleTitles,
-      });
       try {
-        const batch = await api.requestThumbnailsBatch(pending, 256);
-        const readyIds = batch.filter((item) => item.status === "ready").map((item) => item.asset_id);
-        const pendingIds = batch.filter((item) => item.status === "pending").map((item) => item.asset_id);
-        const unavailableIds = batch.filter((item) => item.status === "unavailable").map((item) => item.asset_id);
-        console.info("thumbnail_batch_client", {
-          requested: pending,
-          readyIds,
-          pendingIds,
-          unavailableIds,
-        });
-        if (readyIds.length > 0) {
-          console.info("thumbnail_batch_client_ready", readyIds);
-        }
+        const batch = await api.requestThumbnailsBatch(pending, thumbnailSize);
         setThumbs((current) => {
           const next = { ...current };
           for (const item of batch) {
@@ -169,7 +151,7 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
     }, 150);
 
     return () => window.clearTimeout(timer);
-  }, [requestTick, thumbs, visibleIds, visibleTitles]);
+  }, [requestTick, thumbnailSize, thumbs, visibleIds]);
 
   useEffect(() => {
     const firstVisibleAsset = assets.find((asset) => visibleIdSet.has(asset.id)) ?? assets[0];

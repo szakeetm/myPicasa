@@ -30,6 +30,8 @@ export const api = {
     invoke<AssetDetail>("get_asset_detail", { assetId }),
   loadViewerFrame: (assetId: number) =>
     invoke<string | null>("load_viewer_frame", { assetId }),
+  loadViewerVideo: (assetId: number) =>
+    invoke<string | null>("load_viewer_video", { assetId }),
   requestThumbnailsBatch: (assetIds: number[], size: number) =>
     invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size }),
   requestThumbnail: (assetId: number, size: number) =>

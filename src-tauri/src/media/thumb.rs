@@ -45,7 +45,7 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<V
     }
 
     if matches!(extension.as_str(), "heic" | "heif") {
-        if let Some(bytes) = render_with_sips(path, max_dimension, 90)? {
+        if let Some(bytes) = render_with_sips_original(path, 90)? {
             return Ok(Some(bytes));
         }
     }
@@ -66,6 +66,105 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<V
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 90);
     encoder.encode_image(&fitted)?;
     Ok(Some(buffer))
+}
+
+pub fn generate_viewer_image_file(path: &Path, max_dimension: u32) -> Result<Option<PathBuf>, AppError> {
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    let cache_key = format!(
+        "{}:{}:{}:{}",
+        path.display(),
+        max_dimension,
+        metadata.len(),
+        modified
+    );
+    let output_path = std::env::temp_dir().join(format!(
+        "my-picasa-viewer-{}.jpg",
+        blake3::hash(cache_key.as_bytes()).to_hex()
+    ));
+
+    if output_path.is_file() {
+        return Ok(Some(output_path));
+    }
+
+    let Some(bytes) = generate_viewer_image(path, max_dimension)? else {
+        return Ok(None);
+    };
+    let temp_output = output_path.with_extension("tmp.jpg");
+    let _ = fs::remove_file(&temp_output);
+    fs::write(&temp_output, bytes)?;
+    fs::rename(&temp_output, &output_path)?;
+    Ok(Some(output_path))
+}
+
+pub fn generate_viewer_video(path: &Path) -> Result<Option<PathBuf>, AppError> {
+    if !is_video_path(path) {
+        return Ok(None);
+    }
+
+    let ffmpeg = match find_command_binary("ffmpeg") {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    let cache_key = format!("{}:{}:{}", path.display(), metadata.len(), modified);
+    let output_path = std::env::temp_dir().join(format!(
+        "my-picasa-viewer-{}.mp4",
+        blake3::hash(cache_key.as_bytes()).to_hex()
+    ));
+
+    if output_path.is_file() {
+        return Ok(Some(output_path));
+    }
+
+    let temp_output = output_path.with_extension("tmp.mp4");
+    let _ = fs::remove_file(&temp_output);
+
+    let status = Command::new(ffmpeg)
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(path)
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg("-pix_fmt")
+        .arg("yuv420p")
+        .arg("-vcodec")
+        .arg("libx264")
+        .arg("-preset")
+        .arg("veryfast")
+        .arg("-crf")
+        .arg("22")
+        .arg("-acodec")
+        .arg("aac")
+        .arg("-b:a")
+        .arg("160k")
+        .arg(&temp_output)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()?;
+
+    if !status.success() || !temp_output.is_file() {
+        let _ = fs::remove_file(&temp_output);
+        return Ok(None);
+    }
+
+    fs::rename(&temp_output, &output_path)?;
+    Ok(Some(output_path))
 }
 
 pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
@@ -254,6 +353,41 @@ fn render_with_sips(path: &Path, width: u32, quality: u8) -> Result<Option<Vec<u
     #[cfg(not(target_os = "macos"))]
     {
         let _ = (path, width, quality);
+        Ok(None)
+    }
+}
+
+fn render_with_sips_original(path: &Path, quality: u8) -> Result<Option<Vec<u8>>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let temp_path = temp_jpeg_path(path);
+        let status = Command::new("sips")
+            .arg("-s")
+            .arg("format")
+            .arg("jpeg")
+            .arg("-s")
+            .arg("formatOptions")
+            .arg(quality.to_string())
+            .arg(path)
+            .arg("--out")
+            .arg(&temp_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()?;
+
+        if !status.success() {
+            let _ = fs::remove_file(&temp_path);
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&temp_path)?;
+        let _ = fs::remove_file(&temp_path);
+        return Ok(Some(bytes));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (path, quality);
         Ok(None)
     }
 }

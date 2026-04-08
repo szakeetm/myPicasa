@@ -12,7 +12,7 @@ use crate::{
     app::state::{AppState, ThumbnailJob},
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
-    media::thumb::{generate_thumbnail, generate_viewer_image},
+    media::thumb::{generate_thumbnail, generate_viewer_image_file, generate_viewer_video},
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
         DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
@@ -151,14 +151,8 @@ pub fn request_thumbnail(
     size: u32,
     state: State<AppState>,
 ) -> CommandResult<Option<String>> {
-    let started = Instant::now();
     let key = format!("{asset_id}:{size}");
     if let Some(bytes) = state.thumbnail_cache.lock().get(&key) {
-        let elapsed = started.elapsed().as_millis();
-        info!(asset_id, elapsed_ms = elapsed, "thumbnail cache hit");
-        preview_debug_log(format!(
-            "thumbnail asset_id={asset_id} cache_hit elapsed_ms={elapsed}"
-        ));
         return Ok(Some(format!(
             "data:image/jpeg;base64,{}",
             STANDARD.encode(bytes)
@@ -174,34 +168,12 @@ pub fn request_thumbnail(
     match generate_thumbnail(&PathBuf::from(primary_path), size) {
         Ok(Some(bytes)) => {
             state.thumbnail_cache.lock().insert(key, bytes.clone());
-            let elapsed = started.elapsed().as_millis();
-            info!(
-                asset_id,
-                elapsed_ms = elapsed,
-                bytes = bytes.len(),
-                filename = %filename,
-                file_size,
-                "thumbnail generated"
-            );
-            preview_debug_log(format!(
-                "thumbnail asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
-                file_size,
-                bytes.len()
-            ));
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
             )))
         }
-        Ok(None) => {
-            let elapsed = started.elapsed().as_millis();
-            info!(asset_id, elapsed_ms = elapsed, filename = %filename, file_size, "thumbnail unavailable");
-            preview_debug_log(format!(
-                "thumbnail asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={elapsed}",
-                file_size
-            ));
-            Ok(None)
-        }
+        Ok(None) => Ok(None),
         Err(error) => {
             error!(asset_id, %error, "thumbnail generation failed");
             preview_debug_log(format!(
@@ -224,7 +196,6 @@ pub fn request_thumbnails_batch(
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
     let generation = state.thumbnail_generation.load(Ordering::SeqCst);
-    let started = Instant::now();
     let cache = state.thumbnail_cache.clone();
 
     let items = asset_ids
@@ -305,25 +276,6 @@ pub fn request_thumbnails_batch(
         })
         .collect::<Vec<_>>();
 
-    let elapsed = started.elapsed().as_millis();
-    let hits = items.iter().filter(|item| item.status == "ready").count();
-    let pending = items.iter().filter(|item| item.status == "pending").count();
-    info!(
-        elapsed_ms = elapsed,
-        item_count = items.len(),
-        hit_count = hits,
-        pending_count = pending,
-        worker_count = state.thumbnail_worker_count,
-        "thumbnail batch completed"
-    );
-    preview_debug_log(format!(
-        "thumbnail_batch item_count={} hit_count={} pending_count={} worker_count={} elapsed_ms={elapsed}",
-        items.len(),
-        hits,
-        pending,
-        state.thumbnail_worker_count
-    ));
-
     Ok(items)
 }
 
@@ -336,13 +288,14 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
     };
     let (filename, file_size) = media_debug_info(&primary_path);
 
-    match generate_viewer_image(&PathBuf::from(primary_path), 2400) {
-        Ok(Some(bytes)) => {
+    match generate_viewer_image_file(&PathBuf::from(primary_path), 2400) {
+        Ok(Some(path)) => {
             let elapsed = started.elapsed().as_millis();
+            let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             info!(
                 asset_id,
                 elapsed_ms = elapsed,
-                bytes = bytes.len(),
+                bytes = generated_bytes,
                 filename = %filename,
                 file_size,
                 "viewer image generated"
@@ -350,12 +303,9 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
             preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
                 file_size,
-                bytes.len()
+                generated_bytes
             ));
-            Ok(Some(format!(
-                "data:image/jpeg;base64,{}",
-                STANDARD.encode(bytes)
-            )))
+            Ok(Some(path.to_string_lossy().to_string()))
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();
@@ -375,6 +325,27 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
             state
                 .db
                 .insert_log("error", "viewer", &error.to_string(), Some(asset_id))
+                .map_err(map_error)?;
+            Ok(None)
+        }
+    }
+}
+
+#[tauri::command]
+pub fn load_viewer_video(asset_id: i64, state: State<AppState>) -> CommandResult<Option<String>> {
+    let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
+    let Some(primary_path) = detail.primary_path else {
+        return Ok(None);
+    };
+
+    match generate_viewer_video(&PathBuf::from(&primary_path)) {
+        Ok(Some(path)) => Ok(Some(path.to_string_lossy().to_string())),
+        Ok(None) => Ok(None),
+        Err(error) => {
+            error!(asset_id, %error, "viewer video load failed");
+            state
+                .db
+                .insert_log("error", "viewer_video", &error.to_string(), Some(asset_id))
                 .map_err(map_error)?;
             Ok(None)
         }
@@ -473,6 +444,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         request_thumbnail,
         request_thumbnails_batch,
         load_viewer_frame,
+        load_viewer_video,
         get_live_photo_pair,
         get_cache_stats,
         clear_thumbnail_cache,
