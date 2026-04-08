@@ -1,4 +1,4 @@
-use std::{fs, io::Cursor, path::{Path, PathBuf}, process::Command, time::{SystemTime, UNIX_EPOCH}};
+use std::{fs, io::Cursor, path::{Path, PathBuf}, process::{Command, Stdio}, time::{SystemTime, UNIX_EPOCH}};
 
 use image::{codecs::jpeg::JpegEncoder, ImageReader};
 
@@ -14,11 +14,14 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
         return Ok(None);
     }
 
-    if matches!(extension.as_str(), "heic" | "heif") {
-        if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(256))? {
-            return Ok(Some(bytes));
+    #[cfg(target_os = "macos")]
+    {
+        if matches!(extension.as_str(), "heic" | "heif") {
+            if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(192))? {
+                return Ok(Some(bytes));
+            }
         }
-        if let Some(bytes) = render_with_sips(path, size.max(256), 82)? {
+        if let Some(bytes) = render_with_sips(path, size.max(192), 82)? {
             return Ok(Some(bytes));
         }
     }
@@ -109,11 +112,13 @@ fn render_with_sips(path: &Path, width: u32, quality: u8) -> Result<Option<Vec<u
             .arg("-s")
             .arg("formatOptions")
             .arg(quality.to_string())
-            .arg("--resampleWidth")
+            .arg("-Z")
             .arg(width.to_string())
             .arg(path)
             .arg("--out")
             .arg(&temp_path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()?;
 
         if !status.success() {
@@ -146,6 +151,8 @@ fn render_thumbnail_with_quicklook(path: &Path, width: u32) -> Result<Option<Vec
             .arg("-o")
             .arg(&output_dir)
             .arg(path)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
             .status()?;
 
         if !status.success() {
