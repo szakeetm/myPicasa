@@ -43,20 +43,22 @@ export function MediaGrid({
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
-  const [queueVersion, setQueueVersion] = useState(0);
-  const [retryTick, setRetryTick] = useState(0);
-  const thumbnailQueueRef = useRef<number[]>([]);
-  const processingQueueRef = useRef(false);
-  const frameHandleRef = useRef<number | undefined>(undefined);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
+  const requestInFlightRef = useRef(false);
+  const lastBatchLogRef = useRef<{
+    signature: string;
+    at: number;
+  }>({
+    signature: "",
+    at: 0,
+  });
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
-  const assetOrder = useMemo(() => new Map(assets.map((asset, index) => [asset.id, index])), [assets]);
   const thumbnailSize = useMemo(() => {
     const devicePixelRatio =
       typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
     const estimatedTileWidth = Math.max(width / columns, 160);
-    return Math.min(1024, Math.max(256, Math.ceil(estimatedTileWidth * devicePixelRatio)));
+    return Math.min(512, Math.max(256, Math.ceil(estimatedTileWidth * devicePixelRatio * 0.75)));
   }, [columns, width]);
 
   useEffect(() => {
@@ -70,21 +72,11 @@ export function MediaGrid({
 
   useEffect(() => {
     setThumbs({});
-    thumbnailQueueRef.current = [];
-    setQueueVersion((value) => value + 1);
   }, [assets, thumbnailSize]);
 
   useEffect(() => {
     thumbsRef.current = thumbs;
   }, [thumbs]);
-
-  useEffect(() => {
-    const handle = window.setInterval(() => {
-      setRetryTick((value) => value + 1);
-    }, 350);
-
-    return () => window.clearInterval(handle);
-  }, []);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -132,152 +124,109 @@ export function MediaGrid({
     return () => observer.disconnect();
   }, [assets, columns]);
 
-  function enqueueThumbnailIds(ids: number[], priority: "high" | "low") {
-    const queued = new Set(thumbnailQueueRef.current);
-    const additions = ids.filter((id) => {
-      const state = thumbsRef.current[id];
-      return !queued.has(id) && (!state || state.status === "pending");
-    });
-    if (additions.length === 0) {
-      return;
-    }
-
-    thumbnailQueueRef.current =
-      priority === "high"
-        ? [...additions, ...thumbnailQueueRef.current.filter((id) => !additions.includes(id))]
-        : [...thumbnailQueueRef.current, ...additions];
-    setQueueVersion((value) => value + 1);
-
-    startTransition(() => {
-      setThumbs((current) => {
-        const next = { ...current };
-        for (const id of additions) {
-          if (!next[id]) {
-            next[id] = { status: "pending" };
-          }
-        }
-        return next;
-      });
-    });
-  }
-
-  useEffect(() => {
-    const prioritized = assets
-      .filter((asset) => {
-        const state = thumbsRef.current[asset.id];
-        return visibleIdSet.has(asset.id) && (!state || state.status === "pending");
-      })
-      .map((asset) => asset.id);
-    enqueueThumbnailIds(prioritized, "high");
-  }, [assets, retryTick, visibleIdSet]);
-
   useEffect(() => {
     let disposed = false;
 
-    async function processQueue() {
-      if (processingQueueRef.current || thumbnailQueueRef.current.length === 0) {
+    async function processBatch() {
+      if (requestInFlightRef.current) {
         return;
       }
 
-      processingQueueRef.current = true;
+      const visiblePendingIds = assets
+        .filter((asset) => {
+          const state = thumbsRef.current[asset.id];
+          return visibleIdSet.has(asset.id) && (!state || state.status === "pending");
+        })
+        .slice(0, 12)
+        .map((asset) => asset.id);
+
+      const preloadPendingIds =
+        visiblePendingIds.length === 0 && thumbnailPreload?.active
+          ? assets
+              .filter((asset) => {
+                const state = thumbsRef.current[asset.id];
+                return !state || state.status === "pending";
+              })
+              .slice(0, 12)
+              .map((asset) => asset.id)
+          : [];
+
+      const requestIds = visiblePendingIds.length > 0 ? visiblePendingIds : preloadPendingIds;
+      if (requestIds.length === 0) {
+        return;
+      }
+
+      startTransition(() => {
+        setThumbs((current) => {
+          const next = { ...current };
+          for (const id of requestIds) {
+            if (!next[id]) {
+              next[id] = { status: "pending" };
+            }
+          }
+          return next;
+        });
+      });
+
+      requestInFlightRef.current = true;
       try {
-        while (!disposed && thumbnailQueueRef.current.length > 0) {
-          const nextIds = thumbnailQueueRef.current
-            .splice(0, 12)
-            .sort((left, right) => (assetOrder.get(left) ?? 0) - (assetOrder.get(right) ?? 0));
+        const batch = await api.requestThumbnailsBatch(requestIds, thumbnailSize);
+        if (disposed) {
+          return;
+        }
 
-          if (nextIds.length === 0) {
-            break;
-          }
+        const readyCount = batch.filter((item) => item.status === "ready").length;
+        const pendingCount = batch.filter((item) => item.status === "pending").length;
+        const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
+        const batchMode = visiblePendingIds.length > 0 ? "visible" : "preload";
+        const signature = `${batchMode}:${requestIds.length}:${readyCount}:${pendingCount}:${unavailableCount}:${thumbnailSize}`;
+        const now = Date.now();
+        if (
+          lastBatchLogRef.current.signature !== signature ||
+          now - lastBatchLogRef.current.at > 2000
+        ) {
+          lastBatchLogRef.current = { signature, at: now };
+          void logClient(
+            "grid",
+            `thumb batch mode=${batchMode} size=${thumbnailSize} requested=${requestIds.length} ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount}`,
+          );
+        }
 
-          const activeIds = nextIds.filter((id) => {
-            const state = thumbsRef.current[id];
-            return !state || state.status === "pending";
+        startTransition(() => {
+          setThumbs((current) => {
+            const next = { ...current };
+            for (const item of batch) {
+              if (item.status === "ready") {
+                next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
+              } else if (item.status === "unavailable") {
+                next[item.asset_id] = { status: "unavailable", src: null };
+              } else if (!next[item.asset_id]) {
+                next[item.asset_id] = { status: "pending" };
+              }
+            }
+            return next;
           });
-          if (activeIds.length === 0) {
-            continue;
-          }
-
-          try {
-            const batch = await api.requestThumbnailsBatch(activeIds, thumbnailSize);
-            if (disposed) {
-              return;
-            }
-            const pendingIds: number[] = [];
-            startTransition(() => {
-              setThumbs((current) => {
-                const next = { ...current };
-                for (const item of batch) {
-                  if (item.status === "ready") {
-                    next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
-                  } else if (item.status === "unavailable") {
-                    next[item.asset_id] = { status: "unavailable", src: null };
-                  } else {
-                    pendingIds.push(item.asset_id);
-                    if (!next[item.asset_id]) {
-                      next[item.asset_id] = { status: "pending" };
-                    }
-                  }
-                }
-                return next;
-              });
-            });
-            if (pendingIds.length > 0) {
-              enqueueThumbnailIds(pendingIds, "low");
-            }
-          } catch (error) {
-            await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
-            if (disposed) {
-              return;
-            }
-            startTransition(() => {
-              setThumbs((current) => {
-                const next = { ...current };
-                for (const id of activeIds) {
-                  next[id] = { status: "unavailable", src: null };
-                }
-                return next;
-              });
-            });
-          }
-
-          await new Promise<void>((resolve) => {
-            const schedule =
-              typeof window !== "undefined" && "requestIdleCallback" in window
-                ? (window as Window & {
-                    requestIdleCallback: (cb: () => void, options?: { timeout: number }) => number;
-                  }).requestIdleCallback
-                : undefined;
-
-            if (schedule) {
-              frameHandleRef.current = schedule(() => resolve(), { timeout: 120 });
-            } else {
-              frameHandleRef.current = window.setTimeout(() => resolve(), 16);
-            }
-          });
+        });
+      } catch (error) {
+        await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
+        if (disposed) {
+          return;
         }
       } finally {
-        processingQueueRef.current = false;
+        requestInFlightRef.current = false;
       }
     }
 
-    void processQueue();
+    void processBatch();
+    const handle = window.setInterval(() => {
+      void processBatch();
+    }, thumbnailPreload?.active ? 120 : 220);
 
     return () => {
       disposed = true;
-      if (frameHandleRef.current !== undefined) {
-        if (typeof window !== "undefined" && "cancelIdleCallback" in window) {
-          (
-            window as Window & {
-              cancelIdleCallback: (handle: number) => void;
-            }
-          ).cancelIdleCallback(frameHandleRef.current);
-        } else {
-          globalThis.clearTimeout(frameHandleRef.current as number);
-        }
-      }
+      window.clearInterval(handle);
     };
-  }, [assetOrder, queueVersion, thumbnailSize]);
+  }, [assets, thumbnailPreload?.active, thumbnailSize, visibleIdSet]);
 
   useEffect(() => {
     const firstVisibleAsset = assets.find((asset) => visibleIdSet.has(asset.id)) ?? assets[0];
@@ -289,16 +238,7 @@ export function MediaGrid({
       onThumbnailPreloadProgress?.(undefined);
       return;
     }
-
-    const preloadIds = assets
-      .filter((asset) => {
-        const state = thumbsRef.current[asset.id];
-        return !state || state.status === "pending";
-      })
-      .slice(0, 48)
-      .map((asset) => asset.id);
-    enqueueThumbnailIds(preloadIds, "low");
-  }, [assets, retryTick, thumbnailPreload?.active, thumbnailPreload?.runId]);
+  }, [onThumbnailPreloadProgress, thumbnailPreload?.active]);
 
   useEffect(() => {
     if (!thumbnailPreload?.active) {
