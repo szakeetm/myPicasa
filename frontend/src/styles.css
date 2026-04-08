@@ -269,11 +269,26 @@ button {
   overflow: hidden;
 }
 
+.viewer-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(255, 250, 243, 0.98);
+  position: sticky;
+  top: 0;
+  z-index: 2;
+}
+
 .viewer-media {
   max-height: 68vh;
   background: #16110c;
   display: grid;
   place-items: center;
+  overflow: auto;
+  padding: 12px;
 }
 
 .viewer-media img,

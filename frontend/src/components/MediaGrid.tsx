@@ -13,6 +13,11 @@ type MediaGridProps = {
 
 const ROW_HEIGHT = 228;
 
+type ThumbnailState = {
+  status: "pending" | "ready" | "unavailable";
+  src?: string | null;
+};
+
 function columnCount(width: number) {
   if (width < 640) return 1;
   if (width < 980) return 2;
@@ -24,7 +29,7 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const [width, setWidth] = useState(1200);
   const [requestTick, setRequestTick] = useState(0);
-  const [thumbs, setThumbs] = useState<Record<number, string | null>>({});
+  const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const columns = columnCount(width);
   const rows = useMemo(() => {
     const output: AssetListItem[][] = [];
@@ -70,24 +75,48 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   useEffect(() => {
     if (visibleIds.length === 0) return;
     const timer = window.setTimeout(async () => {
-      const pending = visibleIds.filter((id) => thumbs[id] === undefined);
+      const pending = visibleIds.filter((id) => {
+        const state = thumbs[id];
+        return !state || state.status === "pending";
+      });
       if (pending.length === 0) return;
-      await logClient("grid", `requesting batch of ${pending.length} visible thumbnails`);
-      let entries: Array<readonly [number, string | null]> = [];
-      try {
-        const batch = await api.requestThumbnailsBatch(pending, 256);
-        entries = batch
-          .filter((item) => item.status !== "pending")
-          .map((item) => [item.asset_id, item.status === "ready" ? item.data_url ?? null : null] as const);
-      } catch (error) {
-        await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
-        entries = pending.map((id) => [id, null] as const);
-      }
+
       setThumbs((current) => {
         const next = { ...current };
-        for (const [id, src] of entries) next[id] = src;
+        for (const id of pending) {
+          if (!next[id]) {
+            next[id] = { status: "pending" };
+          }
+        }
         return next;
       });
+
+      await logClient("grid", `requesting batch of ${pending.length} visible thumbnails`);
+      try {
+        const batch = await api.requestThumbnailsBatch(pending, 256);
+        setThumbs((current) => {
+          const next = { ...current };
+          for (const item of batch) {
+            if (item.status === "ready") {
+              next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
+            } else if (item.status === "unavailable") {
+              next[item.asset_id] = { status: "unavailable", src: null };
+            } else if (!next[item.asset_id]) {
+              next[item.asset_id] = { status: "pending" };
+            }
+          }
+          return next;
+        });
+      } catch (error) {
+        await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
+        setThumbs((current) => {
+          const next = { ...current };
+          for (const id of pending) {
+            next[id] = { status: "unavailable", src: null };
+          }
+          return next;
+        });
+      }
     }, 150);
 
     return () => window.clearTimeout(timer);
@@ -114,9 +143,9 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
               {row.map((asset) => (
                 <button key={asset.id} className="tile" onClick={() => onSelect(asset.id)}>
                   <div className="thumb">
-                    {thumbs[asset.id] ? (
-                      <img src={thumbs[asset.id] ?? ""} alt={asset.title ?? "asset"} />
-                    ) : thumbs[asset.id] === null ? (
+                    {thumbs[asset.id]?.status === "ready" ? (
+                      <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
+                    ) : thumbs[asset.id]?.status === "unavailable" ? (
                       <div>Preview unavailable</div>
                     ) : (
                       <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>

@@ -97,6 +97,33 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   return (
     <div className="viewer-backdrop" onClick={onClose}>
       <div className="viewer-card" onClick={(event) => event.stopPropagation()}>
+        <div className="viewer-toolbar">
+          <strong>{asset.title ?? "Untitled asset"}</strong>
+          <div className="button-row">
+            {isPhoto ? (
+              <>
+                <button className="button-secondary" onClick={() => setZoom((current) => Math.max(current - 0.25, 0.5))}>
+                  Zoom -
+                </button>
+                <button className="button-secondary" onClick={() => setZoom(1)}>
+                  100%
+                </button>
+                <button className="button-secondary" onClick={() => setZoom((current) => Math.min(current + 0.25, 4))}>
+                  Zoom +
+                </button>
+              </>
+            ) : null}
+            <button className="button-secondary" onClick={onPrevious} disabled={!hasPrevious}>
+              Previous
+            </button>
+            <button className="button-secondary" onClick={onNext} disabled={!hasNext}>
+              Next
+            </button>
+            <button className="button-danger" onClick={onClose}>
+              Close
+            </button>
+          </div>
+        </div>
         <div className="viewer-media">
           {asset.media_kind === "video" && primaryPath ? (
             <video src={primaryPath} controls autoPlay />
@@ -113,33 +140,6 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           )}
         </div>
         <div className="viewer-meta">
-          <div className="button-row" style={{ justifyContent: "space-between" }}>
-            <strong>{asset.title ?? "Untitled asset"}</strong>
-            <div className="button-row">
-              {isPhoto ? (
-                <>
-                  <button className="button-secondary" onClick={() => setZoom((current) => Math.max(current - 0.25, 0.5))}>
-                    Zoom -
-                  </button>
-                  <button className="button-secondary" onClick={() => setZoom(1)}>
-                    100%
-                  </button>
-                  <button className="button-secondary" onClick={() => setZoom((current) => Math.min(current + 0.25, 4))}>
-                    Zoom +
-                  </button>
-                </>
-              ) : null}
-              <button className="button-secondary" onClick={onPrevious} disabled={!hasPrevious}>
-                Previous
-              </button>
-              <button className="button-secondary" onClick={onNext} disabled={!hasNext}>
-                Next
-              </button>
-              <button className="button-danger" onClick={onClose}>
-                Close
-              </button>
-            </div>
-          </div>
           <p className="muted">
             {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm:ss") : "Unknown capture time"}
             {isPhoto ? ` • zoom ${Math.round(zoom * 100)}%` : ""}
