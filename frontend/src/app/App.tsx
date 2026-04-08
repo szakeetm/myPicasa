@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import { open } from "@tauri-apps/plugin-dialog";
 
 import { Sidebar } from "../components/Sidebar";
 import { Toolbar } from "../components/Toolbar";
@@ -67,6 +68,21 @@ export function App() {
     await refreshAllAssets();
   }
 
+  async function handleBrowseRoot() {
+    const selected = await open({
+      directory: true,
+      multiple: false,
+      title: "Choose Google Photos Takeout root",
+    });
+
+    if (!selected || Array.isArray(selected)) {
+      return;
+    }
+
+    state.setRootsInput(selected);
+    await logClient("ui.import", `selected takeout root ${selected}`);
+  }
+
   async function handleSelectAlbum(albumId: number) {
     state.setSelectedAlbumId(albumId);
     state.setViewMode("album");
@@ -95,6 +111,7 @@ export function App() {
         albums={state.albums}
         selectedAlbumId={state.selectedAlbumId}
         onRootsInputChange={state.setRootsInput}
+        onBrowseRoot={handleBrowseRoot}
         onRefresh={handleRefreshIndex}
         onShowTimeline={handleShowTimeline}
         onSelectAlbum={handleSelectAlbum}

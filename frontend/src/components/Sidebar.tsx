@@ -6,6 +6,7 @@ type SidebarProps = {
   albums: AlbumSummary[];
   selectedAlbumId?: number;
   onRootsInputChange: (value: string) => void;
+  onBrowseRoot: () => void;
   onRefresh: () => void;
   onShowTimeline: () => void;
   onSelectAlbum: (albumId: number) => void;
@@ -17,6 +18,7 @@ export function Sidebar({
   albums,
   selectedAlbumId,
   onRootsInputChange,
+  onBrowseRoot,
   onRefresh,
   onShowTimeline,
   onSelectAlbum,
@@ -38,11 +40,22 @@ export function Sidebar({
       </div>
 
       <div className="controls">
-        <input
-          value={rootsInput}
-          onChange={(event) => onRootsInputChange(event.target.value)}
-          placeholder="/path/to/Takeout/Google Photos;/another/root"
-        />
+        <div className="button-row">
+          <input
+            value={rootsInput}
+            onChange={(event) => onRootsInputChange(event.target.value)}
+            placeholder="/path/to/Takeout/Google Photos;/another/root"
+          />
+          <button className="button-secondary" onClick={onBrowseRoot}>
+            Browse
+          </button>
+        </div>
+        <div className="muted">
+          Pick the extracted Google Photos media root.
+          <br />
+          Usually this is the <strong>`Takeout/Google Photos`</strong> folder, or the specific
+          subfolder that directly contains your album/media folders and sidecar JSON files.
+        </div>
         <div className="button-row">
           <button className="button-primary" onClick={onRefresh}>
             Refresh Index
