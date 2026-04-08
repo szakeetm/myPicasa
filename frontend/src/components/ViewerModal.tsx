@@ -21,6 +21,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const [videoSrc, setVideoSrc] = useState<string>();
   const [videoError, setVideoError] = useState<string>();
   const [videoFallbackAttempted, setVideoFallbackAttempted] = useState(false);
+  const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
   const [zoom, setZoom] = useState(1);
   const [zoomMode, setZoomMode] = useState<"fit" | "custom">("fit");
@@ -40,6 +41,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   useEffect(() => {
     setForceRenderedFrame(false);
     setVideoFallbackAttempted(false);
+    setShowLivePhotoMotion(false);
     setVideoSrc(undefined);
     setVideoError(undefined);
     setZoomMode("fit");
@@ -214,6 +216,11 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
           <div className="button-row">
             {isPhoto ? (
               <>
+                {livePhotoPath ? (
+                  <button className="button-secondary" onClick={() => setShowLivePhotoMotion((value) => !value)}>
+                    {showLivePhotoMotion ? "Show Photo" : "Play Live Photo"}
+                  </button>
+                ) : null}
                 <button className="button-secondary" onClick={() => adjustZoom(-0.25)}>
                   Zoom -
                 </button>
@@ -259,11 +266,22 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
             ) : (
               <div className="muted">Loading video…</div>
             )
+          ) : showLivePhotoMotion && livePhotoPath ? (
+            <video src={livePhotoPath} controls autoPlay muted loop />
           ) : imageSrc && assetId === asset.id ? (
             <div
               ref={imageFrameRef}
               className={`viewer-image-frame${isScrollable ? " zoomed" : ""}`}
             >
+              {livePhotoPath ? (
+                <button
+                  className="viewer-live-photo-button"
+                  type="button"
+                  onClick={() => setShowLivePhotoMotion(true)}
+                >
+                  Play Live Photo
+                </button>
+              ) : null}
               <img
                 src={imageSrc}
                 alt={asset.title ?? "asset"}
