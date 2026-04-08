@@ -52,6 +52,13 @@ export function MediaGrid({
     signature: "",
     at: 0,
   });
+  const lastProgressLogRef = useRef<{
+    completed: number;
+    total: number;
+  }>({
+    completed: -1,
+    total: -1,
+  });
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
   const thumbnailSize = useMemo(() => {
@@ -140,18 +147,17 @@ export function MediaGrid({
         .slice(0, 12)
         .map((asset) => asset.id);
 
-      const preloadPendingIds =
-        visiblePendingIds.length === 0 && thumbnailPreload?.active
-          ? assets
-              .filter((asset) => {
-                const state = thumbsRef.current[asset.id];
-                return !state || state.status === "pending";
-              })
-              .slice(0, 12)
-              .map((asset) => asset.id)
-          : [];
+      const preloadPendingIds = thumbnailPreload?.active
+        ? assets
+            .filter((asset) => {
+              const state = thumbsRef.current[asset.id];
+              return !visibleIdSet.has(asset.id) && (!state || state.status === "pending");
+            })
+            .slice(0, Math.max(0, 12 - visiblePendingIds.length))
+            .map((asset) => asset.id)
+        : [];
 
-      const requestIds = visiblePendingIds.length > 0 ? visiblePendingIds : preloadPendingIds;
+      const requestIds = [...visiblePendingIds, ...preloadPendingIds];
       if (requestIds.length === 0) {
         return;
       }
@@ -178,7 +184,12 @@ export function MediaGrid({
         const readyCount = batch.filter((item) => item.status === "ready").length;
         const pendingCount = batch.filter((item) => item.status === "pending").length;
         const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
-        const batchMode = visiblePendingIds.length > 0 ? "visible" : "preload";
+        const batchMode =
+          visiblePendingIds.length > 0 && preloadPendingIds.length > 0
+            ? "mixed"
+            : visiblePendingIds.length > 0
+              ? "visible"
+              : "preload";
         const signature = `${batchMode}:${requestIds.length}:${readyCount}:${pendingCount}:${unavailableCount}:${thumbnailSize}`;
         const now = Date.now();
         if (
@@ -235,13 +246,7 @@ export function MediaGrid({
 
   useEffect(() => {
     if (!thumbnailPreload?.active) {
-      onThumbnailPreloadProgress?.(undefined);
-      return;
-    }
-  }, [onThumbnailPreloadProgress, thumbnailPreload?.active]);
-
-  useEffect(() => {
-    if (!thumbnailPreload?.active) {
+      lastProgressLogRef.current = { completed: -1, total: -1 };
       onThumbnailPreloadProgress?.(undefined);
       return;
     }
@@ -251,6 +256,25 @@ export function MediaGrid({
       const state = thumbs[asset.id];
       return state?.status === "ready" || state?.status === "unavailable";
     }).length;
+
+    const previous = lastProgressLogRef.current;
+    const changed = completed !== previous.completed || total !== previous.total;
+    if (!changed) {
+      return;
+    }
+
+    lastProgressLogRef.current = { completed, total };
+
+    if (
+      completed === total ||
+      previous.completed < 0 ||
+      completed === 0 ||
+      completed - previous.completed >= 24 ||
+      total !== previous.total
+    ) {
+      void logClient("grid", `thumb preload progress completed=${completed} total=${total}`);
+    }
+
     onThumbnailPreloadProgress?.({ completed, total });
   }, [assets, onThumbnailPreloadProgress, thumbnailPreload?.active, thumbs]);
 

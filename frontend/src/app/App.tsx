@@ -276,7 +276,15 @@ export function App() {
       total: number;
     },
   ) {
-    setThumbnailPreloadProgress(progress);
+    setThumbnailPreloadProgress((current) => {
+      if (
+        current?.completed === progress?.completed &&
+        current?.total === progress?.total
+      ) {
+        return current;
+      }
+      return progress;
+    });
     if (progress && progress.completed >= progress.total) {
       setThumbnailPreloadActive(false);
     }
