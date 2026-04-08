@@ -4,9 +4,9 @@
   "version": "0.1.0",
   "identifier": "com.martonady.mypicasa",
   "build": {
-    "beforeDevCommand": "cd ../frontend && npm run dev -- --host 127.0.0.1 --port 1420",
-    "beforeBuildCommand": "cd ../frontend && npm run build",
-    "frontendDist": "../frontend/dist",
+    "beforeDevCommand": "cd frontend && npm run dev -- --host 127.0.0.1 --port 1420",
+    "beforeBuildCommand": "cd frontend && npm run build",
+    "frontendDist": "frontend/dist",
     "devUrl": "http://127.0.0.1:1420"
   },
   "app": {
