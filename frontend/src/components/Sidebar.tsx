@@ -86,13 +86,10 @@ export function Sidebar({
           <button className="button-primary" onClick={onRefresh}>
             Refresh Index
           </button>
-          <button className="button-secondary" onClick={onShowTimeline}>
-            Timeline
+          <button className="button-danger" onClick={onResetDatabase}>
+            Clear Local Database
           </button>
         </div>
-        <button className="button-danger" onClick={onResetDatabase}>
-          Clear Local Database
-        </button>
         <div className="muted">
           Removes the local SQLite index, logs, albums, diagnostics, and cached app state.
           Source Takeout files are not touched.
@@ -100,6 +97,9 @@ export function Sidebar({
       </div>
 
       <div className="sidebar-section">
+        <button className="button-secondary" onClick={onShowTimeline}>
+          Timeline
+        </button>
         <div className="eyebrow">Albums</div>
         {albums.length === 0 ? (
           <div className="muted">Refresh a Takeout root to populate albums.</div>

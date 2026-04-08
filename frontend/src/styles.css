@@ -146,6 +146,12 @@ button {
   overflow: auto;
 }
 
+.sidebar-section {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
 .debug-cache-summary {
   display: flex;
   align-items: center;
