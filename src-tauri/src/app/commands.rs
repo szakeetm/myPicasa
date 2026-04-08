@@ -206,6 +206,12 @@ pub fn request_thumbnails_batch(
             let key = format!("{asset_id}:{size}");
 
             if let Some(bytes) = cache.lock().get(&key) {
+                println!(
+                    "thumbnail_batch_item asset_id={} size={} status=ready source=cache bytes={}",
+                    asset_id,
+                    size,
+                    bytes.len()
+                );
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "ready".to_string(),
@@ -214,6 +220,10 @@ pub fn request_thumbnails_batch(
             }
 
             if state.failed_thumbnails.lock().contains(&key) {
+                println!(
+                    "thumbnail_batch_item asset_id={} size={} status=unavailable source=failed_cache",
+                    asset_id, size
+                );
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "unavailable".to_string(),
@@ -224,6 +234,10 @@ pub fn request_thumbnails_batch(
             let mut inflight = state.inflight_thumbnails.lock();
             if inflight.insert(key.clone()) {
                 drop(inflight);
+                println!(
+                    "thumbnail_batch_item asset_id={} size={} status=pending enqueue=start",
+                    asset_id, size
+                );
                 if let Err(error) = state.thumbnail_job_sender.send(ThumbnailJob {
                     asset_id,
                     size,
@@ -237,7 +251,22 @@ pub fn request_thumbnails_batch(
                         &format!("failed to enqueue thumbnail job: {error}"),
                         Some(asset_id),
                     );
+                    println!(
+                        "thumbnail_batch_item asset_id={} size={} status=unavailable enqueue=failed error={error}",
+                        asset_id, size
+                    );
+                } else {
+                    println!(
+                        "thumbnail_batch_item asset_id={} size={} status=pending enqueue=ok",
+                        asset_id, size
+                    );
                 }
+            } else {
+                drop(inflight);
+                println!(
+                    "thumbnail_batch_item asset_id={} size={} status=pending source=inflight",
+                    asset_id, size
+                );
             }
 
             ThumbnailBatchItem {

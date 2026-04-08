@@ -108,6 +108,9 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
           pendingIds,
           unavailableIds,
         });
+        if (readyIds.length > 0) {
+          console.info("thumbnail_batch_client_ready", readyIds);
+        }
         setThumbs((current) => {
           const next = { ...current };
           for (const item of batch) {

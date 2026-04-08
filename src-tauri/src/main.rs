@@ -82,12 +82,20 @@ fn main() {
                             .to_string();
                         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
                         let started = std::time::Instant::now();
+                        println!(
+                            "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=start size={}",
+                            worker_index,
+                            job.asset_id,
+                            filename,
+                            file_size,
+                            job.size
+                        );
                         let generated =
                             generate_thumbnail(&std::path::PathBuf::from(primary_path), job.size)
                                 .map_err(|error| error.to_string())?;
                         match &generated {
                             Some(bytes) => println!(
-                                "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} generated_bytes={} elapsed_ms={}",
+                                "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={} elapsed_ms={}",
                                 worker_index,
                                 job.asset_id,
                                 filename,
@@ -96,7 +104,7 @@ fn main() {
                                 started.elapsed().as_millis()
                             ),
                             None => println!(
-                                "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} unavailable elapsed_ms={}",
+                                "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=unavailable elapsed_ms={}",
                                 worker_index,
                                 job.asset_id,
                                 filename,
@@ -116,6 +124,10 @@ fn main() {
                             failed.lock().insert(job.key.clone());
                         }
                         Err(error) => {
+                            println!(
+                                "thumbnail_worker={} asset_id={} status=failed error={error}",
+                                worker_index, job.asset_id
+                            );
                             let _ = db.insert_log("error", "thumbnail_worker", &error, Some(job.asset_id));
                             failed.lock().insert(job.key.clone());
                         }
