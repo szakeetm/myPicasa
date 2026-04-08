@@ -3,6 +3,7 @@ import type { AlbumSummary, ImportProgress } from "../lib/types";
 type SidebarProps = {
   rootsInput: string;
   importStatus?: ImportProgress | null;
+  browseEnabled?: boolean;
   albums: AlbumSummary[];
   selectedAlbumId?: number;
   onRootsInputChange: (value: string) => void;
@@ -16,6 +17,7 @@ type SidebarProps = {
 export function Sidebar({
   rootsInput,
   importStatus,
+  browseEnabled = true,
   albums,
   selectedAlbumId,
   onRootsInputChange,
@@ -56,7 +58,16 @@ export function Sidebar({
             onChange={(event) => onRootsInputChange(event.target.value)}
             placeholder="/path/to/Takeout/Google Photos;/another/root"
           />
-          <button className="button-secondary" onClick={onBrowseRoot}>
+          <button
+            className="button-secondary"
+            onClick={onBrowseRoot}
+            disabled={!browseEnabled}
+            title={
+              browseEnabled
+                ? "Choose the Google Photos Takeout folder"
+                : "Folder browsing requires the desktop Tauri app"
+            }
+          >
             Browse
           </button>
         </div>
@@ -66,6 +77,11 @@ export function Sidebar({
           Usually this is the <strong>`Takeout/Google Photos`</strong> folder, or the specific
           subfolder that directly contains your album/media folders and sidecar JSON files.
         </div>
+        {!browseEnabled ? (
+          <div className="muted">
+            Browser mode is for UI debugging only. Native folder browsing works in the desktop app.
+          </div>
+        ) : null}
         <div className="button-row">
           <button className="button-primary" onClick={onRefresh}>
             Refresh Index

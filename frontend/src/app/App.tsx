@@ -7,12 +7,14 @@ import { MediaGrid } from "../components/MediaGrid";
 import { ViewerModal } from "../components/ViewerModal";
 import { DebugPanel } from "../components/DebugPanel";
 import { logClient } from "../lib/logger";
+import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
 import type { AssetListRequest } from "../lib/types";
 
 export function App() {
   const state = useAppState();
+  const tauriRuntime = isTauriRuntime();
 
   async function refreshAllAssets() {
     const request: AssetListRequest = {
@@ -120,6 +122,14 @@ export function App() {
   }
 
   async function handleBrowseRoot() {
+    if (!tauriRuntime) {
+      const message =
+        "Folder browsing is only available in the desktop Tauri app. In browser mode, open the desktop app with `npm run dev`, or type a path manually if you are only testing the UI.";
+      console.info("browse_unavailable_browser_mode");
+      window.alert(message);
+      return;
+    }
+
     try {
       const selected = await open({
         directory: true,
@@ -206,6 +216,7 @@ export function App() {
       <Sidebar
         rootsInput={state.rootsInput}
         importStatus={state.importStatus}
+        browseEnabled={tauriRuntime}
         albums={state.albums}
         selectedAlbumId={state.selectedAlbumId}
         onRootsInputChange={state.setRootsInput}
