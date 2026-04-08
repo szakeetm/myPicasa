@@ -160,6 +160,12 @@ button {
   margin-top: 6px;
 }
 
+.debug-cache-group {
+  display: grid;
+  gap: 8px;
+  margin-top: 6px;
+}
+
 .album-item,
 .diagnostic-item,
 .log-item {

@@ -12,7 +12,10 @@ use crate::{
     app::state::{AppState, ThumbnailJob},
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
-    media::thumb::{generate_thumbnail, generate_viewer_image_file, generate_viewer_video},
+    media::thumb::{
+        clear_viewer_render_cache, generate_thumbnail, generate_viewer_image_file,
+        generate_viewer_video, viewer_render_cache_stats,
+    },
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
         DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
@@ -363,7 +366,12 @@ pub fn get_live_photo_pair(asset_id: i64, state: State<AppState>) -> CommandResu
 
 #[tauri::command]
 pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
-    Ok(state.thumbnail_cache.lock().stats())
+    let mut stats = state.thumbnail_cache.lock().stats();
+    let (viewer_render_items, viewer_render_bytes) =
+        viewer_render_cache_stats().map_err(map_error)?;
+    stats.viewer_render_items = viewer_render_items;
+    stats.viewer_render_bytes = viewer_render_bytes;
+    Ok(stats)
 }
 
 #[tauri::command]
@@ -375,6 +383,16 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
     state
         .db
         .insert_log("info", "thumbnail", "cleared thumbnail cache", None)
+        .map_err(map_error)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResult<()> {
+    clear_viewer_render_cache().map_err(map_error)?;
+    state
+        .db
+        .insert_log("info", "viewer", "cleared viewer render cache", None)
         .map_err(map_error)?;
     Ok(())
 }
@@ -406,6 +424,7 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.thumbnail_cache.lock().clear();
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
+    clear_viewer_render_cache().map_err(map_error)?;
     state
         .db
         .insert_log(
@@ -452,6 +471,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_live_photo_pair,
         get_cache_stats,
         clear_thumbnail_cache,
+        clear_viewer_render_cache_command,
         get_recent_logs,
         record_client_log,
         reset_local_database,

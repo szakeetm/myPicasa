@@ -5,6 +5,7 @@ type DebugPanelProps = {
   logs: LogEntry[];
   cacheStats?: CacheStats;
   onClearThumbnails: () => void;
+  onClearViewerRenders: () => void;
   onClearDiagnostics: () => void;
   onClearLogs: () => void;
 };
@@ -14,6 +15,7 @@ export function DebugPanel({
   logs,
   cacheStats,
   onClearThumbnails,
+  onClearViewerRenders,
   onClearDiagnostics,
   onClearLogs,
 }: DebugPanelProps) {
@@ -23,15 +25,26 @@ export function DebugPanel({
         <div className="eyebrow">Debug</div>
         <div className="title">Diagnostics and logs</div>
         {cacheStats ? (
-          <div className="debug-cache-summary">
-            <div className="muted">
-              thumbnails: {cacheStats.thumbnail_items} items •{" "}
-              {Math.round((cacheStats.thumbnail_bytes / 1024 / 1024) * 10) / 10} /{" "}
-              {Math.round(cacheStats.thumbnail_budget_bytes / 1024 / 1024)} MB
+          <div className="debug-cache-group">
+            <div className="debug-cache-summary">
+              <div className="muted">
+                thumbnails: {cacheStats.thumbnail_items} items •{" "}
+                {Math.round((cacheStats.thumbnail_bytes / 1024 / 1024) * 10) / 10} /{" "}
+                {Math.round(cacheStats.thumbnail_budget_bytes / 1024 / 1024)} MB
+              </div>
+              <button className="button-secondary" onClick={onClearThumbnails}>
+                Clear thumbnails
+              </button>
             </div>
-            <button className="button-secondary" onClick={onClearThumbnails}>
-              Clear thumbnails
-            </button>
+            <div className="debug-cache-summary">
+              <div className="muted">
+                rendered viewer media: {cacheStats.viewer_render_items} items •{" "}
+                {Math.round((cacheStats.viewer_render_bytes / 1024 / 1024) * 10) / 10} MB
+              </div>
+              <button className="button-secondary" onClick={onClearViewerRenders}>
+                Clear rendered
+              </button>
+            </div>
           </div>
         ) : null}
       </div>

@@ -167,6 +167,48 @@ pub fn generate_viewer_video(path: &Path) -> Result<Option<PathBuf>, AppError> {
     Ok(Some(output_path))
 }
 
+pub fn viewer_render_cache_stats() -> Result<(u32, u64), AppError> {
+    let temp_dir = std::env::temp_dir();
+    let mut items = 0_u32;
+    let mut bytes = 0_u64;
+
+    if let Ok(entries) = fs::read_dir(temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !name.starts_with("my-picasa-viewer-") {
+                continue;
+            }
+            if let Ok(metadata) = entry.metadata() {
+                if metadata.is_file() {
+                    items += 1;
+                    bytes += metadata.len();
+                }
+            }
+        }
+    }
+
+    Ok((items, bytes))
+}
+
+pub fn clear_viewer_render_cache() -> Result<(), AppError> {
+    let temp_dir = std::env::temp_dir();
+    if let Ok(entries) = fs::read_dir(temp_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if name.starts_with("my-picasa-viewer-") {
+                let _ = fs::remove_file(path);
+            }
+        }
+    }
+    Ok(())
+}
+
 pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
     if !is_video_path(path) {
         return Ok(None);

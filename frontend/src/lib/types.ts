@@ -80,6 +80,8 @@ export type CacheStats = {
   thumbnail_items: number;
   thumbnail_bytes: number;
   thumbnail_budget_bytes: number;
+  viewer_render_items: number;
+  viewer_render_bytes: number;
 };
 
 export type LogEntry = {

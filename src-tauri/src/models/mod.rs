@@ -124,6 +124,8 @@ pub struct CacheStats {
     pub thumbnail_items: u32,
     pub thumbnail_bytes: u64,
     pub thumbnail_budget_bytes: u64,
+    pub viewer_render_items: u32,
+    pub viewer_render_bytes: u64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

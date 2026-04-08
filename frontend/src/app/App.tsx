@@ -240,6 +240,12 @@ export function App() {
     state.setCacheStats(cacheStats);
   }
 
+  async function handleClearViewerRenders() {
+    await api.clearViewerRenderCache();
+    const cacheStats = await api.getCacheStats();
+    state.setCacheStats(cacheStats);
+  }
+
   return (
     <div className="app-shell">
       <Sidebar
@@ -282,6 +288,7 @@ export function App() {
         logs={state.logs}
         cacheStats={state.cacheStats}
         onClearThumbnails={handleClearThumbnails}
+        onClearViewerRenders={handleClearViewerRenders}
         onClearDiagnostics={handleClearDiagnostics}
         onClearLogs={handleClearLogs}
       />
