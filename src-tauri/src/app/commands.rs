@@ -14,7 +14,7 @@ use crate::{
     import::refresher::refresh_takeout_index,
     media::thumb::{
         clear_viewer_render_cache, generate_thumbnail, generate_viewer_image_file,
-        generate_viewer_video, viewer_render_cache_stats,
+        generate_viewer_video, probe_primary_video_codec, viewer_render_cache_stats,
     },
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
@@ -47,13 +47,19 @@ fn media_debug_info(path: &str) -> (String, u64) {
 }
 
 fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
-    matches!(
-        path.extension()
-            .and_then(|value| value.to_str())
-            .map(|value| value.to_ascii_lowercase())
-            .as_deref(),
-        Some("mp4" | "m4v" | "mov" | "webm")
-    )
+    let extension = path
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    if !matches!(extension.as_deref(), Some("mp4" | "m4v" | "mov" | "webm")) {
+        return false;
+    }
+
+    match probe_primary_video_codec(path).ok().flatten().as_deref() {
+        Some("h264" | "hevc") => true,
+        Some(_) => false,
+        None => false,
+    }
 }
 
 fn video_mime_type(path: &std::path::Path) -> &'static str {
@@ -374,6 +380,7 @@ pub fn load_viewer_video(
     let (filename, file_size) = media_debug_info(&primary_path);
     let source_path = PathBuf::from(&primary_path);
     let prefer_original = prefer_original.unwrap_or(false);
+    let original_codec = probe_primary_video_codec(&source_path).ok().flatten();
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
         info!(asset_id, filename = %filename, file_size, "viewer video original-byte load requested");
@@ -401,6 +408,14 @@ pub fn load_viewer_video(
             video_mime_type(&source_path),
             STANDARD.encode(bytes)
         )));
+    } else if prefer_original {
+        info!(
+            asset_id,
+            filename = %filename,
+            file_size,
+            codec = %original_codec.as_deref().unwrap_or("unknown"),
+            "viewer video original-byte load skipped"
+        );
     }
 
     info!(asset_id, filename = %filename, file_size, "viewer video transcode requested");
@@ -470,6 +485,7 @@ pub fn load_live_photo_motion(
     let (filename, file_size) = media_debug_info(&motion_path);
     let source_path = PathBuf::from(&motion_path);
     let prefer_original = prefer_original.unwrap_or(false);
+    let original_codec = probe_primary_video_codec(&source_path).ok().flatten();
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
         info!(asset_id, filename = %filename, file_size, "live photo motion original-byte load requested");
@@ -497,6 +513,14 @@ pub fn load_live_photo_motion(
             video_mime_type(&source_path),
             STANDARD.encode(bytes)
         )));
+    } else if prefer_original {
+        info!(
+            asset_id,
+            filename = %filename,
+            file_size,
+            codec = %original_codec.as_deref().unwrap_or("unknown"),
+            "live photo motion original-byte load skipped"
+        );
     }
 
     info!(asset_id, filename = %filename, file_size, "live photo motion transcode requested");

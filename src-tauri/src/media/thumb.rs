@@ -244,6 +244,41 @@ pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
         .map(|value| (value * 1000.0).round() as i64))
 }
 
+pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError> {
+    if !is_video_path(path) {
+        return Ok(None);
+    }
+
+    let Some(ffprobe) = find_command_binary("ffprobe") else {
+        return Ok(None);
+    };
+
+    let output = Command::new(ffprobe)
+        .arg("-v")
+        .arg("error")
+        .arg("-select_streams")
+        .arg("v:0")
+        .arg("-show_entries")
+        .arg("stream=codec_name")
+        .arg("-of")
+        .arg("default=noprint_wrappers=1:nokey=1")
+        .arg(path)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .output()?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let codec = String::from_utf8_lossy(&output.stdout).trim().to_ascii_lowercase();
+    if codec.is_empty() {
+        return Ok(None);
+    }
+
+    Ok(Some(codec))
+}
+
 fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<Vec<u8>>, AppError> {
     let ffmpeg = match find_command_binary("ffmpeg") {
         Some(path) => path,
