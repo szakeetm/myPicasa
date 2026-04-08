@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::Instant;
 
@@ -222,6 +223,7 @@ pub fn request_thumbnails_batch(
     size: u32,
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
+    let generation = state.thumbnail_generation.load(Ordering::SeqCst);
     let started = Instant::now();
     let cache = state.thumbnail_cache.clone();
 
@@ -267,6 +269,7 @@ pub fn request_thumbnails_batch(
                     asset_id,
                     size,
                     key: key.clone(),
+                    generation,
                 }) {
                     state.inflight_thumbnails.lock().remove(&key);
                     state.failed_thumbnails.lock().insert(key.clone());
@@ -390,6 +393,7 @@ pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
 
 #[tauri::command]
 pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
+    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
     state.thumbnail_cache.lock().clear();
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
@@ -423,7 +427,10 @@ pub fn record_client_log(
 pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.db.reset().map_err(map_error)?;
     *state.import_status.lock() = None;
+    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
     state.thumbnail_cache.lock().clear();
+    state.inflight_thumbnails.lock().clear();
+    state.failed_thumbnails.lock().clear();
     state
         .db
         .insert_log(

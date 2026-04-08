@@ -11,6 +11,7 @@ mod search;
 mod util;
 
 use std::collections::HashSet;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::{fs, path::PathBuf, sync::Arc, thread};
 
@@ -64,6 +65,7 @@ fn main() {
             )));
             let inflight_thumbnails = Arc::new(Mutex::new(HashSet::new()));
             let failed_thumbnails = Arc::new(Mutex::new(HashSet::new()));
+            let thumbnail_generation = Arc::new(AtomicU64::new(0));
             let worker_count = std::thread::available_parallelism()
                 .map(|count| count.get().min(4))
                 .unwrap_or(4)
@@ -75,6 +77,7 @@ fn main() {
                 let cache = thumbnail_cache.clone();
                 let inflight = inflight_thumbnails.clone();
                 let failed = failed_thumbnails.clone();
+                let generation = thumbnail_generation.clone();
                 thread::spawn(move || loop {
                     let job = {
                         let receiver = receiver.lock();
@@ -132,11 +135,15 @@ fn main() {
 
                     match result {
                         Ok(Some(bytes)) => {
-                            cache.lock().insert(job.key.clone(), bytes);
-                            failed.lock().remove(&job.key);
+                            if generation.load(Ordering::SeqCst) == job.generation {
+                                cache.lock().insert(job.key.clone(), bytes);
+                                failed.lock().remove(&job.key);
+                            }
                         }
                         Ok(None) => {
-                            failed.lock().insert(job.key.clone());
+                            if generation.load(Ordering::SeqCst) == job.generation {
+                                failed.lock().insert(job.key.clone());
+                            }
                         }
                         Err(error) => {
                             preview_debug_log(format!(
@@ -144,7 +151,9 @@ fn main() {
                                 worker_index, job.asset_id
                             ));
                             let _ = db.insert_log("error", "thumbnail_worker", &error, Some(job.asset_id));
-                            failed.lock().insert(job.key.clone());
+                            if generation.load(Ordering::SeqCst) == job.generation {
+                                failed.lock().insert(job.key.clone());
+                            }
                         }
                     }
 
@@ -158,6 +167,7 @@ fn main() {
                 thumbnail_cache,
                 inflight_thumbnails,
                 failed_thumbnails,
+                thumbnail_generation,
                 thumbnail_job_sender,
                 thumbnail_worker_count: worker_count,
             };
