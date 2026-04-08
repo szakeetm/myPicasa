@@ -20,7 +20,8 @@ Read-only desktop browser for Google Photos Takeout exports.
 ```bash
 cd frontend
 npm install
-npm run tauri dev
+cd ..
+npm run dev
 ```
 
 ## Notes

@@ -1,0 +1,10 @@
+{
+  "name": "my-picasa-workspace",
+  "private": true,
+  "scripts": {
+    "dev": "./frontend/node_modules/.bin/tauri dev --config src-tauri/tauri.conf.json",
+    "build": "./frontend/node_modules/.bin/tauri build --config src-tauri/tauri.conf.json",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build"
+  }
+}
