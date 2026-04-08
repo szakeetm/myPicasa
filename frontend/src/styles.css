@@ -179,8 +179,22 @@ button {
   padding: 12px 14px;
   border-bottom: 1px solid var(--border);
   display: grid;
-  grid-template-columns: minmax(160px, 1fr) minmax(140px, 180px) minmax(140px, 180px) auto;
+  grid-template-columns: minmax(160px, 1fr) minmax(140px, 180px) minmax(180px, 220px);
   gap: 10px;
+}
+
+.timeline-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.75);
+  color: var(--text-soft);
+  font-weight: 600;
+  text-transform: capitalize;
 }
 
 .grid-frame {

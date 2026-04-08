@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useRef, useState } from "react";
+import dayjs from "dayjs";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
 import { Sidebar } from "../components/Sidebar";
@@ -15,14 +16,14 @@ import type { AssetListRequest } from "../lib/types";
 export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
+  const [timelineLabel, setTimelineLabel] = useState<string>();
+  const didInitFilterEffect = useRef(false);
 
   async function refreshAllAssets() {
     const request: AssetListRequest = {
       limit: 400,
       query: state.query || undefined,
       media_kind: state.mediaKind || undefined,
-      date_from: state.dateFrom || undefined,
-      date_to: state.dateTo || undefined,
     };
 
     const response =
@@ -32,6 +33,7 @@ export function App() {
           ? await api.searchAssets(request)
           : await api.listAssetsByDate(request);
     state.setAssets(response.items);
+    setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
     await logClient("ui.refresh", `loaded ${response.items.length} assets in ${state.viewMode} mode`);
   }
 
@@ -68,6 +70,17 @@ export function App() {
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!didInitFilterEffect.current) {
+      didInitFilterEffect.current = true;
+      return;
+    }
+    const timer = window.setTimeout(() => {
+      void refreshAllAssets();
+    }, 150);
+    return () => window.clearTimeout(timer);
+  }, [state.mediaKind, state.query]);
 
   async function handleRefreshIndex() {
     const roots = state.rootsInput
@@ -247,16 +260,20 @@ export function App() {
         <Toolbar
           query={state.query}
           mediaKind={state.mediaKind}
-          dateFrom={state.dateFrom}
-          dateTo={state.dateTo}
+          timelineLabel={state.viewMode === "timeline" ? timelineLabel : undefined}
           onQueryChange={state.setQuery}
           onMediaKindChange={state.setMediaKind}
-          onDateFromChange={state.setDateFrom}
-          onDateToChange={state.setDateTo}
-          onApply={refreshAllAssets}
         />
         <div className="grid-frame">
-          <MediaGrid assets={state.assets} onSelect={handleSelectAsset} />
+          <MediaGrid
+            assets={state.assets}
+            onSelect={handleSelectAsset}
+            onLeadingDateChange={(value) => {
+              if (state.viewMode === "timeline") {
+                setTimelineLabel(formatTimelineLabel(value));
+              }
+            }}
+          />
         </div>
       </main>
 
@@ -283,4 +300,11 @@ export function App() {
       />
     </div>
   );
+}
+
+function formatTimelineLabel(value?: string | null) {
+  if (!value) return undefined;
+  const parsed = dayjs(value);
+  if (!parsed.isValid()) return undefined;
+  return parsed.format("MMMM YYYY");
 }

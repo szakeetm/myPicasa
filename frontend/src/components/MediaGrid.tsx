@@ -8,6 +8,7 @@ import type { AssetListItem } from "../lib/types";
 type MediaGridProps = {
   assets: AssetListItem[];
   onSelect: (assetId: number) => void;
+  onLeadingDateChange?: (value?: string) => void;
 };
 
 type ThumbnailState = {
@@ -22,7 +23,7 @@ function columnCount(width: number) {
   return 4;
 }
 
-export function MediaGrid({ assets, onSelect }: MediaGridProps) {
+export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
   const [width, setWidth] = useState(1200);
@@ -169,6 +170,11 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
 
     return () => window.clearTimeout(timer);
   }, [requestTick, thumbs, visibleIds, visibleTitles]);
+
+  useEffect(() => {
+    const firstVisibleAsset = assets.find((asset) => visibleIdSet.has(asset.id)) ?? assets[0];
+    onLeadingDateChange?.(firstVisibleAsset?.taken_at_utc ?? undefined);
+  }, [assets, onLeadingDateChange, visibleIdSet]);
 
   if (assets.length === 0) {
     return <div className="empty-state">No indexed assets match the current view.</div>;
