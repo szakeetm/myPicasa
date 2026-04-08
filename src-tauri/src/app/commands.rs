@@ -52,7 +52,7 @@ fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
             .and_then(|value| value.to_str())
             .map(|value| value.to_ascii_lowercase())
             .as_deref(),
-        Some("mp4" | "m4v" | "webm")
+        Some("mp4" | "m4v" | "mov" | "webm")
     )
 }
 

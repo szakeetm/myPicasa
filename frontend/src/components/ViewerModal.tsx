@@ -22,10 +22,12 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const [videoSrc, setVideoSrc] = useState<string>();
   const [videoError, setVideoError] = useState<string>();
   const [videoFallbackAttempted, setVideoFallbackAttempted] = useState(false);
+  const [videoFallbackAvailable, setVideoFallbackAvailable] = useState(false);
   const [videoTranscoding, setVideoTranscoding] = useState(false);
   const [livePhotoMotionSrc, setLivePhotoMotionSrc] = useState<string>();
   const [livePhotoMotionError, setLivePhotoMotionError] = useState<string>();
   const [livePhotoFallbackAttempted, setLivePhotoFallbackAttempted] = useState(false);
+  const [livePhotoFallbackAvailable, setLivePhotoFallbackAvailable] = useState(false);
   const [livePhotoTranscoding, setLivePhotoTranscoding] = useState(false);
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
@@ -37,6 +39,10 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
   const imageFrameRef = useRef<HTMLDivElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const livePhotoVideoElementRef = useRef<HTMLVideoElement | null>(null);
+  const videoObjectUrlRef = useRef<string | undefined>(undefined);
+  const livePhotoObjectUrlRef = useRef<string | undefined>(undefined);
+  const videoSourceLabelRef = useRef<string>("unset");
+  const livePhotoSourceLabelRef = useRef<string>("unset");
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
@@ -63,15 +69,25 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setVideoError(undefined);
     setVideoTranscoding(false);
     setVideoFallbackAttempted(false);
+    setVideoFallbackAvailable(false);
     setLivePhotoMotionSrc(undefined);
     setLivePhotoMotionError(undefined);
     setLivePhotoTranscoding(false);
     setLivePhotoFallbackAttempted(false);
+    setLivePhotoFallbackAvailable(false);
     setZoomMode("fit");
     setZoom(1);
     setNaturalSize(undefined);
     setImageError(undefined);
     setImageSrc(undefined);
+    if (videoObjectUrlRef.current) {
+      URL.revokeObjectURL(videoObjectUrlRef.current);
+      videoObjectUrlRef.current = undefined;
+    }
+    if (livePhotoObjectUrlRef.current) {
+      URL.revokeObjectURL(livePhotoObjectUrlRef.current);
+      livePhotoObjectUrlRef.current = undefined;
+    }
   }, [assetId]);
 
   useEffect(() => {
@@ -140,6 +156,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setVideoError(undefined);
     setVideoSrc(undefined);
     setVideoFallbackAttempted(false);
+    setVideoFallbackAvailable(false);
     setVideoTranscoding(true);
     void logClient(
       "viewer.video",
@@ -147,15 +164,29 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     );
     void api
       .loadViewerVideo(assetId, shouldPreferOriginalVideoBytes)
-      .then((backendPath) => {
+      .then(async (backendPath) => {
         if (cancelled) return;
         setVideoTranscoding(false);
         if (backendPath) {
+          const sourceLabel =
+            backendPath.startsWith("data:video/quicktime")
+              ? "original_quicktime"
+              : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalVideoBytes
+                ? "original_mp4"
+                : "transcoded_mp4";
           void logClient(
             "viewer.video",
-            `viewer-v2 asset ${assetId} backend video ready source=${backendPath.startsWith("data:video/quicktime") ? "original_quicktime" : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalVideoBytes ? "original_mp4" : "transcoded_mp4"}`,
+            `viewer-v2 asset ${assetId} backend video ready source=${sourceLabel}`,
           );
-          setVideoSrc(backendPath);
+          videoSourceLabelRef.current = sourceLabel;
+          const materialized = await materializeVideoSrc(backendPath, videoObjectUrlRef);
+          if (cancelled) {
+            if (materialized.startsWith("blob:")) {
+              URL.revokeObjectURL(materialized);
+            }
+            return;
+          }
+          setVideoSrc(materialized);
           setVideoError(undefined);
         } else {
           void logClient("viewer.video", `asset ${assetId} backend video unavailable`, "error");
@@ -188,6 +219,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     setLivePhotoMotionError(undefined);
     setLivePhotoMotionSrc(undefined);
     setLivePhotoFallbackAttempted(false);
+    setLivePhotoFallbackAvailable(false);
     setLivePhotoTranscoding(true);
     void logClient(
       "viewer.live_photo",
@@ -195,15 +227,29 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
     );
     void api
       .loadLivePhotoMotion(assetId, shouldPreferOriginalLivePhotoBytes)
-      .then((backendPath) => {
+      .then(async (backendPath) => {
         if (cancelled) return;
         setLivePhotoTranscoding(false);
         if (backendPath) {
+          const sourceLabel =
+            backendPath.startsWith("data:video/quicktime")
+              ? "original_quicktime"
+              : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalLivePhotoBytes
+                ? "original_mp4"
+                : "transcoded_mp4";
           void logClient(
             "viewer.live_photo",
-            `viewer-v2 asset ${assetId} backend motion ready source=${backendPath.startsWith("data:video/quicktime") ? "original_quicktime" : backendPath.startsWith("data:video/mp4") && shouldPreferOriginalLivePhotoBytes ? "original_mp4" : "transcoded_mp4"}`,
+            `viewer-v2 asset ${assetId} backend motion ready source=${sourceLabel}`,
           );
-          setLivePhotoMotionSrc(backendPath);
+          livePhotoSourceLabelRef.current = sourceLabel;
+          const materialized = await materializeVideoSrc(backendPath, livePhotoObjectUrlRef);
+          if (cancelled) {
+            if (materialized.startsWith("blob:")) {
+              URL.revokeObjectURL(materialized);
+            }
+            return;
+          }
+          setLivePhotoMotionSrc(materialized);
           setLivePhotoMotionError(undefined);
         } else {
           void logClient("viewer.live_photo", `asset ${assetId} backend motion unavailable`, "error");
@@ -269,6 +315,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       return;
     }
     setVideoFallbackAttempted(true);
+    setVideoFallbackAvailable(false);
     setVideoError(undefined);
     setVideoTranscoding(true);
     void logClient("viewer.video", `asset ${assetId} switching to transcoded backend playback after backend-original error`);
@@ -277,7 +324,8 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setVideoTranscoding(false);
       if (backendPath) {
         void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
-        setVideoSrc(backendPath);
+        videoSourceLabelRef.current = "transcoded_mp4";
+        setVideoSrc(await materializeVideoSrc(backendPath, videoObjectUrlRef));
         return;
       }
       void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
@@ -294,6 +342,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       return;
     }
     setLivePhotoFallbackAttempted(true);
+    setLivePhotoFallbackAvailable(false);
     setLivePhotoMotionError(undefined);
     setLivePhotoTranscoding(true);
     void logClient("viewer.live_photo", `asset ${assetId} switching to transcoded backend motion after backend-original error`);
@@ -302,7 +351,8 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
       setLivePhotoTranscoding(false);
       if (backendPath) {
         void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
-        setLivePhotoMotionSrc(backendPath);
+        livePhotoSourceLabelRef.current = "transcoded_mp4";
+        setLivePhotoMotionSrc(await materializeVideoSrc(backendPath, livePhotoObjectUrlRef));
         return;
       }
       void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
@@ -345,7 +395,7 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
               : "none";
     void logClient(
       scope,
-      `${label} src="${summarizeMediaSrc(element.currentSrc)}" readyState=${element.readyState} networkState=${element.networkState} error=${errorName}`,
+      `${label} src="${summarizeMediaSrc(element.currentSrc)}" readyState=${element.readyState} networkState=${element.networkState} error=${errorName} source=${scope === "viewer.video" ? videoSourceLabelRef.current : livePhotoSourceLabelRef.current}`,
       errorCode ? "error" : "info",
     );
   }
@@ -450,14 +500,27 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                 onError={(event) => {
                   handleVideoDiagnostics("viewer.video", `asset ${assetId} video element error`, event);
                   if (!videoFallbackAttempted) {
-                    void fallbackVideoToBackend();
+                    void logClient(
+                      "viewer.video",
+                      `asset ${assetId} backend-original playback failed; waiting for manual transcode request`,
+                      "error",
+                    );
+                    setVideoFallbackAvailable(true);
+                    setVideoError("This video failed to decode natively in the viewer.");
                     return;
                   }
                   setVideoError("Video playback unavailable");
                 }}
               />
             ) : videoError ? (
-              <div className="muted">{videoError}</div>
+              <div className="viewer-loading-state">
+                <div className="muted">{videoError}</div>
+                {videoFallbackAvailable ? (
+                  <button className="button-secondary" onClick={() => void fallbackVideoToBackend()}>
+                    Transcode For Playback
+                  </button>
+                ) : null}
+              </div>
             ) : videoTranscoding ? (
               <div className="viewer-loading-state">Transcoding video...</div>
             ) : (
@@ -499,14 +562,27 @@ export function ViewerModal({ asset, hasPrevious, hasNext, onPrevious, onNext, o
                     event,
                   );
                   if (!livePhotoFallbackAttempted) {
-                    void fallbackLivePhotoToBackend();
+                    void logClient(
+                      "viewer.live_photo",
+                      `asset ${assetId} backend-original motion failed; waiting for manual transcode request`,
+                      "error",
+                    );
+                    setLivePhotoFallbackAvailable(true);
+                    setLivePhotoMotionError("This live photo motion clip failed to decode natively in the viewer.");
                     return;
                   }
                   setLivePhotoMotionError("Live photo playback unavailable");
                 }}
               />
             ) : livePhotoMotionError ? (
-              <div className="muted">{livePhotoMotionError}</div>
+              <div className="viewer-loading-state">
+                <div className="muted">{livePhotoMotionError}</div>
+                {livePhotoFallbackAvailable ? (
+                  <button className="button-secondary" onClick={() => void fallbackLivePhotoToBackend()}>
+                    Transcode Live Photo
+                  </button>
+                ) : null}
+              </div>
             ) : livePhotoTranscoding ? (
               <div className="viewer-loading-state">Transcoding live photo...</div>
             ) : (
@@ -596,6 +672,21 @@ function summarizeMediaSrc(src?: string) {
   return src;
 }
 
+async function materializeVideoSrc(src: string, objectUrlRef: React.MutableRefObject<string | undefined>) {
+  if (objectUrlRef.current) {
+    URL.revokeObjectURL(objectUrlRef.current);
+    objectUrlRef.current = undefined;
+  }
+  if (!src.startsWith("data:video/")) {
+    return src;
+  }
+  const response = await fetch(src);
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  objectUrlRef.current = objectUrl;
+  return objectUrl;
+}
+
 function describeVideoSupport(src?: string | null) {
   if (typeof document === "undefined") {
     return "video support unknown";
@@ -615,7 +706,7 @@ function isDirectImagePath(path?: string | null) {
 
 function shouldPreferOriginalVideoBytesForPath(path?: string | null) {
   const extension = path?.split(".").pop()?.toLowerCase();
-  return extension !== undefined && ["mp4", "m4v", "webm"].includes(extension);
+  return extension !== undefined && ["mp4", "m4v", "mov", "webm"].includes(extension);
 }
 
 function inferVideoMimeType(src?: string | null) {
