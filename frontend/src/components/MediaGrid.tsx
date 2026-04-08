@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
 import { api } from "../lib/tauri";
@@ -27,11 +27,14 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
   const parentRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
   const [width, setWidth] = useState(1200);
-  const [requestTick, setRequestTick] = useState(0);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
+  const thumbnailQueueRef = useRef<number[]>([]);
+  const processingQueueRef = useRef(false);
+  const frameHandleRef = useRef<number | undefined>(undefined);
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+  const assetOrder = useMemo(() => new Map(assets.map((asset, index) => [asset.id, index])), [assets]);
   const thumbnailSize = useMemo(() => {
     const devicePixelRatio =
       typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
@@ -49,14 +52,8 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
   }, []);
 
   useEffect(() => {
-    const timer = window.setInterval(() => {
-      setRequestTick((value) => value + 1);
-    }, 500);
-    return () => window.clearInterval(timer);
-  }, []);
-
-  useEffect(() => {
     setThumbs({});
+    thumbnailQueueRef.current = [];
   }, [assets, thumbnailSize]);
 
   useEffect(() => {
@@ -83,9 +80,10 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
         }
 
         if (changed) {
-          setVisibleIds(
-            assets.filter((asset) => nextVisible.has(asset.id)).map((asset) => asset.id),
-          );
+          const nextIds = assets.filter((asset) => nextVisible.has(asset.id)).map((asset) => asset.id);
+          startTransition(() => {
+            setVisibleIds(nextIds);
+          });
         }
       },
       {
@@ -105,53 +103,133 @@ export function MediaGrid({ assets, onSelect, onLeadingDateChange }: MediaGridPr
   }, [assets, columns]);
 
   useEffect(() => {
-    if (visibleIds.length === 0) return;
-    const timer = window.setTimeout(async () => {
-      const pending = visibleIds.filter((id) => {
-        const state = thumbs[id];
-        return !state || state.status === "pending";
-      });
-      if (pending.length === 0) return;
+    const prioritized = assets
+      .filter((asset) => {
+        const state = thumbs[asset.id];
+        return visibleIdSet.has(asset.id) && (!state || state.status === "pending");
+      })
+      .map((asset) => asset.id);
+    if (prioritized.length === 0) return;
 
+    const queued = new Set(thumbnailQueueRef.current);
+    const additions = prioritized.filter((id) => !queued.has(id));
+    if (additions.length === 0) return;
+    thumbnailQueueRef.current.push(...additions);
+
+    const currentBatch = additions.slice(0, 24);
+    startTransition(() => {
       setThumbs((current) => {
         const next = { ...current };
-        for (const id of pending) {
+        for (const id of currentBatch) {
           if (!next[id]) {
             next[id] = { status: "pending" };
           }
         }
         return next;
       });
+    });
+  }, [assets, thumbs, visibleIdSet]);
 
-      try {
-        const batch = await api.requestThumbnailsBatch(pending, thumbnailSize);
-        setThumbs((current) => {
-          const next = { ...current };
-          for (const item of batch) {
-            if (item.status === "ready") {
-              next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
-            } else if (item.status === "unavailable") {
-              next[item.asset_id] = { status: "unavailable", src: null };
-            } else if (!next[item.asset_id]) {
-              next[item.asset_id] = { status: "pending" };
-            }
-          }
-          return next;
-        });
-      } catch (error) {
-        await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
-        setThumbs((current) => {
-          const next = { ...current };
-          for (const id of pending) {
-            next[id] = { status: "unavailable", src: null };
-          }
-          return next;
-        });
+  useEffect(() => {
+    let disposed = false;
+
+    async function processQueue() {
+      if (processingQueueRef.current || thumbnailQueueRef.current.length === 0) {
+        return;
       }
-    }, 150);
 
-    return () => window.clearTimeout(timer);
-  }, [requestTick, thumbnailSize, thumbs, visibleIds]);
+      processingQueueRef.current = true;
+      try {
+        while (!disposed && thumbnailQueueRef.current.length > 0) {
+          const nextIds = thumbnailQueueRef.current
+            .splice(0, 12)
+            .sort((left, right) => (assetOrder.get(left) ?? 0) - (assetOrder.get(right) ?? 0));
+
+          if (nextIds.length === 0) {
+            break;
+          }
+
+          const activeIds = nextIds.filter((id) => {
+            const state = thumbs[id];
+            return !state || state.status === "pending";
+          });
+          if (activeIds.length === 0) {
+            continue;
+          }
+
+          try {
+            const batch = await api.requestThumbnailsBatch(activeIds, thumbnailSize);
+            if (disposed) {
+              return;
+            }
+            startTransition(() => {
+              setThumbs((current) => {
+                const next = { ...current };
+                for (const item of batch) {
+                  if (item.status === "ready") {
+                    next[item.asset_id] = { status: "ready", src: item.data_url ?? null };
+                  } else if (item.status === "unavailable") {
+                    next[item.asset_id] = { status: "unavailable", src: null };
+                  } else if (!next[item.asset_id]) {
+                    next[item.asset_id] = { status: "pending" };
+                  }
+                }
+                return next;
+              });
+            });
+          } catch (error) {
+            await logClient("grid", `thumbnail batch failed: ${String(error)}`, "error");
+            if (disposed) {
+              return;
+            }
+            startTransition(() => {
+              setThumbs((current) => {
+                const next = { ...current };
+                for (const id of activeIds) {
+                  next[id] = { status: "unavailable", src: null };
+                }
+                return next;
+              });
+            });
+          }
+
+          await new Promise<void>((resolve) => {
+            const schedule =
+              typeof window !== "undefined" && "requestIdleCallback" in window
+                ? (window as Window & {
+                    requestIdleCallback: (cb: () => void, options?: { timeout: number }) => number;
+                  }).requestIdleCallback
+                : undefined;
+
+            if (schedule) {
+              frameHandleRef.current = schedule(() => resolve(), { timeout: 120 });
+            } else {
+              frameHandleRef.current = window.setTimeout(() => resolve(), 16);
+            }
+          });
+        }
+      } finally {
+        processingQueueRef.current = false;
+      }
+    }
+
+    void processQueue();
+
+    return () => {
+      disposed = true;
+      if (frameHandleRef.current !== undefined) {
+        if (typeof window !== "undefined" && "cancelIdleCallback" in window) {
+          (
+            window as Window & {
+              cancelIdleCallback: (handle: number) => void;
+            }
+          ).cancelIdleCallback(frameHandleRef.current);
+        } else {
+          globalThis.clearTimeout(frameHandleRef.current as number);
+        }
+      }
+    };
+  }, [assetOrder, thumbnailSize, thumbs]);
 
   useEffect(() => {
     const firstVisibleAsset = assets.find((asset) => visibleIdSet.has(asset.id)) ?? assets[0];
