@@ -443,7 +443,7 @@ impl DatabaseQueries for super::Database {
              JOIN file_entries f ON f.id = a.primary_file_id
              LEFT JOIN album_assets aa ON aa.asset_id = a.id
              LEFT JOIN albums al ON al.id = aa.album_id
-             WHERE a.is_deleted = 0",
+             WHERE a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')",
             " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
             request,
         )
@@ -463,7 +463,7 @@ impl DatabaseQueries for super::Database {
                  JOIN file_entries f ON f.id = a.primary_file_id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE a.is_deleted = 0"
+                 WHERE a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')"
             ),
             " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
             request,
@@ -482,7 +482,7 @@ impl DatabaseQueries for super::Database {
                  JOIN file_entries f ON f.id = a.primary_file_id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE search_fts MATCH ?1 AND a.is_deleted = 0
+                 WHERE search_fts MATCH ?1 AND a.is_deleted = 0 AND a.media_kind IN ('photo', 'video', 'live_photo')
                  GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, f.path
                  ORDER BY rank
                  LIMIT ?2 OFFSET ?3",

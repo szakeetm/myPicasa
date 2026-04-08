@@ -71,7 +71,7 @@ pub fn refresh_takeout_index(
     for (index, scan) in scans.iter().enumerate() {
         let file_id = state.db.upsert_file_entry(import_id, scan)?;
         let album_id = state.db.upsert_album(&scan.parent_path)?;
-        if scan.candidate_type == "json" {
+        if scan.candidate_type == "json" || scan.candidate_type == "other" {
             progress.processed_files = (index + 1) as u32;
             if should_publish_progress(index, scans.len()) {
                 progress.message = Some(progress_message(&progress));

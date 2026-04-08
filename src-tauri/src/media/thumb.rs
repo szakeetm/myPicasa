@@ -23,3 +23,28 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
     encoder.encode_image(&thumb)?;
     Ok(Some(buffer))
 }
+
+pub fn generate_viewer_image(path: &Path, max_dimension: u32) -> Result<Option<Vec<u8>>, AppError> {
+    let extension = path
+        .extension()
+        .and_then(|item| item.to_str())
+        .unwrap_or_default()
+        .to_lowercase();
+    if matches!(extension.as_str(), "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm") {
+        return Ok(None);
+    }
+
+    let reader = ImageReader::open(path)?;
+    let image = reader.decode()?;
+    let fitted = if image.width() > max_dimension || image.height() > max_dimension {
+        image.resize(max_dimension, max_dimension, image::imageops::FilterType::Lanczos3)
+    } else {
+        image
+    };
+
+    let mut buffer = Vec::new();
+    let mut cursor = Cursor::new(&mut buffer);
+    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 90);
+    encoder.encode_image(&fitted)?;
+    Ok(Some(buffer))
+}

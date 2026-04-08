@@ -25,6 +25,8 @@ export const api = {
     invoke<AssetListResponse>("search_assets", { request }),
   getAssetDetail: (assetId: number) =>
     invoke<AssetDetail>("get_asset_detail", { assetId }),
+  loadViewerFrame: (assetId: number) =>
+    invoke<string | null>("load_viewer_frame", { assetId }),
   requestThumbnail: (assetId: number, size: number) =>
     invoke<string | null>("request_thumbnail", { assetId, size }),
   getDiagnostics: () =>

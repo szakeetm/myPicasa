@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf};
+use std::path::PathBuf;
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
 use tauri::{generate_handler, ipc::InvokeError, State};
@@ -8,7 +8,7 @@ use crate::{
     app::state::AppState,
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
-    media::thumb::generate_thumbnail,
+    media::thumb::{generate_thumbnail, generate_viewer_image},
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats, DiagnosticEntry,
         ImportProgress, LogEntry, RefreshRequest,
@@ -114,10 +114,15 @@ pub fn load_viewer_frame(asset_id: i64, state: State<AppState>) -> CommandResult
         return Ok(None);
     };
 
-    match fs::read(primary_path) {
-        Ok(bytes) => Ok(Some(STANDARD.encode(bytes))),
+    match generate_viewer_image(&PathBuf::from(primary_path), 2400) {
+        Ok(Some(bytes)) => Ok(Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes)))),
+        Ok(None) => Ok(None),
         Err(error) => {
             error!(asset_id, %error, "viewer frame load failed");
+            state
+                .db
+                .insert_log("error", "viewer", &error.to_string(), Some(asset_id))
+                .map_err(map_error)?;
             Ok(None)
         }
     }

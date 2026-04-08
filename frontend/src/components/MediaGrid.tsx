@@ -66,7 +66,14 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
       if (pending.length === 0) return;
       await logClient("grid", `requesting ${pending.length} visible thumbnails`);
       const entries = await Promise.all(
-        pending.map(async (id) => [id, await api.requestThumbnail(id, 480)] as const),
+        pending.map(async (id) => {
+          try {
+            return [id, await api.requestThumbnail(id, 480)] as const;
+          } catch (error) {
+            await logClient("grid", `thumbnail request failed for ${id}: ${String(error)}`, "error");
+            return [id, null] as const;
+          }
+        }),
       );
       setThumbs((current) => {
         const next = { ...current };
@@ -101,6 +108,8 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
                   <div className="thumb">
                     {thumbs[asset.id] ? (
                       <img src={thumbs[asset.id] ?? ""} alt={asset.title ?? "asset"} />
+                    ) : thumbs[asset.id] === null ? (
+                      <div>Preview unavailable</div>
                     ) : (
                       <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
                     )}

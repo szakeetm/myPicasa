@@ -1,6 +1,9 @@
+import { useEffect, useState } from "react";
+
 import dayjs from "dayjs";
 import { convertFileSrc } from "@tauri-apps/api/core";
 
+import { api } from "../lib/tauri";
 import type { AssetDetail } from "../lib/types";
 
 type ViewerModalProps = {
@@ -9,6 +12,41 @@ type ViewerModalProps = {
 };
 
 export function ViewerModal({ asset, onClose }: ViewerModalProps) {
+  const [imageSrc, setImageSrc] = useState<string>();
+  const [imageError, setImageError] = useState<string>();
+  const assetId = asset?.id;
+  const isPhoto = asset && asset.media_kind !== "video";
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!assetId || !isPhoto) {
+      return;
+    }
+
+    void api
+      .loadViewerFrame(assetId)
+      .then((src) => {
+        if (cancelled) return;
+        if (src) {
+          setImageSrc(src);
+          setImageError(undefined);
+        } else {
+          setImageSrc(undefined);
+          setImageError("Image preview unavailable");
+        }
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setImageSrc(undefined);
+          setImageError(String(error));
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [assetId, isPhoto]);
+
   if (!asset) return null;
 
   const primaryPath = asset.primary_path ? convertFileSrc(asset.primary_path) : undefined;
@@ -22,10 +60,12 @@ export function ViewerModal({ asset, onClose }: ViewerModalProps) {
         <div className="viewer-media">
           {asset.media_kind === "video" && primaryPath ? (
             <video src={primaryPath} controls autoPlay />
-          ) : primaryPath ? (
-            <img src={primaryPath} alt={asset.title ?? "asset"} />
+          ) : imageSrc && assetId === asset.id ? (
+            <img src={imageSrc} alt={asset.title ?? "asset"} />
+          ) : imageError ? (
+            <div className="muted">{imageError}</div>
           ) : (
-            <div className="muted">Source media unavailable.</div>
+            <div className="muted">Loading image…</div>
           )}
         </div>
         <div className="viewer-meta">
