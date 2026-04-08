@@ -60,14 +60,21 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     estimateSize: () => rowHeight,
     overscan: 4,
   });
+  const virtualRows = rowVirtualizer.getVirtualItems();
 
   const visibleIds = useMemo(
     () =>
-      rowVirtualizer
-        .getVirtualItems()
+      virtualRows
         .flatMap((item) => rows[item.index] ?? [])
         .map((asset) => asset.id),
-    [rowVirtualizer, rows],
+    [rows, virtualRows],
+  );
+  const visibleTitles = useMemo(
+    () =>
+      virtualRows
+        .flatMap((item) => rows[item.index] ?? [])
+        .map((asset) => asset.title ?? `asset-${asset.id}`),
+    [rows, virtualRows],
   );
 
   useEffect(() => {
@@ -76,6 +83,10 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     }, 500);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    setThumbs({});
+  }, [assets]);
 
   useEffect(() => {
     if (visibleIds.length === 0) return;
@@ -97,6 +108,10 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
       });
 
       await logClient("grid", `requesting batch of ${pending.length} visible thumbnails`);
+      console.info("thumbnail_visible_assets", {
+        visibleIds,
+        visibleTitles,
+      });
       try {
         const batch = await api.requestThumbnailsBatch(pending, 256);
         const readyIds = batch.filter((item) => item.status === "ready").map((item) => item.asset_id);
@@ -137,7 +152,7 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
     }, 150);
 
     return () => window.clearTimeout(timer);
-  }, [requestTick, thumbs, visibleIds]);
+  }, [requestTick, thumbs, visibleIds, visibleTitles]);
 
   if (assets.length === 0) {
     return <div className="empty-state">No indexed assets match the current view.</div>;
@@ -146,7 +161,7 @@ export function MediaGrid({ assets, onSelect }: MediaGridProps) {
   return (
     <div className="grid-scroller" ref={parentRef}>
       <div className="grid-inner" style={{ height: rowVirtualizer.getTotalSize() }}>
-        {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+        {virtualRows.map((virtualRow) => {
           const row = rows[virtualRow.index] ?? [];
           return (
             <div
