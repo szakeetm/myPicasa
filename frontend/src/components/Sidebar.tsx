@@ -23,6 +23,10 @@ export function Sidebar({
   onShowTimeline,
   onSelectAlbum,
 }: SidebarProps) {
+  const total = importStatus?.total_files ?? 0;
+  const processed = importStatus?.processed_files ?? 0;
+  const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+
   return (
     <aside className="panel sidebar">
       <div className="header-block">
@@ -33,7 +37,11 @@ export function Sidebar({
         </div>
         {importStatus ? (
           <div className="status-banner">
-            {importStatus.status} • scanned {importStatus.files_scanned} files
+            {importStatus.status} • {importStatus.phase}
+            <br />
+            scanned {importStatus.files_scanned} files
+            {total > 0 ? ` • ${processed}/${total} (${percent}%)` : ""}
+            {importStatus.worker_count ? ` • ${importStatus.worker_count} workers` : ""}
             {importStatus.message ? ` • ${importStatus.message}` : ""}
           </div>
         ) : null}

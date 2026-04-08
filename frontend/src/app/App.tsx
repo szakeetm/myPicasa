@@ -62,10 +62,42 @@ export function App() {
       .map((item) => item.trim())
       .filter(Boolean);
     await logClient("ui.import", `refresh requested for ${roots.length} roots`);
-    const progress = await api.refreshIndex({ roots });
-    state.setImportStatus(progress);
-    await refreshDebugSurfaces();
-    await refreshAllAssets();
+    state.setImportStatus({
+      import_id: 0,
+      status: "running",
+      phase: "starting",
+      files_scanned: 0,
+      processed_files: 0,
+      total_files: 0,
+      files_added: 0,
+      files_updated: 0,
+      files_deleted: 0,
+      assets_added: 0,
+      assets_updated: 0,
+      assets_deleted: 0,
+      worker_count: 0,
+      message: "starting refresh",
+    });
+
+    const poll = window.setInterval(async () => {
+      try {
+        const status = await api.getImportStatus();
+        if (status) {
+          state.setImportStatus(status);
+        }
+      } catch (error) {
+        console.error("failed to poll import status", error);
+      }
+    }, 400);
+
+    try {
+      const progress = await api.refreshIndex({ roots });
+      state.setImportStatus(progress);
+      await refreshDebugSurfaces();
+      await refreshAllAssets();
+    } finally {
+      window.clearInterval(poll);
+    }
   }
 
   async function handleBrowseRoot() {

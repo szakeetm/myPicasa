@@ -2323,6 +2323,7 @@ dependencies = [
  "image",
  "mime_guess",
  "parking_lot",
+ "rayon",
  "rusqlite",
  "serde",
  "serde_json",

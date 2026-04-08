@@ -9,13 +9,17 @@ pub struct RefreshRequest {
 pub struct ImportProgress {
     pub import_id: i64,
     pub status: String,
+    pub phase: String,
     pub files_scanned: u32,
+    pub processed_files: u32,
+    pub total_files: u32,
     pub files_added: u32,
     pub files_updated: u32,
     pub files_deleted: u32,
     pub assets_added: u32,
     pub assets_updated: u32,
     pub assets_deleted: u32,
+    pub worker_count: u32,
     pub message: Option<String>,
 }
 

@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 
+use rayon::current_num_threads;
 use tauri::State;
 use tracing::info;
 
@@ -32,19 +33,24 @@ pub fn refresh_takeout_index(
     let mut progress = ImportProgress {
         import_id,
         status: "running".to_string(),
+        phase: "scanning".to_string(),
         files_scanned: 0,
+        processed_files: 0,
+        total_files: 0,
         files_added: 0,
         files_updated: 0,
         files_deleted: 0,
         assets_added: 0,
         assets_updated: 0,
         assets_deleted: 0,
+        worker_count: current_num_threads() as u32,
         message: Some("scan in progress".to_string()),
     };
     *state.import_status.lock() = Some(progress.clone());
 
     let scans = scan_roots(&roots)?;
     progress.files_scanned = scans.len() as u32;
+    progress.total_files = scans.len() as u32;
     progress.message = Some(format!("scanned {} files", progress.files_scanned));
     *state.import_status.lock() = Some(progress.clone());
 
@@ -55,10 +61,22 @@ pub fn refresh_takeout_index(
         }
     }
 
-    for scan in &scans {
+    progress.phase = "indexing".to_string();
+    progress.message = Some(format!(
+        "indexing {} files with {} workers",
+        progress.total_files, progress.worker_count
+    ));
+    *state.import_status.lock() = Some(progress.clone());
+
+    for (index, scan) in scans.iter().enumerate() {
         let file_id = state.db.upsert_file_entry(import_id, scan)?;
         let album_id = state.db.upsert_album(&scan.parent_path)?;
         if scan.candidate_type == "json" {
+            progress.processed_files = (index + 1) as u32;
+            if should_publish_progress(index, scans.len()) {
+                progress.message = Some(progress_message(&progress));
+                *state.import_status.lock() = Some(progress.clone());
+            }
             continue;
         }
 
@@ -80,12 +98,24 @@ pub fn refresh_takeout_index(
         }
 
         state.db.replace_search_row(asset_id)?;
+
+        progress.processed_files = (index + 1) as u32;
+        if should_publish_progress(index, scans.len()) {
+            progress.message = Some(progress_message(&progress));
+            *state.import_status.lock() = Some(progress.clone());
+        }
     }
+
+    progress.phase = "validating".to_string();
+    progress.message = Some("running ingress validation".to_string());
+    *state.import_status.lock() = Some(progress.clone());
 
     progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
     validate_import(&state.db, import_id, &scans)?;
 
     progress.status = "completed".to_string();
+    progress.phase = "completed".to_string();
+    progress.processed_files = progress.total_files;
     progress.message = Some("refresh completed".to_string());
     state.db.finish_import(&progress)?;
     state
@@ -95,6 +125,21 @@ pub fn refresh_takeout_index(
 
     *state.import_status.lock() = Some(progress.clone());
     Ok(progress)
+}
+
+fn should_publish_progress(index: usize, total: usize) -> bool {
+    index == 0 || index + 1 == total || (index + 1) % 100 == 0
+}
+
+fn progress_message(progress: &ImportProgress) -> String {
+    if progress.total_files == 0 {
+        return "indexing files".to_string();
+    }
+    let percent = (progress.processed_files as f64 / progress.total_files as f64) * 100.0;
+    format!(
+        "indexed {} / {} files ({percent:.1}%) using {} workers",
+        progress.processed_files, progress.total_files, progress.worker_count
+    )
 }
 
 fn find_sidecar_for<'a>(

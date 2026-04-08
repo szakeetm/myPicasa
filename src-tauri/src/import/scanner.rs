@@ -5,6 +5,7 @@ use std::{
 };
 
 use mime_guess::MimeGuess;
+use rayon::prelude::*;
 use walkdir::WalkDir;
 
 use crate::{
@@ -14,7 +15,7 @@ use crate::{
 };
 
 pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
-    let mut records = Vec::new();
+    let mut file_paths = Vec::new();
 
     for root in roots {
         let normalized_root = normalize_path(Path::new(root));
@@ -27,8 +28,14 @@ pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
             if !path.is_file() {
                 continue;
             }
+            file_paths.push((normalized_root.clone(), path.to_path_buf()));
+        }
+    }
 
-            let metadata = fs::metadata(path)?;
+    let records = file_paths
+        .into_par_iter()
+        .map(|(normalized_root, path)| -> Result<FileScanRecord, AppError> {
+            let metadata = fs::metadata(&path)?;
             let file_size = metadata.len();
             let extension = path
                 .extension()
@@ -48,22 +55,22 @@ pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
                 .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
                 .map(|duration| epoch_to_utc(duration.as_secs() as i64));
 
-            let detected_format = detect_format(path, &extension);
-            let mime_type = MimeGuess::from_path(path)
+            let detected_format = detect_format(&path, &extension);
+            let mime_type = MimeGuess::from_path(&path)
                 .first_raw()
                 .map(ToOwned::to_owned)
                 .or_else(|| detected_format.clone());
 
             let quick_hash = if candidate_type != "other" {
-                Some(quick_hash(path, file_size)?)
+                Some(quick_hash(&path, file_size)?)
             } else {
                 None
             };
 
-            records.push(FileScanRecord {
-                path: normalize_path(path),
+            Ok(FileScanRecord {
+                path: normalize_path(&path),
                 root_path: normalized_root.clone(),
-                parent_path: normalize_path(path.parent().unwrap_or(Path::new(root))),
+                parent_path: normalize_path(path.parent().unwrap_or(Path::new(&normalized_root))),
                 filename: path
                     .file_name()
                     .and_then(|item| item.to_str())
@@ -78,9 +85,9 @@ pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
                 candidate_type: candidate_type.to_string(),
                 json_kind: None,
                 quick_hash,
-            });
-        }
-    }
+            })
+        })
+        .collect::<Result<Vec<_>, _>>()?;
 
     Ok(records)
 }

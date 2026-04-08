@@ -3,13 +3,17 @@ export type RefreshRequest = { roots: string[] };
 export type ImportProgress = {
   import_id: number;
   status: string;
+  phase: string;
   files_scanned: number;
+  processed_files: number;
+  total_files: number;
   files_added: number;
   files_updated: number;
   files_deleted: number;
   assets_added: number;
   assets_updated: number;
   assets_deleted: number;
+  worker_count: number;
   message?: string | null;
 };
 
