@@ -15,6 +15,9 @@ pub fn generate_thumbnail(path: &Path, size: u32) -> Result<Option<Vec<u8>>, App
     }
 
     if matches!(extension.as_str(), "heic" | "heif") {
+        if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(256))? {
+            return Ok(Some(bytes));
+        }
         if let Some(bytes) = render_with_sips(path, size.max(256), 82)? {
             return Ok(Some(bytes));
         }
@@ -130,6 +133,54 @@ fn render_with_sips(path: &Path, width: u32, quality: u8) -> Result<Option<Vec<u
     }
 }
 
+fn render_thumbnail_with_quicklook(path: &Path, width: u32) -> Result<Option<Vec<u8>>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let output_dir = temp_render_dir(path);
+        fs::create_dir_all(&output_dir)?;
+
+        let status = Command::new("qlmanage")
+            .arg("-t")
+            .arg("-s")
+            .arg(width.to_string())
+            .arg("-o")
+            .arg(&output_dir)
+            .arg(path)
+            .status()?;
+
+        if !status.success() {
+            let _ = fs::remove_dir_all(&output_dir);
+            return Ok(None);
+        }
+
+        let generated_file = fs::read_dir(&output_dir)?
+            .filter_map(Result::ok)
+            .find_map(|entry| {
+                let path = entry.path();
+                if path.is_file() {
+                    Some(path)
+                } else {
+                    None
+                }
+            });
+
+        let Some(generated_file) = generated_file else {
+            let _ = fs::remove_dir_all(&output_dir);
+            return Ok(None);
+        };
+
+        let bytes = fs::read(&generated_file)?;
+        let _ = fs::remove_dir_all(&output_dir);
+        return Ok(Some(bytes));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (path, width);
+        Ok(None)
+    }
+}
+
 fn temp_jpeg_path(path: &Path) -> PathBuf {
     let stamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -137,4 +188,13 @@ fn temp_jpeg_path(path: &Path) -> PathBuf {
         .unwrap_or_default();
     let stem = path.file_stem().and_then(|item| item.to_str()).unwrap_or("thumb");
     std::env::temp_dir().join(format!("mypicasa-{stem}-{stamp}.jpg"))
+}
+
+fn temp_render_dir(path: &Path) -> PathBuf {
+    let stamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or_default();
+    let stem = path.file_stem().and_then(|item| item.to_str()).unwrap_or("thumb");
+    std::env::temp_dir().join(format!("mypicasa-ql-{stem}-{stamp}"))
 }
