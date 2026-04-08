@@ -1,0 +1,129 @@
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshRequest {
+    pub roots: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ImportProgress {
+    pub import_id: i64,
+    pub status: String,
+    pub files_scanned: u32,
+    pub files_added: u32,
+    pub files_updated: u32,
+    pub files_deleted: u32,
+    pub assets_added: u32,
+    pub assets_updated: u32,
+    pub assets_deleted: u32,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FileScanRecord {
+    pub path: String,
+    pub root_path: String,
+    pub parent_path: String,
+    pub filename: String,
+    pub extension: Option<String>,
+    pub detected_format: Option<String>,
+    pub mime_type: Option<String>,
+    pub file_size: i64,
+    pub mtime_utc: String,
+    pub ctime_utc: Option<String>,
+    pub candidate_type: String,
+    pub json_kind: Option<String>,
+    pub quick_hash: Option<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParsedSidecar {
+    pub json_raw: String,
+    pub photo_taken_time_utc: Option<String>,
+    pub geo_lat: Option<f64>,
+    pub geo_lon: Option<f64>,
+    pub geo_alt: Option<f64>,
+    pub people_json: Option<String>,
+    pub google_photos_origin: Option<String>,
+    pub json_kind: String,
+    pub guessed_target_stem: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AlbumSummary {
+    pub id: i64,
+    pub name: String,
+    pub source_path: String,
+    pub asset_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetListRequest {
+    pub cursor: Option<u32>,
+    pub limit: Option<u32>,
+    pub query: Option<String>,
+    pub media_kind: Option<String>,
+    pub date_from: Option<String>,
+    pub date_to: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetListResponse {
+    pub items: Vec<AssetListItem>,
+    pub next_cursor: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetListItem {
+    pub id: i64,
+    pub title: Option<String>,
+    pub media_kind: String,
+    pub taken_at_utc: Option<String>,
+    pub primary_path: String,
+    pub albums: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssetDetail {
+    pub id: i64,
+    pub title: Option<String>,
+    pub media_kind: String,
+    pub display_type: String,
+    pub taken_at_utc: Option<String>,
+    pub width: Option<i64>,
+    pub height: Option<i64>,
+    pub duration_ms: Option<i64>,
+    pub gps_lat: Option<f64>,
+    pub gps_lon: Option<f64>,
+    pub primary_path: Option<String>,
+    pub albums: Vec<String>,
+    pub live_photo_video_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DiagnosticEntry {
+    pub id: i64,
+    pub import_id: i64,
+    pub severity: String,
+    pub diagnostic_type: String,
+    pub related_path: Option<String>,
+    pub message: String,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStats {
+    pub thumbnail_items: u32,
+    pub thumbnail_bytes: u64,
+    pub thumbnail_budget_bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LogEntry {
+    pub id: i64,
+    pub created_at: String,
+    pub level: String,
+    pub scope: String,
+    pub message: String,
+    pub asset_id: Option<i64>,
+}

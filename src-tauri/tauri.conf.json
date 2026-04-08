@@ -1,0 +1,31 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "myPicasa",
+  "version": "0.1.0",
+  "identifier": "com.martonady.mypicasa",
+  "build": {
+    "beforeDevCommand": "cd ../frontend && npm run dev -- --host 127.0.0.1 --port 1420",
+    "beforeBuildCommand": "cd ../frontend && npm run build",
+    "frontendDist": "../frontend/dist",
+    "devUrl": "http://127.0.0.1:1420"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "myPicasa",
+        "width": 1440,
+        "height": 960,
+        "minWidth": 1024,
+        "minHeight": 720
+      }
+    ],
+    "security": {
+      "csp": null
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": []
+  }
+}
