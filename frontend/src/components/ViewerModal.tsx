@@ -313,15 +313,10 @@ export function ViewerModal({
     setImageError(undefined);
     const useViewerPreview = zoomMode === "fit";
     const preferOriginal = !forceRenderedFrame;
-    const imageMode: "preview" | "original" | "rendered" = useViewerPreview
-      ? "preview"
-      : preferOriginal
-        ? "original"
-        : "rendered";
-    setImageSourceLabel(imageMode);
+    setDisplaySourceLabel("Loading");
     void logClient(
       "viewer.image",
-      `asset ${assetId} loading backend image source=${imageSourceLabelRef.current} path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
+      `asset ${assetId} loading backend image source=${useViewerPreview ? "preview" : preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
     );
 
     if (useViewerPreview) {
@@ -913,17 +908,17 @@ function inferImageFormat(src?: string | null) {
 function formatViewerSourceLabel(label: string) {
   switch (label) {
     case "preview":
-      return "Showing 1024px Preview";
+      return "Preview Thumbnail";
     case "original":
-      return "Showing Original";
+      return "Original Image";
     case "rendered":
-      return "Showing Rendered";
+      return "Rendered Fallback";
     case "original_mp4":
-      return "Video: Original MP4";
+      return "Original Video (MP4)";
     case "original_quicktime":
-      return "Video: Original MOV";
+      return "Original Video (MOV)";
     case "transcoded_mp4":
-      return "Video: Transcoded MP4";
+      return "Transcoded Video";
     case "unset":
     case "Loading":
     default:
