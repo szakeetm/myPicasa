@@ -977,6 +977,8 @@ function formatViewerSourceLabel(label: string) {
       return "Original Video (WEBM)";
     case "transcoded_mp4":
       return "Transcoded Video";
+    case "transcoding":
+      return "Transcoding In Background";
     case "unset":
     case "Loading":
     default:
