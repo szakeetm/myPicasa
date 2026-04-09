@@ -70,13 +70,15 @@ struct ViewerSheet: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.regularMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 18))
-        .overlay(
-            ViewerKeyboardMonitor(
+        .overlay(alignment: .topLeading) {
+            ViewerKeyCatcher(
                 onLeft: { model.stepSelectedAsset(-1) },
                 onRight: { model.stepSelectedAsset(1) },
                 onEscape: { model.selectedAsset = nil }
             )
-        )
+            .frame(width: 1, height: 1)
+            .allowsHitTesting(false)
+        }
     }
 
     private var metadataLine: String {
@@ -138,12 +140,7 @@ private struct ZoomableImageView: NSViewRepresentable {
     }
 
     func makeNSView(context: Context) -> ZoomableImageScrollView {
-        let scrollView = ZoomableImageScrollView()
-        context.coordinator.scrollView = scrollView
-        scrollView.magnificationHandler = { scrollView, recognizer in
-            context.coordinator.handleMagnification(recognizer, in: scrollView)
-        }
-        return scrollView
+        ZoomableImageScrollView()
     }
 
     func updateNSView(_ scrollView: ZoomableImageScrollView, context: Context) {
@@ -154,28 +151,8 @@ private struct ZoomableImageView: NSViewRepresentable {
         scrollView.setImage(NSImage(contentsOfFile: path))
     }
 
-    static func dismantleNSView(_ scrollView: ZoomableImageScrollView, coordinator: Coordinator) {
-        scrollView.magnificationHandler = nil
-    }
-
-    final class Coordinator: NSObject {
+    final class Coordinator {
         var loadedPath: String?
-        weak var scrollView: ZoomableImageScrollView?
-        private var initialMagnification: CGFloat = 1.0
-
-        @MainActor
-        @objc func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer, in scrollView: ZoomableImageScrollView) {
-            switch recognizer.state {
-            case .began:
-                initialMagnification = scrollView.magnification
-            case .changed, .ended:
-                let target = initialMagnification * (1 + recognizer.magnification)
-                let location = recognizer.location(in: scrollView.documentView)
-                scrollView.applyMagnification(target, centeredAt: location)
-            default:
-                break
-            }
-        }
     }
 }
 
@@ -183,7 +160,6 @@ private final class ZoomableImageScrollView: NSScrollView {
     let containerView = NSView(frame: .zero)
     let imageView = NSImageView(frame: .zero)
     var imageSize: NSSize = .zero
-    var magnificationHandler: ((ZoomableImageScrollView, NSMagnificationGestureRecognizer) -> Void)?
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -210,9 +186,6 @@ private final class ZoomableImageScrollView: NSScrollView {
 
         containerView.addSubview(imageView)
         documentView = containerView
-
-        let recognizer = NSMagnificationGestureRecognizer(target: self, action: #selector(handleMagnification(_:)))
-        addGestureRecognizer(recognizer)
     }
 
     override func layout() {
@@ -275,8 +248,16 @@ private final class ZoomableImageScrollView: NSScrollView {
         )
     }
 
-    @objc private func handleMagnification(_ recognizer: NSMagnificationGestureRecognizer) {
-        magnificationHandler?(self, recognizer)
+    override func magnify(with event: NSEvent) {
+        guard imageSize.width > 0, imageSize.height > 0 else { return }
+
+        let target = magnification * (1 + event.magnification)
+        let windowPoint = event.locationInWindow
+        let localPoint = contentView.convert(windowPoint, from: nil)
+        let documentPoint = documentView?.convert(localPoint, from: contentView)
+            ?? NSPoint(x: imageSize.width / 2, y: imageSize.height / 2)
+
+        applyMagnification(target, centeredAt: documentPoint)
     }
 }
 
@@ -338,7 +319,7 @@ private struct NativeVideoPlayerView: NSViewRepresentable {
     }
 }
 
-private struct ViewerKeyboardMonitor: NSViewRepresentable {
+private struct ViewerKeyCatcher: NSViewRepresentable {
     let onLeft: () -> Void
     let onRight: () -> Void
     let onEscape: () -> Void
@@ -347,27 +328,28 @@ private struct ViewerKeyboardMonitor: NSViewRepresentable {
         Coordinator(onLeft: onLeft, onRight: onRight, onEscape: onEscape)
     }
 
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        context.coordinator.installMonitor()
+    func makeNSView(context: Context) -> KeyCatcherView {
+        let view = KeyCatcherView(frame: .zero)
+        view.coordinator = context.coordinator
         return view
     }
 
-    func updateNSView(_ nsView: NSView, context: Context) {
+    func updateNSView(_ nsView: KeyCatcherView, context: Context) {
+        nsView.coordinator = context.coordinator
         context.coordinator.onLeft = onLeft
         context.coordinator.onRight = onRight
         context.coordinator.onEscape = onEscape
+        nsView.activate()
     }
 
-    static func dismantleNSView(_ nsView: NSView, coordinator: Coordinator) {
-        coordinator.removeMonitor()
+    static func dismantleNSView(_ nsView: KeyCatcherView, coordinator: Coordinator) {
+        nsView.coordinator = nil
     }
 
-    final class Coordinator {
+    final class Coordinator: NSObject {
         var onLeft: () -> Void
         var onRight: () -> Void
         var onEscape: () -> Void
-        private var monitor: Any?
 
         init(onLeft: @escaping () -> Void, onRight: @escaping () -> Void, onEscape: @escaping () -> Void) {
             self.onLeft = onLeft
@@ -375,32 +357,47 @@ private struct ViewerKeyboardMonitor: NSViewRepresentable {
             self.onEscape = onEscape
         }
 
-        func installMonitor() {
-            guard monitor == nil else { return }
-            monitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-                guard let self else { return event }
-
-                switch event.keyCode {
-                case 123:
-                    self.onLeft()
-                    return nil
-                case 124:
-                    self.onRight()
-                    return nil
-                case 53:
-                    self.onEscape()
-                    return nil
-                default:
-                    return event
-                }
+        @discardableResult
+        func handle(event: NSEvent) -> Bool {
+            switch event.keyCode {
+            case 123:
+                onLeft()
+                return true
+            case 124:
+                onRight()
+                return true
+            case 53:
+                onEscape()
+                return true
+            default:
+                return false
             }
         }
+    }
+}
 
-        func removeMonitor() {
-            if let monitor {
-                NSEvent.removeMonitor(monitor)
-                self.monitor = nil
-            }
+private final class KeyCatcherView: NSView {
+    weak var coordinator: ViewerKeyCatcher.Coordinator?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        activate()
+    }
+
+    override func keyDown(with event: NSEvent) {
+        if coordinator?.handle(event: event) == true {
+            return
+        }
+        super.keyDown(with: event)
+    }
+
+    func activate() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let window = self.window else { return }
+            window.makeFirstResponder(nil)
+            window.makeFirstResponder(self)
         }
     }
 }

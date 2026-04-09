@@ -2,18 +2,20 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: NativeAppModel
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     private let columns = [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 12)]
 
     var body: some View {
         ZStack {
-            NavigationSplitView {
+            NavigationSplitView(columnVisibility: $columnVisibility) {
                 sidebar
             } content: {
                 contentPanel
             } detail: {
                 debugPanel
             }
+            .navigationSplitViewStyle(.prominentDetail)
 
             if let asset = model.selectedAsset {
                 viewerOverlay(asset: asset)
@@ -43,8 +45,9 @@ struct ContentView: View {
 
             ViewerSheet(asset: asset)
                 .environmentObject(model)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .padding(12)
+                .frame(maxWidth: 1120, maxHeight: 780)
+                .padding(.horizontal, 36)
+                .padding(.vertical, 28)
         }
     }
 
@@ -140,7 +143,10 @@ struct ContentView: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            .padding(16)
+            .padding(.top, 16)
+            .padding(.leading, contentLeadingInset)
+            .padding(.trailing, 16)
+            .padding(.bottom, 16)
 
             Divider()
 
@@ -191,7 +197,10 @@ struct ContentView: View {
                         }
                     }
                 }
-                .padding(16)
+                .padding(.top, 16)
+                .padding(.leading, contentLeadingInset)
+                .padding(.trailing, 16)
+                .padding(.bottom, 16)
 
                 if model.isLoadingMore {
                     ProgressView()
@@ -272,5 +281,9 @@ struct ContentView: View {
         let minutes = totalSeconds / 60
         let seconds = totalSeconds % 60
         return "\(minutes):\(String(format: "%02d", seconds))"
+    }
+
+    private var contentLeadingInset: CGFloat {
+        columnVisibility == .all ? 12 : 0
     }
 }
