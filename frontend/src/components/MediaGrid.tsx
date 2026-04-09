@@ -55,9 +55,11 @@ export function MediaGrid({
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
+  const [scrollIdle, setScrollIdle] = useState(true);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
   const requestInFlightRef = useRef(false);
   const previewRequestInFlightRef = useRef(false);
+  const scrollIdleTimeoutRef = useRef<number | null>(null);
   const lastBatchLogRef = useRef<{
     signature: string;
     at: number;
@@ -114,8 +116,39 @@ export function MediaGrid({
   }, []);
 
   useEffect(() => {
+    const root = parentRef.current;
+    if (!root) {
+      return;
+    }
+
+    const settleDelayMs = 180;
+    const markScrollActive = () => {
+      setScrollIdle((current) => (current ? false : current));
+      if (scrollIdleTimeoutRef.current !== null) {
+        window.clearTimeout(scrollIdleTimeoutRef.current);
+      }
+      scrollIdleTimeoutRef.current = window.setTimeout(() => {
+        scrollIdleTimeoutRef.current = null;
+        setScrollIdle(true);
+      }, settleDelayMs);
+    };
+
+    setScrollIdle(true);
+    root.addEventListener("scroll", markScrollActive, { passive: true });
+
+    return () => {
+      root.removeEventListener("scroll", markScrollActive);
+      if (scrollIdleTimeoutRef.current !== null) {
+        window.clearTimeout(scrollIdleTimeoutRef.current);
+        scrollIdleTimeoutRef.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
     setThumbs({});
     setVisibleIds([]);
+    setScrollIdle(true);
     requestInFlightRef.current = false;
     previewRequestInFlightRef.current = false;
     lastBatchLogRef.current = { signature: "", at: 0 };
@@ -238,6 +271,11 @@ export function MediaGrid({
     let disposed = false;
 
     async function processPreviewPass() {
+      if (thumbnailPreload?.active && !scrollIdle) {
+        logIdleSnapshot("preview", "scroll_active");
+        return;
+      }
+
       if (previewRequestInFlightRef.current) {
         logIdleSnapshot("preview", "request_in_flight");
         return;
@@ -350,7 +388,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, effectiveVisibleIdSet, thumbnailPreload?.active]);
+  }, [assets, effectiveVisibleIdSet, scrollIdle, thumbnailPreload?.active]);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -426,6 +464,11 @@ export function MediaGrid({
     let disposed = false;
 
     async function processBatch() {
+      if (thumbnailPreload?.active && !scrollIdle) {
+        logIdleSnapshot("thumb", "scroll_active");
+        return;
+      }
+
       if (requestInFlightRef.current) {
         logIdleSnapshot("thumb", "request_in_flight");
         return;
@@ -538,7 +581,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, effectiveVisibleIdSet, thumbnailPreload?.active, thumbnailSize]);
+  }, [assets, effectiveVisibleIdSet, scrollIdle, thumbnailPreload?.active, thumbnailSize]);
 
   useEffect(() => {
     const firstVisibleAsset =

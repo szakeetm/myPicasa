@@ -35,7 +35,7 @@ pub fn thumbnail_generator_label(path: &Path) -> &'static str {
 
 pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     if is_video_path(path) {
-        return render_video_thumbnail_with_ffmpeg(path, size);
+        return render_video_thumbnail_with_ffmpeg(path, size, working_dir);
     }
 
     let extension = normalized_extension(path);
@@ -325,14 +325,20 @@ pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError
     Ok(Some(codec))
 }
 
-fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<Vec<u8>>, AppError> {
+fn render_video_thumbnail_with_ffmpeg(
+    path: &Path,
+    size: u32,
+    working_dir: &Path,
+) -> Result<Option<Vec<u8>>, AppError> {
     let ffmpeg = match find_command_binary("ffmpeg") {
         Some(path) => path,
         None => return Ok(None),
     };
 
     let seek_time = probe_video_seek_seconds(path).unwrap_or(1.0).max(0.0);
-    let output = wait_for_output_with_timeout(
+    let temp_output = temp_jpeg_path(path, working_dir);
+    let _ = fs::remove_file(&temp_output);
+    let status = wait_for_status_with_timeout(
         Command::new(ffmpeg)
         .arg("-hide_banner")
         .arg("-loglevel")
@@ -343,23 +349,23 @@ fn render_video_thumbnail_with_ffmpeg(path: &Path, size: u32) -> Result<Option<V
         .arg(path)
         .arg("-frames:v")
         .arg("1")
-        .arg("-f")
-        .arg("image2pipe")
-        .arg("-vcodec")
-        .arg("mjpeg")
-        .arg("-")
-        .stdout(Stdio::piped())
+        .arg("-y")
+        .arg(&temp_output)
+        .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?,
         VIDEO_THUMBNAIL_TIMEOUT,
         "ffmpeg thumbnail render",
     )?;
 
-    if !output.status.success() || output.stdout.is_empty() {
+    if !status.success() || !temp_output.is_file() {
+        let _ = fs::remove_file(&temp_output);
         return Ok(None);
     }
 
-    let image = image::load_from_memory(&output.stdout)?;
+    let bytes = fs::read(&temp_output)?;
+    let _ = fs::remove_file(&temp_output);
+    let image = image::load_from_memory(&bytes)?;
     let thumb = image.thumbnail(size, size);
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
