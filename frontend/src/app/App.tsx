@@ -31,6 +31,7 @@ export function App() {
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
   const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
   const [batchTranscodeStatus, setBatchTranscodeStatus] = useState<BatchViewerTranscodeStatus>();
+  const [batchTranscodeLogs, setBatchTranscodeLogs] = useState<LogEntry[]>([]);
   const didInitFilterEffect = useRef(false);
   const assetQueryGenerationRef = useRef(0);
 
@@ -190,9 +191,13 @@ export function App() {
     let cancelled = false;
     async function refreshBatchStatus() {
       try {
-        const status = await api.getBatchViewerTranscodeStatus();
+        const [status, logs] = await Promise.all([
+          api.getBatchViewerTranscodeStatus(),
+          api.getBatchViewerTranscodeLogs(),
+        ]);
         if (!cancelled) {
           setBatchTranscodeStatus(status);
+          setBatchTranscodeLogs(logs);
         }
       } catch (error) {
         console.error("failed to load batch transcode status", error);
@@ -582,6 +587,20 @@ export function App() {
                     : ""}
                 </div>
               ) : null}
+            </div>
+            <div className="thumb-log-list">
+              {batchTranscodeLogs.length > 0 ? (
+                batchTranscodeLogs.map((entry) => (
+                  <div key={entry.id} className="thumb-log-line">
+                    <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
+                    <span className="thumb-log-message">
+                      [{entry.level}] asset={entry.asset_id ?? "?"} {entry.message}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state">No batch transcode events recorded yet.</div>
+              )}
             </div>
           </div>
         </div>

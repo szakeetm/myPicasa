@@ -56,6 +56,8 @@ export const api = {
     invoke<LogEntry[]>("get_recent_logs", { limit }),
   getThumbGenerationLogs: (limit = 400) =>
     invoke<LogEntry[]>("get_thumb_generation_logs", { limit }),
+  getBatchViewerTranscodeLogs: (limit = 400) =>
+    invoke<LogEntry[]>("get_batch_viewer_transcode_logs", { limit }),
   clearThumbGenerationLogs: () => invoke<void>("clear_thumb_generation_logs"),
   recordClientLog: (level: string, scope: string, message: string) =>
     invoke<void>("record_client_log", { level, scope, message }),

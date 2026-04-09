@@ -1242,6 +1242,15 @@ pub fn get_thumb_generation_logs(
 }
 
 #[tauri::command]
+pub fn get_batch_viewer_transcode_logs(
+    limit: Option<u32>,
+    state: State<AppState>,
+) -> CommandResult<Vec<LogEntry>> {
+    query_service::get_logs_by_scope(&state.db, &["batch_viewer_transcode"], limit.unwrap_or(400))
+        .map_err(map_error)
+}
+
+#[tauri::command]
 pub fn clear_thumb_generation_logs(state: State<AppState>) -> CommandResult<()> {
     state.db.clear_logs_by_scope(&["thumb_gen"]).map_err(map_error)
 }
@@ -1325,6 +1334,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         clear_viewer_render_cache_command,
         get_recent_logs,
         get_thumb_generation_logs,
+        get_batch_viewer_transcode_logs,
         clear_thumb_generation_logs,
         record_client_log,
         reset_local_database,
