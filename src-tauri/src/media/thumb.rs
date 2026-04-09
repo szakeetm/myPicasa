@@ -26,18 +26,6 @@ const HIGH_QUALITY_THUMB_MAX_SIZE: u32 = 512;
 
 pub struct ThumbnailGenerationOutput {
     pub bytes: Option<Vec<u8>>,
-    pub metrics: String,
-}
-
-struct ResizeEncodeMetrics {
-    resize_ms: u128,
-    encode_ms: u128,
-}
-
-struct DecodeResizeEncodeMetrics {
-    decode_ms: u128,
-    resize_ms: u128,
-    encode_ms: u128,
 }
 
 pub fn thumbnail_generator_label(path: &Path) -> &'static str {
@@ -60,15 +48,8 @@ pub fn generate_thumbnail(
     working_dir: &Path,
 ) -> Result<ThumbnailGenerationOutput, AppError> {
     if is_video_path(path) {
-        let started = Instant::now();
         let bytes = render_video_thumbnail_with_ffmpeg(path, size, working_dir)?;
-        return Ok(ThumbnailGenerationOutput {
-            bytes,
-            metrics: format!(
-                "source=ffmpeg steps=ffmpeg_pipeline:{}",
-                format_step_ms("total", started.elapsed().as_millis())
-            ),
-        });
+        return Ok(ThumbnailGenerationOutput { bytes });
     }
 
     #[cfg(target_os = "macos")]
@@ -76,59 +57,31 @@ pub fn generate_thumbnail(
         let render_size = thumbnail_render_size(size);
         let source_quality = thumbnail_source_quality(size);
         let output_quality = thumbnail_output_quality(size);
-        if !use_high_quality_thumbnail_settings(size) {
-            let source_started = Instant::now();
-            if let Some(bytes) = render_with_sips(path, render_size, source_quality, working_dir)? {
-                let source_render_ms = source_started.elapsed().as_millis();
-                return Ok(ThumbnailGenerationOutput {
-                    bytes: Some(bytes),
-                    metrics: format!(
-                        "source=sips_direct render_size={} source_quality={} output_quality={} steps={}",
-                        render_size,
-                        source_quality,
-                        output_quality,
-                        format_step_ms("source_render", source_render_ms),
-                    ),
-                });
+        if use_high_quality_thumbnail_settings(size) {
+            if let Some(bytes) = render_square_thumbnail_with_sips(path, size, output_quality, working_dir)? {
+                return Ok(ThumbnailGenerationOutput { bytes: Some(bytes) });
             }
         }
 
-        let source_started = Instant::now();
+        if !use_high_quality_thumbnail_settings(size) {
+            if let Some(bytes) = render_with_sips(path, render_size, source_quality, working_dir)? {
+                return Ok(ThumbnailGenerationOutput { bytes: Some(bytes) });
+            }
+        }
+
         if let Some(bytes) = render_with_sips(path, render_size, source_quality, working_dir)? {
-            let source_render_ms = source_started.elapsed().as_millis();
-            let (normalized, metrics) =
-                normalize_image_bytes_to_square_jpeg_with_metrics(&bytes, size, output_quality)?;
+            let normalized = normalize_image_bytes_to_square_jpeg(&bytes, size, output_quality)?;
             return Ok(ThumbnailGenerationOutput {
                 bytes: Some(normalized),
-                metrics: format!(
-                    "source=sips render_size={} source_quality={} output_quality={} steps={} {} {} {}",
-                    render_size,
-                    source_quality,
-                    output_quality,
-                    format_step_ms("source_render", source_render_ms),
-                    format_step_ms("decode", metrics.decode_ms),
-                    format_step_ms("resize", metrics.resize_ms),
-                    format_step_ms("encode", metrics.encode_ms),
-                ),
             });
         }
     }
 
-    let load_started = Instant::now();
     let image = load_image(path, size, working_dir)?;
-    let load_ms = load_started.elapsed().as_millis();
     let output_quality = thumbnail_output_quality(size);
-    let (bytes, metrics) = encode_square_thumbnail_to_jpeg_with_metrics(&image, size, output_quality)?;
+    let bytes = encode_square_thumbnail_to_jpeg(&image, size, output_quality)?;
     Ok(ThumbnailGenerationOutput {
         bytes: Some(bytes),
-        metrics: format!(
-            "source=rust load_size_hint={} output_quality={} steps={} {} {}",
-            size,
-            output_quality,
-            format_step_ms("load", load_ms),
-            format_step_ms("resize", metrics.resize_ms),
-            format_step_ms("encode", metrics.encode_ms),
-        ),
     })
 }
 
@@ -691,6 +644,138 @@ fn load_image_with_sips(
     }
 }
 
+fn probe_image_dimensions_with_sips(path: &Path) -> Result<Option<(u32, u32)>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let output = wait_for_output_with_timeout(
+            Command::new("sips")
+                .arg("-g")
+                .arg("pixelWidth")
+                .arg("-g")
+                .arg("pixelHeight")
+                .arg(path)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()?,
+            EXTERNAL_TOOL_TIMEOUT,
+            "sips image dimension probe",
+        )?;
+
+        if !output.status.success() {
+            return Ok(None);
+        }
+
+        let text = String::from_utf8_lossy(&output.stdout);
+        let width = text
+            .lines()
+            .find_map(|line| line.split_once("pixelWidth: ").and_then(|(_, value)| value.trim().parse::<u32>().ok()));
+        let height = text
+            .lines()
+            .find_map(|line| line.split_once("pixelHeight: ").and_then(|(_, value)| value.trim().parse::<u32>().ok()));
+
+        Ok(width.zip(height))
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = path;
+        Ok(None)
+    }
+}
+
+fn render_square_thumbnail_with_sips(
+    path: &Path,
+    size: u32,
+    quality: u8,
+    working_dir: &Path,
+) -> Result<Option<Vec<u8>>, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        let Some((source_width, source_height)) = probe_image_dimensions_with_sips(path)? else {
+            return Ok(None);
+        };
+        let size = size.max(1);
+        let temp_path = temp_jpeg_path(path, working_dir);
+        let _ = fs::remove_file(&temp_path);
+
+        let (resize_flag, resize_value, offset_y, offset_x) = if source_width >= source_height {
+            let target_width = ((source_width as u64 * size as u64) + source_height as u64 - 1)
+                / source_height as u64;
+            (
+                "--resampleHeight",
+                size.to_string(),
+                0_u32,
+                ((target_width as u32).saturating_sub(size)) / 2,
+            )
+        } else {
+            let target_height = ((source_height as u64 * size as u64) + source_width as u64 - 1)
+                / source_width as u64;
+            (
+                "--resampleWidth",
+                size.to_string(),
+                ((target_height as u32).saturating_sub(size)) / 2,
+                0_u32,
+            )
+        };
+
+        let status = wait_for_status_with_timeout(
+            Command::new("sips")
+                .arg("-s")
+                .arg("format")
+                .arg("jpeg")
+                .arg("-s")
+                .arg("formatOptions")
+                .arg(quality.to_string())
+                .arg(resize_flag)
+                .arg(resize_value)
+                .arg(path)
+                .arg("--out")
+                .arg(&temp_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
+            EXTERNAL_TOOL_TIMEOUT,
+            "sips square thumbnail resample",
+        )?;
+
+        if !status.success() || !temp_path.is_file() {
+            let _ = fs::remove_file(&temp_path);
+            return Ok(None);
+        }
+
+        let crop_status = wait_for_status_with_timeout(
+            Command::new("sips")
+                .arg("-c")
+                .arg(size.to_string())
+                .arg(size.to_string())
+                .arg("--cropOffset")
+                .arg(offset_y.to_string())
+                .arg(offset_x.to_string())
+                .arg(&temp_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
+            EXTERNAL_TOOL_TIMEOUT,
+            "sips square thumbnail crop",
+        )?;
+
+        if !crop_status.success() {
+            let _ = fs::remove_file(&temp_path);
+            return Ok(None);
+        }
+
+        let bytes = fs::read(&temp_path)?;
+        let _ = fs::remove_file(&temp_path);
+        return Ok(Some(bytes));
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = (path, size, quality, working_dir);
+        Ok(None)
+    }
+}
+
 fn render_with_sips(path: &Path, width: u32, quality: u8, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     #[cfg(target_os = "macos")]
     {
@@ -805,42 +890,14 @@ fn encode_square_thumbnail_to_jpeg(
     encode_jpeg(&thumb, quality)
 }
 
-fn encode_square_thumbnail_to_jpeg_with_metrics(
-    image: &DynamicImage,
-    size: u32,
-    quality: u8,
-) -> Result<(Vec<u8>, ResizeEncodeMetrics), AppError> {
-    let resize_started = Instant::now();
-    let thumb = render_center_square(image, size.max(1));
-    let resize_ms = resize_started.elapsed().as_millis();
-    let encode_started = Instant::now();
-    let bytes = encode_jpeg(&thumb, quality)?;
-    let encode_ms = encode_started.elapsed().as_millis();
-    Ok((bytes, ResizeEncodeMetrics { resize_ms, encode_ms }))
-}
-
-fn normalize_image_bytes_to_square_jpeg_with_metrics(
+fn normalize_image_bytes_to_square_jpeg(
     bytes: &[u8],
     size: u32,
     quality: u8,
-) -> Result<(Vec<u8>, DecodeResizeEncodeMetrics), AppError> {
-    let decode_started = Instant::now();
+) -> Result<Vec<u8>, AppError> {
     let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let image = decode_with_orientation(reader)?;
-    let decode_ms = decode_started.elapsed().as_millis();
-    let (bytes, metrics) = encode_square_thumbnail_to_jpeg_with_metrics(&image, size, quality)?;
-    Ok((
-        bytes,
-        DecodeResizeEncodeMetrics {
-            decode_ms,
-            resize_ms: metrics.resize_ms,
-            encode_ms: metrics.encode_ms,
-        },
-    ))
-}
-
-fn format_step_ms(label: &str, elapsed_ms: u128) -> String {
-    format!("{label}={}ms", elapsed_ms)
+    encode_square_thumbnail_to_jpeg(&image, size, quality)
 }
 
 fn wait_for_status_with_timeout(

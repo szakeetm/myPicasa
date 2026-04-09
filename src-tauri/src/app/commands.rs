@@ -158,7 +158,6 @@ fn enqueue_thumbnail_job(
         size,
         key: key.clone(),
         generation,
-        queued_at: Instant::now(),
     }) {
         if !use_preview_cache {
             state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -1184,7 +1183,6 @@ pub fn request_thumbnail(
         return Ok(None);
     };
     let (filename, file_size) = media_debug_info(&primary_path);
-    let started = Instant::now();
     let kind = thumb_log_kind(size);
     let generator = thumbnail_generator_label(&PathBuf::from(&primary_path));
     record_thumb_log(
@@ -1200,7 +1198,6 @@ pub fn request_thumbnail(
     let working_dir = state.app_data_dir.join("working");
     match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
         Ok(result) => {
-            let metrics = result.metrics;
             let generated = result.bytes;
             if let Some(bytes) = generated {
             record_thumb_log(
@@ -1208,11 +1205,9 @@ pub fn request_thumbnail(
                 "info",
                 asset_id,
                 format!(
-                    "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={} metrics=\"{}\"",
+                    "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={}",
                     human_size(file_size),
                     human_size(bytes.len() as u64),
-                    human_elapsed_ms(started.elapsed().as_millis()),
-                    metrics,
                 ),
             )?;
             let mut cache = cache.lock();
@@ -1226,10 +1221,8 @@ pub fn request_thumbnail(
                 "warning",
                 asset_id,
                 format!(
-                    "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={} metrics=\"{}\"",
+                    "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={}",
                     human_size(file_size),
-                    human_elapsed_ms(started.elapsed().as_millis()),
-                    metrics,
                 ),
             )?;
             Ok(None)
@@ -1246,9 +1239,8 @@ pub fn request_thumbnail(
                 "error",
                 asset_id,
                 format!(
-                    "kind={kind} generator={generator} status=failed mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={} error={error}",
-                    human_size(file_size),
-                    human_elapsed_ms(started.elapsed().as_millis())
+                    "kind={kind} generator={generator} status=failed mode=direct size={size}px filename=\"{filename}\" file_size={} error={error}",
+                    human_size(file_size)
                 ),
             )?;
             Ok(None)
@@ -1262,7 +1254,6 @@ pub fn request_thumbnails_batch(
     size: u32,
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
-    let started = Instant::now();
     let generation = state.thumbnail_generation.load(Ordering::SeqCst);
     let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
     let cache = if use_preview_cache {
@@ -1328,7 +1319,6 @@ pub fn request_thumbnails_batch(
                     size,
                     key: key.clone(),
                     generation,
-                    queued_at: Instant::now(),
                 }) {
                     if !use_preview_cache {
                         state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -1375,12 +1365,11 @@ pub fn request_thumbnails_batch(
             "info",
             "thumbnail_batch",
             &format!(
-                "kind=preview status=batch requested={} ready={} pending={} unavailable={} elapsed={}",
+                "kind=preview status=batch requested={} ready={} pending={} unavailable={}",
                 items.len(),
                 ready,
                 pending,
                 unavailable,
-                human_elapsed_ms(started.elapsed().as_millis()),
             ),
             None,
         );
@@ -1665,7 +1654,6 @@ pub fn load_viewer_frame(
     prefer_original: Option<bool>,
     state: State<AppState>,
 ) -> CommandResult<Option<String>> {
-    let started = Instant::now();
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(primary_path) = detail.primary_path else {
         return Ok(None);
@@ -1703,19 +1691,17 @@ pub fn load_viewer_frame(
         &working_dir,
     ) {
         Ok(Some(path)) => {
-            let elapsed = started.elapsed().as_millis();
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             preview_debug_log(format!(
-                "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
+                "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={}",
                 file_size,
                 generated_bytes
             ));
             Ok(Some(path.to_string_lossy().to_string()))
         }
         Ok(None) => {
-            let elapsed = started.elapsed().as_millis();
             preview_debug_log(format!(
-                "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable elapsed_ms={elapsed}",
+                "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} unavailable",
                 file_size
             ));
             Ok(None)

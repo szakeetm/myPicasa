@@ -698,14 +698,28 @@ export function App() {
             </div>
             <div className="thumb-log-list">
               {thumbGenerationLogs.length > 0 ? (
-                thumbGenerationLogs.map((entry) => (
-                  <div key={entry.id} className="thumb-log-line">
-                    <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
-                    <span className="thumb-log-message">
-                      [{entry.level}] asset={entry.asset_id ?? "?"} {entry.message}
-                    </span>
-                  </div>
-                ))
+                thumbGenerationLogs.map((entry) => {
+                  const parsed = parseThumbLogMessage(entry.message);
+                  return (
+                    <div key={entry.id} className="thumb-log-line thumb-log-line-detailed">
+                      <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
+                      <span className="thumb-log-message">
+                        <span className="thumb-log-main-message">
+                          [{entry.level}] asset={entry.asset_id ?? "?"} {parsed.baseMessage}
+                        </span>
+                        {parsed.metrics.length > 0 ? (
+                          <span className="thumb-log-metrics">
+                            {parsed.metrics.map((metric) => (
+                              <span key={`${entry.id}-${metric.label}`} className="thumb-log-metric-chip">
+                                <strong>{metric.label}</strong> {metric.value}
+                              </span>
+                            ))}
+                          </span>
+                        ) : null}
+                      </span>
+                    </div>
+                  );
+                })
               ) : (
                 <div className="empty-state">No thumbnail generation events recorded yet.</div>
               )}
@@ -902,6 +916,40 @@ function formatThumbnailBatchStatusLine(status?: BatchThumbnailGenerationStatus)
     parts.push(status.message);
   }
   return parts.join(" • ");
+}
+
+function parseThumbLogMessage(message: string) {
+  const metricsMatch = message.match(/\smetrics="([^"]*)"/);
+  const baseMessage = message.replace(/\smetrics="[^"]*"/, "");
+  const metrics = new Map<string, string>();
+
+  for (const key of ["queue_elapsed", "elapsed", "total_elapsed", "generated_size"]) {
+    const match = baseMessage.match(new RegExp(`${key}=([^ ]+)`));
+    if (match) {
+      metrics.set(formatMetricLabel(key), match[1]);
+    }
+  }
+
+  if (metricsMatch) {
+    for (const token of metricsMatch[1].split(/\s+/)) {
+      const separatorIndex = token.indexOf("=");
+      if (separatorIndex <= 0) {
+        continue;
+      }
+      const label = token.slice(0, separatorIndex);
+      const value = token.slice(separatorIndex + 1);
+      metrics.set(formatMetricLabel(label), value);
+    }
+  }
+
+  return {
+    baseMessage,
+    metrics: Array.from(metrics.entries()).map(([label, value]) => ({ label, value })),
+  };
+}
+
+function formatMetricLabel(label: string) {
+  return label.replace(/_/g, " ");
 }
 
 function formatMediaDurationMs(durationMs: number) {

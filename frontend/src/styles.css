@@ -330,6 +330,21 @@ button:disabled:hover {
   min-height: 0;
 }
 
+.tile.has-viewer-preview {
+  background: rgba(220, 238, 226, 0.96);
+  border-color: rgba(46, 128, 74, 0.32);
+}
+
+.tile.video-ready-transcoded {
+  background: rgba(232, 225, 245, 0.96);
+  border-color: rgba(120, 78, 168, 0.34);
+}
+
+.tile.has-viewer-preview.video-ready-transcoded {
+  background: rgba(226, 220, 241, 0.97);
+  border-color: rgba(103, 89, 150, 0.36);
+}
+
 .thumb {
   aspect-ratio: 1 / 1;
   width: 100%;
@@ -346,9 +361,8 @@ button:disabled:hover {
 
 .thumb.has-viewer-preview {
   box-shadow:
-    inset 0 0 0 3px rgba(46, 128, 74, 0.88),
-    inset 0 0 0 7px rgba(255, 255, 255, 0.32),
-    0 0 0 1px rgba(255, 255, 255, 0.7);
+    inset 0 0 0 2px rgba(46, 128, 74, 0.58),
+    inset 0 0 0 5px rgba(255, 255, 255, 0.16);
 }
 
 .thumb.video-ready-transcoded {
@@ -545,6 +559,11 @@ button:disabled:hover {
   word-break: break-word;
 }
 
+.thumb-log-line-detailed {
+  padding: 8px 0;
+  border-bottom: 1px solid rgba(255, 248, 239, 0.08);
+}
+
 .thumb-log-timestamp {
   color: rgba(198, 182, 163, 0.88);
   font-variant-numeric: tabular-nums;
@@ -552,6 +571,35 @@ button:disabled:hover {
 
 .thumb-log-message {
   min-width: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.thumb-log-main-message {
+  min-width: 0;
+}
+
+.thumb-log-metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.thumb-log-metric-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 999px;
+  background: rgba(255, 248, 239, 0.1);
+  color: rgba(255, 248, 239, 0.92);
+  font-size: 0.7rem;
+  line-height: 1.2;
+}
+
+.thumb-log-metric-chip strong {
+  color: rgba(248, 207, 110, 0.92);
+  font-weight: 600;
 }
 
 .viewer-toolbar {

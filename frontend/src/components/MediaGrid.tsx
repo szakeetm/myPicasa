@@ -781,7 +781,15 @@ export function MediaGrid({
         {assets.map((asset) => (
           <button
             key={asset.id}
-            className="tile"
+            className={[
+              "tile",
+              thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
+              asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
+                ? "video-ready-transcoded"
+                : "",
+            ]
+              .filter(Boolean)
+              .join(" ")}
             data-asset-id={asset.id}
             ref={(element) => {
               if (element) {
@@ -795,7 +803,6 @@ export function MediaGrid({
             <div
               className={[
                 "thumb",
-                thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
                 asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
                   ? "video-ready-transcoded"
                   : "",

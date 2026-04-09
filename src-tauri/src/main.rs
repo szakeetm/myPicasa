@@ -49,10 +49,6 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-fn human_elapsed_ms(elapsed_ms: u128) -> String {
-    format!("{:.1}s", elapsed_ms as f64 / 1000.0)
-}
-
 fn thumb_log_kind(size: u32) -> &'static str {
     if size >= VIEWER_PREVIEW_SIZE {
         "preview"
@@ -86,21 +82,18 @@ fn process_thumbnail_job(
             .unwrap_or(&primary_path)
             .to_string();
         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
-        let started = std::time::Instant::now();
-        let queued_elapsed_ms = job.queued_at.elapsed().as_millis();
         let kind = thumb_log_kind(job.size);
         let generator = thumbnail_generator_label(&primary_path_buf);
         let _ = db.insert_log(
             "info",
             "thumb_gen",
             &format!(
-                "kind={kind} generator={generator} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={} queue_elapsed={}",
+                "kind={kind} generator={generator} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={}",
                 worker_index,
                 job.asset_id,
                 job.size,
                 filename,
                 human_size(file_size),
-                human_elapsed_ms(queued_elapsed_ms),
             ),
             Some(job.asset_id),
         );
@@ -116,26 +109,22 @@ fn process_thumbnail_job(
             generate_thumbnail(&primary_path_buf, job.size, working_dir).map_err(|error| error.to_string())?;
         match &generated.bytes {
             Some(bytes) => {
-                let elapsed_ms = started.elapsed().as_millis();
                 let _ = db.insert_log(
                     "info",
                     "thumb_gen",
                     &format!(
-                        "kind={kind} generator={generator} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={} elapsed={} total_elapsed={} metrics=\"{}\"",
+                        "kind={kind} generator={generator} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={}",
                         worker_index,
                         job.asset_id,
                         job.size,
                         filename,
                         human_size(file_size),
                         human_size(bytes.len() as u64),
-                        human_elapsed_ms(elapsed_ms),
-                        human_elapsed_ms(queued_elapsed_ms + elapsed_ms),
-                        generated.metrics,
                     ),
                     Some(job.asset_id),
                 );
                 preview_debug_log(format!(
-                    "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={} elapsed_ms={elapsed_ms}",
+                    "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={}",
                     worker_index,
                     job.asset_id,
                     filename,
@@ -144,25 +133,21 @@ fn process_thumbnail_job(
                 ));
             }
             None => {
-                let elapsed_ms = started.elapsed().as_millis();
                 let _ = db.insert_log(
                     "warning",
                     "thumb_gen",
                     &format!(
-                        "kind={kind} generator={generator} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={} elapsed={} total_elapsed={} metrics=\"{}\"",
+                        "kind={kind} generator={generator} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={}",
                         worker_index,
                         job.asset_id,
                         job.size,
                         filename,
                         human_size(file_size),
-                        human_elapsed_ms(elapsed_ms),
-                        human_elapsed_ms(queued_elapsed_ms + elapsed_ms),
-                        generated.metrics,
                     ),
                     Some(job.asset_id),
                 );
                 preview_debug_log(format!(
-                    "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=unavailable elapsed_ms={elapsed_ms}",
+                    "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=unavailable",
                     worker_index,
                     job.asset_id,
                     filename,
