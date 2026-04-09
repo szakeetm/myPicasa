@@ -116,3 +116,17 @@ export type ViewerMediaStatus = {
   source_bytes?: number | null;
   output_bytes?: number | null;
 };
+
+export type BatchViewerTranscodeStatus = {
+  status: "idle" | "running" | "completed";
+  total: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  current_asset_id?: number | null;
+  current_filename?: string | null;
+  current_source_bytes?: number | null;
+  current_output_bytes?: number | null;
+  elapsed_ms?: number | null;
+  message?: string | null;
+};

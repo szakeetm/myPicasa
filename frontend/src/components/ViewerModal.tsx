@@ -243,7 +243,7 @@ export function ViewerModal({
           if (backendMedia.status === "pending") {
             setVideoTranscoding(true);
             setVideoError(undefined);
-            setVideoSourceLabel("transcoding");
+            setVideoSourceLabel(backendMedia.source ?? "transcoding");
             setVideoTranscodeStatus({
               codec: backendMedia.codec ?? undefined,
               encoder: backendMedia.encoder ?? undefined,
@@ -344,7 +344,7 @@ export function ViewerModal({
           if (backendMedia.status === "pending") {
             setLivePhotoTranscoding(true);
             setLivePhotoMotionError(undefined);
-            setLivePhotoSourceLabel("transcoding");
+            setLivePhotoSourceLabel(backendMedia.source ?? "transcoding");
             setLivePhotoTranscodeStatus({
               codec: backendMedia.codec ?? undefined,
               encoder: backendMedia.encoder ?? undefined,
@@ -1022,6 +1022,9 @@ async function materializeVideoSrc(src: string, objectUrlRef: React.MutableRefOb
     URL.revokeObjectURL(objectUrlRef.current);
     objectUrlRef.current = undefined;
   }
+  if (src.startsWith("/")) {
+    return convertFileSrc(src);
+  }
   if (!src.startsWith("data:video/")) {
     return src;
   }
@@ -1052,9 +1055,23 @@ function describeVideoSupport(src?: string | null) {
   const probe = document.createElement("video");
   const requestedType = inferVideoMimeType(src) ?? "unknown";
   const mp4 = probe.canPlayType("video/mp4") || "no";
+  const mp4Avc = probe.canPlayType('video/mp4; codecs="avc1.42E01E, mp4a.40.2"') || "no";
+  const mp4Hevc = probe.canPlayType('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"') || "no";
   const mov = probe.canPlayType("video/quicktime") || "no";
   const webm = probe.canPlayType("video/webm") || "no";
-  return `requested=${requestedType} canPlayType(mp4=${mp4}, mov=${mov}, webm=${webm})`;
+  const hls = probe.canPlayType("application/vnd.apple.mpegurl") || "no";
+  const ts = probe.canPlayType("video/mp2t") || "no";
+  const mseMp4Avc =
+    typeof MediaSource !== "undefined" &&
+    typeof MediaSource.isTypeSupported === "function"
+      ? MediaSource.isTypeSupported('video/mp4; codecs="avc1.42E01E, mp4a.40.2"')
+      : false;
+  const mseHls =
+    typeof MediaSource !== "undefined" &&
+    typeof MediaSource.isTypeSupported === "function"
+      ? MediaSource.isTypeSupported("application/vnd.apple.mpegurl")
+      : false;
+  return `requested=${requestedType} canPlayType(mp4=${mp4}, mp4-avc=${mp4Avc}, mp4-hevc=${mp4Hevc}, mov=${mov}, webm=${webm}, hls=${hls}, ts=${ts}) mse(mp4-avc=${mseMp4Avc}, hls=${mseHls})`;
 }
 
 function describeImageSupport(src?: string | null) {
@@ -1065,8 +1082,22 @@ function describeImageSupport(src?: string | null) {
 }
 
 function shouldPreferOriginalVideoBytesForPath(path?: string | null) {
-  const extension = path?.split(".").pop()?.toLowerCase();
-  return extension !== undefined && ["mp4", "m4v", "mov", "webm"].includes(extension);
+  if (!path || typeof document === "undefined") {
+    return false;
+  }
+  const extension = path.split(".").pop()?.toLowerCase();
+  const probe = document.createElement("video");
+  switch (extension) {
+    case "mp4":
+    case "m4v":
+      return probe.canPlayType("video/mp4") === "probably";
+    case "mov":
+      return probe.canPlayType("video/quicktime") === "probably";
+    case "webm":
+      return probe.canPlayType("video/webm") === "probably";
+    default:
+      return false;
+  }
 }
 
 function inferVideoMimeType(src?: string | null) {
@@ -1076,8 +1107,12 @@ function inferVideoMimeType(src?: string | null) {
   }
   const extension = src.split(".").pop()?.toLowerCase();
   switch (extension) {
+    case "m3u8":
+      return "application/vnd.apple.mpegurl";
     case "mov":
       return "video/quicktime";
+    case "ts":
+      return "video/mp2t";
     case "webm":
       return "video/webm";
     case "m4v":

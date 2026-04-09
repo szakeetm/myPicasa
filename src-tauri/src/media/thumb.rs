@@ -152,39 +152,33 @@ pub fn generate_viewer_video(
 
     let temp_output = output_path.with_extension("tmp.mp4");
     let _ = fs::remove_file(&temp_output);
+    let _ = fs::remove_file(&output_path);
+    let dimensions = probe_video_dimensions(path)?;
 
-    let mut used_encoder = preferred_viewer_video_encoder(true);
-    let mut status = wait_for_status_with_timeout(
-        build_viewer_transcode_command(&ffmpeg, path, &temp_output, true)?.spawn()?,
-        timeout,
-        "ffmpeg viewer transcode",
-    )?;
-
-    if !status.success() {
-        let _ = fs::remove_file(&temp_output);
-        used_encoder = preferred_viewer_video_encoder(false);
-        status = wait_for_status_with_timeout(
-            build_viewer_transcode_command(&ffmpeg, path, &temp_output, false)?.spawn()?,
+    for encoder in preferred_viewer_video_encoders() {
+        let status = wait_for_status_with_timeout(
+            build_viewer_transcode_command(&ffmpeg, path, &temp_output, dimensions, encoder)?.spawn()?,
             timeout,
-            "ffmpeg viewer transcode fallback",
+            "ffmpeg viewer transcode",
         )?;
-    }
-
-    if !status.success() || !temp_output.is_file() {
+        if status.success() && temp_output.is_file() {
+            fs::rename(&temp_output, &output_path)?;
+            return Ok(Some((output_path, false, encoder.to_string())));
+        }
         let _ = fs::remove_file(&temp_output);
-        return Ok(None);
     }
 
-    fs::rename(&temp_output, &output_path)?;
-    Ok(Some((output_path, false, used_encoder.to_string())))
+    Ok(None)
 }
 
 fn build_viewer_transcode_command(
     ffmpeg: &Path,
     input_path: &Path,
     output_path: &Path,
-    prefer_hardware: bool,
+    dimensions: Option<(u32, u32)>,
+    encoder: &str,
 ) -> Result<Command, AppError> {
+    let (target_bitrate, maxrate, bufsize) = viewer_video_bitrate_profile(dimensions);
     let mut command = Command::new(ffmpeg);
     command
         .arg("-hide_banner")
@@ -193,35 +187,53 @@ fn build_viewer_transcode_command(
         .arg("-y")
         .arg("-i")
         .arg(input_path)
-        .arg("-vf")
-        .arg("scale='if(gt(iw,ih),min(iw,1920),-2)':'if(gt(ih,iw),min(ih,1080),-2)':force_original_aspect_ratio=decrease")
-        .arg("-movflags")
-        .arg("+faststart")
         .arg("-pix_fmt")
         .arg("yuv420p");
 
-    if prefer_hardware && cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        command
-            .arg("-vcodec")
-            .arg("h264_videotoolbox")
-            .arg("-b:v")
-            .arg("4500k")
-            .arg("-maxrate")
-            .arg("6000k");
-    } else {
-        command
-            .arg("-vcodec")
-            .arg("libx264")
-            .arg("-preset")
-            .arg("veryfast")
-            .arg("-b:v")
-            .arg("4500k")
-            .arg("-maxrate")
-            .arg("6000k")
-            .arg("-bufsize")
-            .arg("9000k")
-            .arg("-crf")
-            .arg("22");
+    match encoder {
+        "hevc_videotoolbox" => {
+            command
+                .arg("-vcodec")
+                .arg("hevc_videotoolbox")
+                .arg("-tag:v")
+                .arg("hvc1")
+                .arg("-b:v")
+                .arg(target_bitrate)
+                .arg("-maxrate")
+                .arg(maxrate);
+        }
+        "libx265" => {
+            command
+                .arg("-vcodec")
+                .arg("libx265")
+                .arg("-preset")
+                .arg("medium")
+                .arg("-tag:v")
+                .arg("hvc1")
+                .arg("-b:v")
+                .arg(target_bitrate)
+                .arg("-maxrate")
+                .arg(maxrate)
+                .arg("-bufsize")
+                .arg(bufsize)
+                .arg("-crf")
+                .arg("27");
+        }
+        _ => {
+            command
+                .arg("-vcodec")
+                .arg("libx264")
+                .arg("-preset")
+                .arg("veryfast")
+                .arg("-b:v")
+                .arg(target_bitrate)
+                .arg("-maxrate")
+                .arg(maxrate)
+                .arg("-bufsize")
+                .arg(bufsize)
+                .arg("-crf")
+                .arg("22");
+        }
     }
 
     command
@@ -229,6 +241,8 @@ fn build_viewer_transcode_command(
         .arg("aac")
         .arg("-b:a")
         .arg("160k")
+        .arg("-movflags")
+        .arg("+faststart")
         .arg(output_path)
         .stdout(Stdio::null())
         .stderr(Stdio::null());
@@ -236,12 +250,14 @@ fn build_viewer_transcode_command(
     Ok(command)
 }
 
-fn preferred_viewer_video_encoder(prefer_hardware: bool) -> &'static str {
-    if prefer_hardware && cfg!(all(target_os = "macos", target_arch = "aarch64")) {
-        "h264_videotoolbox"
-    } else {
-        "libx264"
+fn preferred_viewer_video_encoders() -> Vec<&'static str> {
+    let mut encoders = Vec::new();
+    if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        encoders.push("hevc_videotoolbox");
     }
+    encoders.push("libx265");
+    encoders.push("libx264");
+    encoders
 }
 
 pub fn viewer_video_cache_path(path: &Path, cache_dir: &Path) -> Result<Option<PathBuf>, AppError> {
@@ -297,11 +313,64 @@ pub fn clear_viewer_render_cache(cache_dir: &Path) -> Result<(), AppError> {
                 continue;
             };
             if name.starts_with("my-picasa-viewer-") {
-                let _ = fs::remove_file(path);
+                if path.is_dir() {
+                    let _ = fs::remove_dir_all(path);
+                } else {
+                    let _ = fs::remove_file(path);
+                }
             }
         }
     }
     Ok(())
+}
+
+fn viewer_video_bitrate_profile(dimensions: Option<(u32, u32)>) -> (&'static str, &'static str, &'static str) {
+    let max_dimension = dimensions
+        .map(|(width, height)| width.max(height))
+        .unwrap_or(1920);
+    match max_dimension {
+        0..=640 => ("900k", "1200k", "1800k"),
+        641..=960 => ("1800k", "2500k", "3600k"),
+        961..=1280 => ("3000k", "4000k", "6000k"),
+        1281..=1920 => ("5000k", "6500k", "9000k"),
+        1921..=2560 => ("8000k", "10000k", "14000k"),
+        _ => ("14000k", "18000k", "24000k"),
+    }
+}
+
+fn probe_video_dimensions(path: &Path) -> Result<Option<(u32, u32)>, AppError> {
+    let Some(ffprobe) = find_command_binary("ffprobe") else {
+        return Ok(None);
+    };
+    let output = wait_for_output_with_timeout(
+        Command::new(ffprobe)
+            .arg("-v")
+            .arg("error")
+            .arg("-select_streams")
+            .arg("v:0")
+            .arg("-show_entries")
+            .arg("stream=width,height")
+            .arg("-of")
+            .arg("csv=p=0:s=x")
+            .arg(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?,
+        Duration::from_secs(5),
+        "ffprobe dimension probe",
+    )?;
+    if !output.status.success() {
+        return Ok(None);
+    }
+    let value = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let mut parts = value.split('x');
+    let Some(width) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return Ok(None);
+    };
+    let Some(height) = parts.next().and_then(|part| part.parse::<u32>().ok()) else {
+        return Ok(None);
+    };
+    Ok(Some((width, height)))
 }
 
 pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {

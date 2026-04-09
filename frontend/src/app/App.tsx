@@ -11,7 +11,7 @@ import { logClient } from "../lib/logger";
 import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
-import type { AssetListRequest, LogEntry } from "../lib/types";
+import type { AssetListRequest, BatchViewerTranscodeStatus, LogEntry } from "../lib/types";
 
 const ASSET_PAGE_SIZE = 200;
 
@@ -24,6 +24,8 @@ export function App() {
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
+  const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
+  const [batchTranscodeStatus, setBatchTranscodeStatus] = useState<BatchViewerTranscodeStatus>();
   const didInitFilterEffect = useRef(false);
   const assetQueryGenerationRef = useRef(0);
 
@@ -174,6 +176,34 @@ export function App() {
       window.clearInterval(timer);
     };
   }, [thumbLogOpen]);
+
+  useEffect(() => {
+    if (!batchTranscodeOpen) {
+      return;
+    }
+
+    let cancelled = false;
+    async function refreshBatchStatus() {
+      try {
+        const status = await api.getBatchViewerTranscodeStatus();
+        if (!cancelled) {
+          setBatchTranscodeStatus(status);
+        }
+      } catch (error) {
+        console.error("failed to load batch transcode status", error);
+      }
+    }
+
+    void refreshBatchStatus();
+    const timer = window.setInterval(() => {
+      void refreshBatchStatus();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [batchTranscodeOpen]);
 
   useEffect(() => {
     if (!didInitFilterEffect.current) {
@@ -384,6 +414,11 @@ export function App() {
     state.setCacheStats(cacheStats);
   }
 
+  async function handleStartBatchTranscode() {
+    const status = await api.startBatchViewerTranscode();
+    setBatchTranscodeStatus(status);
+  }
+
   const selectedAssetIndex = state.selectedAsset
     ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id)
     : -1;
@@ -434,6 +469,7 @@ export function App() {
         logs={state.logs}
         cacheStats={state.cacheStats}
         onOpenThumbLog={() => void handleOpenThumbLog()}
+        onOpenBatchTranscode={() => setBatchTranscodeOpen(true)}
         onClearThumbnails={handleClearThumbnails}
         onClearViewerRenders={handleClearViewerRenders}
         onClearDiagnostics={handleClearDiagnostics}
@@ -483,6 +519,52 @@ export function App() {
         </div>
       ) : null}
 
+      {batchTranscodeOpen ? (
+        <div className="viewer-backdrop" onClick={() => setBatchTranscodeOpen(false)}>
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">Batch Video Transcode</div>
+                <div className="muted">
+                  Pre-renders viewer-safe HEVC files for the indexed videos.
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="button-primary" onClick={() => void handleStartBatchTranscode()}>
+                  Start
+                </button>
+                <button
+                  className="button-secondary"
+                  onClick={() => void api.getBatchViewerTranscodeStatus().then(setBatchTranscodeStatus)}
+                >
+                  Refresh
+                </button>
+                <button className="button-danger" onClick={() => setBatchTranscodeOpen(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">{formatBatchStatusLine(batchTranscodeStatus)}</div>
+              {batchTranscodeStatus?.current_filename ? (
+                <div style={{ marginTop: 16 }}>
+                  <strong>Current file</strong>
+                  <div className="muted">{batchTranscodeStatus.current_filename}</div>
+                </div>
+              ) : null}
+              {typeof batchTranscodeStatus?.current_source_bytes === "number" ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Source {formatFileSize(batchTranscodeStatus.current_source_bytes)}
+                  {typeof batchTranscodeStatus.current_output_bytes === "number"
+                    ? ` • output ${formatFileSize(batchTranscodeStatus.current_output_bytes)}`
+                    : ""}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <ViewerModal
         asset={state.selectedAsset}
         hasPrevious={selectedAssetIndex > 0}
@@ -514,4 +596,42 @@ function formatLogTimestamp(value?: string | null) {
   const seconds = String(parsed.getSeconds()).padStart(2, "0");
   const millis = String(parsed.getMilliseconds()).padStart(3, "0");
   return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`;
+}
+
+function formatFileSize(bytes: number) {
+  if (bytes >= 1024 * 1024 * 1024) {
+    return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
+  }
+  if (bytes >= 1024 * 1024) {
+    return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  }
+  if (bytes >= 1024) {
+    return `${(bytes / 1024).toFixed(1)} kB`;
+  }
+  return `${bytes} B`;
+}
+
+function formatBatchStatusLine(status?: BatchViewerTranscodeStatus) {
+  if (!status) {
+    return "No batch transcode job has started yet.";
+  }
+  const processed = status.completed + status.failed;
+  const parts = [
+    status.status,
+    `${processed}/${status.total} processed`,
+    `${status.completed} succeeded`,
+  ];
+  if (status.skipped > 0) {
+    parts.push(`${status.skipped} cached`);
+  }
+  if (status.failed > 0) {
+    parts.push(`${status.failed} failed`);
+  }
+  if (typeof status.elapsed_ms === "number") {
+    parts.push(`${(status.elapsed_ms / 1000).toFixed(1)}s elapsed`);
+  }
+  if (status.message) {
+    parts.push(status.message);
+  }
+  return parts.join(" • ");
 }

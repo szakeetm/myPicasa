@@ -5,6 +5,7 @@ type DebugPanelProps = {
   logs: LogEntry[];
   cacheStats?: CacheStats;
   onOpenThumbLog: () => void;
+  onOpenBatchTranscode: () => void;
   onClearThumbnails: () => void;
   onClearViewerRenders: () => void;
   onClearDiagnostics: () => void;
@@ -16,6 +17,7 @@ export function DebugPanel({
   logs,
   cacheStats,
   onOpenThumbLog,
+  onOpenBatchTranscode,
   onClearThumbnails,
   onClearViewerRenders,
   onClearDiagnostics,
@@ -37,6 +39,9 @@ export function DebugPanel({
               <div className="button-row">
                 <button className="button-secondary" onClick={onOpenThumbLog}>
                   Thumb gen log
+                </button>
+                <button className="button-secondary" onClick={onOpenBatchTranscode}>
+                  Batch transcode
                 </button>
                 <button className="button-secondary" onClick={onClearThumbnails}>
                   Clear thumbnails

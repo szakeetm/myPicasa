@@ -5,6 +5,7 @@ import type {
   AssetDetail,
   AssetListRequest,
   AssetListResponse,
+  BatchViewerTranscodeStatus,
   CacheStats,
   DiagnosticEntry,
   ImportProgress,
@@ -42,6 +43,10 @@ export const api = {
   getDiagnostics: () =>
     invoke<DiagnosticEntry[]>("get_ingress_diagnostics"),
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),
+  getBatchViewerTranscodeStatus: () =>
+    invoke<BatchViewerTranscodeStatus>("get_batch_viewer_transcode_status"),
+  startBatchViewerTranscode: () =>
+    invoke<BatchViewerTranscodeStatus>("start_batch_viewer_transcode"),
   clearThumbnailCache: () => invoke<void>("clear_thumbnail_cache"),
   clearViewerRenderCache: () => invoke<void>("clear_viewer_render_cache_command"),
   getRecentLogs: (limit = 150) =>

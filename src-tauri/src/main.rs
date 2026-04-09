@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use app::{
     commands::command_handlers,
-    state::{AppState, ThumbnailJob},
+    state::{AppState, BatchViewerTranscodeState, ThumbnailJob},
 };
 use cache::thumb_cache::ThumbnailCache;
 use db::{Database, DatabaseQueries};
@@ -363,6 +363,7 @@ fn main() {
                 thumbnail_job_sender,
                 preview_job_sender,
                 viewer_video_jobs: Arc::new(Mutex::new(HashMap::new())),
+                batch_viewer_transcode: Arc::new(Mutex::new(BatchViewerTranscodeState::idle())),
             };
 
             state

@@ -9,7 +9,7 @@ use tauri::{State, generate_handler, ipc::InvokeError};
 use tracing::{error, info};
 
 use crate::{
-    app::state::{AppState, ThumbnailJob, ViewerTranscodeState},
+    app::state::{AppState, BatchViewerTranscodeState, ThumbnailJob, ViewerTranscodeState},
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
     media::thumb::{
@@ -20,9 +20,9 @@ use crate::{
         VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT,
     },
     models::{
-        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
-        DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem,
-        ViewerMediaStatus,
+        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, BatchViewerTranscodeStatus,
+        CacheStats, DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest,
+        ThumbnailBatchItem, ViewerMediaStatus,
     },
     search::query_service,
 };
@@ -273,7 +273,11 @@ fn queue_viewer_video_transcode(
                     return Ok(status);
                 }
                 ViewerTranscodeState::Ready { path, codec, encoder } if path.is_file() => {
-                    let mut status = load_cached_transcoded_video(path, codec.clone(), encoder.clone())?;
+                    let mut status = load_cached_transcoded_video(
+                        path,
+                        codec.clone(),
+                        encoder.clone(),
+                    )?;
                     status.source_bytes = Some(source_bytes);
                     status.output_bytes = Some(output_bytes_for_path(path));
                     return Ok(status);
@@ -406,6 +410,214 @@ fn queue_viewer_video_transcode(
     status.source_bytes = Some(source_bytes);
     status.output_bytes = Some(output_bytes_for_path(&temp_output_path));
     Ok(status)
+}
+
+fn collect_all_video_assets(state: &AppState) -> Result<Vec<(i64, String, u64)>, InvokeError> {
+    let mut cursor = None;
+    let mut items = Vec::new();
+    loop {
+        let response = query_service::list_assets_by_date(
+            &state.db,
+            AssetListRequest {
+                cursor,
+                limit: Some(500),
+                query: None,
+                media_kind: Some("video".to_string()),
+                date_from: None,
+                date_to: None,
+            },
+        )
+        .map_err(map_error)?;
+        for asset in response.items {
+            let file_size = fs::metadata(&asset.primary_path).map(|meta| meta.len()).unwrap_or(0);
+            items.push((asset.id, asset.primary_path, file_size));
+        }
+        if response.next_cursor.is_none() {
+            break;
+        }
+        cursor = response.next_cursor;
+    }
+    Ok(items)
+}
+
+fn batch_viewer_transcode_status_snapshot(
+    state: &BatchViewerTranscodeState,
+) -> BatchViewerTranscodeStatus {
+    BatchViewerTranscodeStatus {
+        status: if state.running {
+            "running".to_string()
+        } else if state.total > 0 {
+            "completed".to_string()
+        } else {
+            "idle".to_string()
+        },
+        total: state.total,
+        completed: state.completed,
+        failed: state.failed,
+        skipped: state.skipped,
+        current_asset_id: state.current_asset_id,
+        current_filename: state.current_filename.clone(),
+        current_source_bytes: state.current_source_bytes,
+        current_output_bytes: state.current_output_bytes,
+        elapsed_ms: state
+            .started_at
+            .map(|started_at| started_at.elapsed().as_millis() as u64),
+        message: state.message.clone(),
+    }
+}
+
+#[tauri::command]
+pub fn get_batch_viewer_transcode_status(
+    state: State<AppState>,
+) -> CommandResult<BatchViewerTranscodeStatus> {
+    Ok(batch_viewer_transcode_status_snapshot(
+        &state.batch_viewer_transcode.lock(),
+    ))
+}
+
+#[tauri::command]
+pub fn start_batch_viewer_transcode(
+    state: State<AppState>,
+) -> CommandResult<BatchViewerTranscodeStatus> {
+    {
+        let status = state.batch_viewer_transcode.lock();
+        if status.running {
+            return Ok(batch_viewer_transcode_status_snapshot(&status));
+        }
+    }
+
+    {
+        let mut status = state.batch_viewer_transcode.lock();
+        *status = BatchViewerTranscodeState {
+            running: true,
+            total: 0,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            current_asset_id: None,
+            current_filename: None,
+            current_source_bytes: None,
+            current_output_bytes: None,
+            started_at: Some(Instant::now()),
+            message: Some("Discovering videos...".to_string()),
+        };
+    }
+
+    let state = state.inner().clone();
+    let worker_state = state.clone();
+    thread::spawn(move || {
+        let videos = match collect_all_video_assets(&worker_state) {
+            Ok(videos) => videos,
+            Err(error) => {
+                let error_message = format!("{error:?}");
+                let mut status = worker_state.batch_viewer_transcode.lock();
+                status.running = false;
+                status.message = Some(format!("Failed to discover videos: {error_message}"));
+                let _ = worker_state.db.insert_log(
+                    "error",
+                    "batch_viewer_transcode",
+                    &format!("failed to discover videos: {error_message}"),
+                    None,
+                );
+                return;
+            }
+        };
+
+        {
+            let mut status = worker_state.batch_viewer_transcode.lock();
+            status.total = videos.len() as u32;
+            status.message = Some(format!("Preparing {} videos", videos.len()));
+        }
+
+        let viewer_cache_dir = worker_state.app_data_dir.join("viewer-cache");
+        for (index, (asset_id, source_path, source_bytes)) in videos.into_iter().enumerate() {
+            let filename = PathBuf::from(&source_path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&source_path)
+                .to_string();
+            let total = {
+                let status = worker_state.batch_viewer_transcode.lock();
+                status.total
+            };
+            {
+                let mut status = worker_state.batch_viewer_transcode.lock();
+                status.current_asset_id = Some(asset_id);
+                status.current_filename = Some(filename.clone());
+                status.current_source_bytes = Some(source_bytes);
+                status.current_output_bytes = None;
+                status.message = Some(format!("Transcoding {} of {}", index + 1, total));
+            }
+
+            let duration_ms = probe_media_duration_ms(&PathBuf::from(&source_path))
+                .ok()
+                .flatten()
+                .and_then(|value| u64::try_from(value).ok())
+                .unwrap_or(0);
+            let timeout_ms = duration_ms.max(VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT.as_millis() as u64);
+            match generate_viewer_video(
+                &PathBuf::from(&source_path),
+                &viewer_cache_dir,
+                Duration::from_millis(timeout_ms),
+            ) {
+                Ok(Some((path, cache_hit, encoder))) => {
+                    let output_bytes = output_bytes_for_path(&path);
+                    let mut status = worker_state.batch_viewer_transcode.lock();
+                    status.completed += 1;
+                    if cache_hit {
+                        status.skipped += 1;
+                    }
+                    status.current_output_bytes = Some(output_bytes);
+                    let _ = worker_state.db.insert_log(
+                        "info",
+                        "batch_viewer_transcode",
+                        &format!(
+                            "asset_id={asset_id} filename=\"{filename}\" source={} encoder={} output_bytes={output_bytes}",
+                            if cache_hit { "cache_hit" } else { "transcoded" },
+                            encoder,
+                        ),
+                        Some(asset_id),
+                    );
+                }
+                Ok(None) => {
+                    let mut status = worker_state.batch_viewer_transcode.lock();
+                    status.failed += 1;
+                    let _ = worker_state.db.insert_log(
+                        "warning",
+                        "batch_viewer_transcode",
+                        &format!("asset_id={asset_id} filename=\"{filename}\" transcode unavailable"),
+                        Some(asset_id),
+                    );
+                }
+                Err(error) => {
+                    let mut status = worker_state.batch_viewer_transcode.lock();
+                    status.failed += 1;
+                    let _ = worker_state.db.insert_log(
+                        "error",
+                        "batch_viewer_transcode",
+                        &format!("asset_id={asset_id} filename=\"{filename}\" error={error}"),
+                        Some(asset_id),
+                    );
+                }
+            }
+        }
+
+        let mut status = worker_state.batch_viewer_transcode.lock();
+        status.running = false;
+        status.current_asset_id = None;
+        status.current_filename = None;
+        status.current_source_bytes = None;
+        status.current_output_bytes = None;
+        status.message = Some(format!(
+            "Finished {} videos with {} failures",
+            status.completed,
+            status.failed
+        ));
+    });
+
+    Ok(batch_viewer_transcode_status_snapshot(
+        &state.batch_viewer_transcode.lock(),
+    ))
 }
 
 #[tauri::command]
@@ -972,6 +1184,7 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
     state.viewer_video_jobs.lock().clear();
+    *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
     clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     state
         .db
@@ -1019,6 +1232,8 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         load_live_photo_motion,
         get_live_photo_pair,
         get_cache_stats,
+        get_batch_viewer_transcode_status,
+        start_batch_viewer_transcode,
         clear_thumbnail_cache,
         clear_viewer_render_cache_command,
         get_recent_logs,

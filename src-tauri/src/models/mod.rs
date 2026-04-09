@@ -163,3 +163,18 @@ pub struct ViewerMediaStatus {
     pub source_bytes: Option<u64>,
     pub output_bytes: Option<u64>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BatchViewerTranscodeStatus {
+    pub status: String,
+    pub total: u32,
+    pub completed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub current_asset_id: Option<i64>,
+    pub current_filename: Option<String>,
+    pub current_source_bytes: Option<u64>,
+    pub current_output_bytes: Option<u64>,
+    pub elapsed_ms: Option<u64>,
+    pub message: Option<String>,
+}

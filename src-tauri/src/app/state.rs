@@ -46,6 +46,39 @@ pub enum ViewerTranscodeState {
 }
 
 #[derive(Clone)]
+pub struct BatchViewerTranscodeState {
+    pub running: bool,
+    pub total: u32,
+    pub completed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub current_asset_id: Option<i64>,
+    pub current_filename: Option<String>,
+    pub current_source_bytes: Option<u64>,
+    pub current_output_bytes: Option<u64>,
+    pub started_at: Option<std::time::Instant>,
+    pub message: Option<String>,
+}
+
+impl BatchViewerTranscodeState {
+    pub fn idle() -> Self {
+        Self {
+            running: false,
+            total: 0,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            current_asset_id: None,
+            current_filename: None,
+            current_source_bytes: None,
+            current_output_bytes: None,
+            started_at: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
     pub app_data_dir: Arc<PathBuf>,
@@ -59,4 +92,5 @@ pub struct AppState {
     pub thumbnail_job_sender: Sender<ThumbnailJob>,
     pub preview_job_sender: Sender<ThumbnailJob>,
     pub viewer_video_jobs: Arc<Mutex<HashMap<String, ViewerTranscodeState>>>,
+    pub batch_viewer_transcode: Arc<Mutex<BatchViewerTranscodeState>>,
 }
