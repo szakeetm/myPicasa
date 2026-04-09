@@ -42,7 +42,7 @@ export function DebugPanel({
           title="Expand diagnostics and logs panel"
         >
           <span className="debug-rail-chevron" aria-hidden="true">
-            <<
+            {"<<"}
           </span>
           <span className="debug-rail-label">Debug</span>
         </button>

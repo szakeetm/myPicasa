@@ -6,6 +6,7 @@ import { logClient } from "../lib/logger";
 import type { AssetListItem, ViewerPlaybackHint } from "../lib/types";
 
 const VIEWER_PREVIEW_SIZE = 2048;
+const GRID_TILE_WIDTH = 250;
 
 type MediaGridProps = {
   assets: AssetListItem[];
@@ -38,10 +39,7 @@ type ThumbnailState = {
 };
 
 function columnCount(width: number) {
-  if (width < 640) return 1;
-  if (width < 980) return 2;
-  if (width < 1320) return 3;
-  return 4;
+  return Math.max(1, Math.floor(width / GRID_TILE_WIDTH));
 }
 
 export function MediaGrid({
@@ -775,7 +773,7 @@ export function MediaGrid({
       <div
         className="media-grid"
         style={{
-          gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`,
+          gridTemplateColumns: `repeat(${columns}, ${GRID_TILE_WIDTH}px)`,
         }}
       >
         {assets.map((asset) => (
