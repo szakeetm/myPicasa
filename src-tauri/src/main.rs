@@ -112,6 +112,19 @@ fn main() {
                             .to_string();
                         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
                         let started = std::time::Instant::now();
+                        let _ = db.insert_log(
+                            "info",
+                            "thumb_gen",
+                            &format!(
+                                "status=start worker={} asset_id={} size={} filename=\"{}\" file_size={}",
+                                worker_index,
+                                job.asset_id,
+                                job.size,
+                                filename,
+                                file_size
+                            ),
+                            Some(job.asset_id),
+                        );
                         preview_debug_log(format!(
                             "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=start size={}",
                             worker_index,
@@ -125,23 +138,54 @@ fn main() {
                             generate_thumbnail(&primary_path_buf, job.size, &working_dir)
                                 .map_err(|error| error.to_string())?;
                         match &generated {
-                            Some(bytes) => preview_debug_log(format!(
-                                "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={} elapsed_ms={}",
-                                worker_index,
-                                job.asset_id,
-                                filename,
-                                file_size,
-                                bytes.len(),
-                                started.elapsed().as_millis()
-                            )),
-                            None => preview_debug_log(format!(
-                                "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=unavailable elapsed_ms={}",
-                                worker_index,
-                                job.asset_id,
-                                filename,
-                                file_size,
-                                started.elapsed().as_millis()
-                            )),
+                            Some(bytes) => {
+                                let elapsed_ms = started.elapsed().as_millis();
+                                let _ = db.insert_log(
+                                    "info",
+                                    "thumb_gen",
+                                    &format!(
+                                        "status=success worker={} asset_id={} size={} filename=\"{}\" file_size={} generated_bytes={} elapsed_ms={elapsed_ms}",
+                                        worker_index,
+                                        job.asset_id,
+                                        job.size,
+                                        filename,
+                                        file_size,
+                                        bytes.len(),
+                                    ),
+                                    Some(job.asset_id),
+                                );
+                                preview_debug_log(format!(
+                                    "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=success generated_bytes={} elapsed_ms={elapsed_ms}",
+                                    worker_index,
+                                    job.asset_id,
+                                    filename,
+                                    file_size,
+                                    bytes.len(),
+                                ));
+                            }
+                            None => {
+                                let elapsed_ms = started.elapsed().as_millis();
+                                let _ = db.insert_log(
+                                    "warning",
+                                    "thumb_gen",
+                                    &format!(
+                                        "status=unavailable worker={} asset_id={} size={} filename=\"{}\" file_size={} elapsed_ms={elapsed_ms}",
+                                        worker_index,
+                                        job.asset_id,
+                                        job.size,
+                                        filename,
+                                        file_size,
+                                    ),
+                                    Some(job.asset_id),
+                                );
+                                preview_debug_log(format!(
+                                    "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=unavailable elapsed_ms={elapsed_ms}",
+                                    worker_index,
+                                    job.asset_id,
+                                    filename,
+                                    file_size,
+                                ));
+                            }
                         }
                         Ok(generated)
                     })();
@@ -164,6 +208,15 @@ fn main() {
                             }
                         }
                         Err(error) => {
+                            let _ = db.insert_log(
+                                "error",
+                                "thumb_gen",
+                                &format!(
+                                    "status=failed worker={} asset_id={} size={} error={error}",
+                                    worker_index, job.asset_id, job.size
+                                ),
+                                Some(job.asset_id),
+                            );
                             preview_debug_log(format!(
                                 "thumbnail_worker={} asset_id={} status=failed error={error}",
                                 worker_index, job.asset_id

@@ -67,6 +67,7 @@ pub trait DatabaseQueries {
     fn get_live_photo_pair(&self, asset_id: i64) -> Result<Option<String>, AppError>;
     fn get_ingress_diagnostics(&self) -> Result<Vec<DiagnosticEntry>, AppError>;
     fn get_recent_logs(&self, limit: u32) -> Result<Vec<LogEntry>, AppError>;
+    fn get_logs_by_scope(&self, scopes: &[&str], limit: u32) -> Result<Vec<LogEntry>, AppError>;
 }
 
 impl DatabaseQueries for super::Database {
@@ -785,6 +786,39 @@ impl DatabaseQueries for super::Database {
                  LIMIT ?1",
             )?;
             let rows = stmt.query_map(params![limit], |row| {
+                Ok(LogEntry {
+                    id: row.get(0)?,
+                    created_at: row.get(1)?,
+                    level: row.get(2)?,
+                    scope: row.get(3)?,
+                    message: row.get(4)?,
+                    asset_id: row.get(5)?,
+                })
+            })?;
+            Ok(rows.filter_map(Result::ok).collect())
+        })
+    }
+
+    fn get_logs_by_scope(&self, scopes: &[&str], limit: u32) -> Result<Vec<LogEntry>, AppError> {
+        self.with_connection(|conn| {
+            let mut sql = String::from(
+                "SELECT id, created_at, level, scope, message, asset_id
+                 FROM app_logs",
+            );
+            if !scopes.is_empty() {
+                let placeholders = vec!["?"; scopes.len()].join(", ");
+                sql.push_str(&format!(" WHERE scope IN ({placeholders})"));
+            }
+            sql.push_str(" ORDER BY id DESC LIMIT ?");
+
+            let mut params = scopes
+                .iter()
+                .map(|scope| scope.to_string())
+                .collect::<Vec<_>>();
+            params.push(limit.to_string());
+
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
                 Ok(LogEntry {
                     id: row.get(0)?,
                     created_at: row.get(1)?,

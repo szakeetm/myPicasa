@@ -11,7 +11,7 @@ import { logClient } from "../lib/logger";
 import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
-import type { AssetListRequest } from "../lib/types";
+import type { AssetListRequest, LogEntry } from "../lib/types";
 
 const ASSET_PAGE_SIZE = 200;
 
@@ -24,6 +24,8 @@ export function App() {
   const [thumbnailPreloadActive, setThumbnailPreloadActive] = useState(false);
   const [thumbnailPreloadRunId, setThumbnailPreloadRunId] = useState(0);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
+  const [thumbLogOpen, setThumbLogOpen] = useState(false);
+  const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
   const [thumbnailPreloadProgress, setThumbnailPreloadProgress] = useState<
     | {
         thumbsCompleted: number;
@@ -154,6 +156,34 @@ export function App() {
     return () => window.clearInterval(timer);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!thumbLogOpen) {
+      return;
+    }
+
+    let cancelled = false;
+    async function refreshThumbLogs() {
+      try {
+        const entries = await api.getThumbGenerationLogs();
+        if (!cancelled) {
+          setThumbGenerationLogs(entries);
+        }
+      } catch (error) {
+        console.error("failed to load thumb generation logs", error);
+      }
+    }
+
+    void refreshThumbLogs();
+    const timer = window.setInterval(() => {
+      void refreshThumbLogs();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [thumbLogOpen]);
 
   useEffect(() => {
     if (!didInitFilterEffect.current) {
@@ -323,6 +353,7 @@ export function App() {
 
   async function handleClearLogs() {
     await api.clearLogs();
+    setThumbGenerationLogs([]);
     await refreshDebugSurfaces();
   }
 
@@ -331,8 +362,22 @@ export function App() {
     setThumbnailPreloadActive(false);
     setThumbnailPreloadProgress(undefined);
     setThumbnailResetKey((value) => value + 1);
+    if (thumbLogOpen) {
+      setThumbGenerationLogs(await api.getThumbGenerationLogs());
+    }
     const cacheStats = await api.getCacheStats();
     state.setCacheStats(cacheStats);
+  }
+
+  async function handleOpenThumbLog() {
+    setThumbLogOpen(true);
+    setThumbGenerationLogs(await api.getThumbGenerationLogs());
+  }
+
+  async function handleClearThumbLog() {
+    await api.clearThumbGenerationLogs();
+    setThumbGenerationLogs([]);
+    await refreshDebugSurfaces();
   }
 
   async function handleClearViewerRenders() {
@@ -443,11 +488,52 @@ export function App() {
         diagnostics={state.diagnostics}
         logs={state.logs}
         cacheStats={state.cacheStats}
+        onOpenThumbLog={() => void handleOpenThumbLog()}
         onClearThumbnails={handleClearThumbnails}
         onClearViewerRenders={handleClearViewerRenders}
         onClearDiagnostics={handleClearDiagnostics}
         onClearLogs={handleClearLogs}
       />
+
+      {thumbLogOpen ? (
+        <div className="viewer-backdrop" onClick={() => setThumbLogOpen(false)}>
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">Thumb Generation Log</div>
+                <div className="muted">
+                  start, success, unavailable, and fail events with timestamps
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="button-secondary" onClick={() => void handleOpenThumbLog()}>
+                  Refresh
+                </button>
+                <button className="button-secondary" onClick={() => void handleClearThumbLog()}>
+                  Clear
+                </button>
+                <button className="button-danger" onClick={() => setThumbLogOpen(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="thumb-log-list">
+              {thumbGenerationLogs.length > 0 ? (
+                thumbGenerationLogs.map((entry) => (
+                  <div key={entry.id} className="thumb-log-line">
+                    <span className="thumb-log-timestamp">{entry.created_at}</span>
+                    <span className="thumb-log-message">
+                      [{entry.level}] asset={entry.asset_id ?? "?"} {entry.message}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state">No thumbnail generation events recorded yet.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       <ViewerModal
         asset={state.selectedAsset}

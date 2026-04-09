@@ -46,6 +46,9 @@ export const api = {
   clearViewerRenderCache: () => invoke<void>("clear_viewer_render_cache_command"),
   getRecentLogs: (limit = 150) =>
     invoke<LogEntry[]>("get_recent_logs", { limit }),
+  getThumbGenerationLogs: (limit = 400) =>
+    invoke<LogEntry[]>("get_thumb_generation_logs", { limit }),
+  clearThumbGenerationLogs: () => invoke<void>("clear_thumb_generation_logs"),
   recordClientLog: (level: string, scope: string, message: string) =>
     invoke<void>("record_client_log", { level, scope, message }),
   clearDiagnostics: () => invoke<void>("clear_diagnostics"),

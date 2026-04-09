@@ -67,4 +67,16 @@ impl Database {
         guard.execute("DELETE FROM app_logs", [])?;
         Ok(())
     }
+
+    pub fn clear_logs_by_scope(&self, scopes: &[&str]) -> Result<(), AppError> {
+        let guard = self.conn.lock().expect("database mutex poisoned");
+        if scopes.is_empty() {
+            return Ok(());
+        }
+        let placeholders = vec!["?"; scopes.len()].join(", ");
+        let sql = format!("DELETE FROM app_logs WHERE scope IN ({placeholders})");
+        let params = scopes.iter().map(|scope| scope.to_string()).collect::<Vec<_>>();
+        guard.execute(&sql, rusqlite::params_from_iter(params.iter()))?;
+        Ok(())
+    }
 }

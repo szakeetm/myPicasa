@@ -47,3 +47,11 @@ pub fn get_ingress_diagnostics(db: &Database) -> Result<Vec<DiagnosticEntry>, Ap
 pub fn get_recent_logs(db: &Database, limit: u32) -> Result<Vec<LogEntry>, AppError> {
     db.get_recent_logs(limit)
 }
+
+pub fn get_logs_by_scope(
+    db: &Database,
+    scopes: &[&str],
+    limit: u32,
+) -> Result<Vec<LogEntry>, AppError> {
+    db.get_logs_by_scope(scopes, limit)
+}

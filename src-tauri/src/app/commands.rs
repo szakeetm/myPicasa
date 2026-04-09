@@ -49,6 +49,18 @@ fn media_debug_info(path: &str) -> (String, u64) {
     (filename, file_size)
 }
 
+fn record_thumb_log(
+    state: &AppState,
+    level: &str,
+    asset_id: i64,
+    message: String,
+) -> Result<(), InvokeError> {
+    state
+        .db
+        .insert_log(level, "thumb_gen", &message, Some(asset_id))
+        .map_err(map_error)
+}
+
 fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
     let extension = path
         .extension()
@@ -363,27 +375,62 @@ pub fn request_thumbnail(
         return Ok(None);
     };
     let (filename, file_size) = media_debug_info(&primary_path);
+    let started = Instant::now();
+    record_thumb_log(
+        state.inner(),
+        "info",
+        asset_id,
+        format!(
+            "status=start mode=direct size={size} filename=\"{filename}\" file_size={file_size}"
+        ),
+    )?;
 
     let working_dir = state.app_data_dir.join("working");
     match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
         Ok(Some(bytes)) => {
+            record_thumb_log(
+                state.inner(),
+                "info",
+                asset_id,
+                format!(
+                    "status=success mode=direct size={size} filename=\"{filename}\" file_size={file_size} generated_bytes={} elapsed_ms={}",
+                    bytes.len(),
+                    started.elapsed().as_millis()
+                ),
+            )?;
             cache.lock().insert(key, bytes.clone());
             Ok(Some(format!(
                 "data:image/jpeg;base64,{}",
                 STANDARD.encode(bytes)
             )))
         }
-        Ok(None) => Ok(None),
+        Ok(None) => {
+            record_thumb_log(
+                state.inner(),
+                "warning",
+                asset_id,
+                format!(
+                    "status=unavailable mode=direct size={size} filename=\"{filename}\" file_size={file_size} elapsed_ms={}",
+                    started.elapsed().as_millis()
+                ),
+            )?;
+            Ok(None)
+        }
         Err(error) => {
             error!(asset_id, %error, "thumbnail generation failed");
             preview_debug_log(format!(
                 "thumbnail asset_id={asset_id} filename=\"{filename}\" file_size={} failed error={error}",
                 file_size
             ));
-            state
-                .db
-                .insert_log("error", "thumbnail", &error.to_string(), Some(asset_id))
-                .map_err(map_error)?;
+            record_thumb_log(
+                state.inner(),
+                "error",
+                asset_id,
+                format!(
+                    "status=failed mode=direct size={size} filename=\"{filename}\" file_size={file_size} elapsed_ms={} error={error}",
+                    started.elapsed().as_millis()
+                ),
+            )?;
             Ok(None)
         }
     }
@@ -705,6 +752,20 @@ pub fn get_recent_logs(limit: Option<u32>, state: State<AppState>) -> CommandRes
 }
 
 #[tauri::command]
+pub fn get_thumb_generation_logs(
+    limit: Option<u32>,
+    state: State<AppState>,
+) -> CommandResult<Vec<LogEntry>> {
+    query_service::get_logs_by_scope(&state.db, &["thumb_gen"], limit.unwrap_or(400))
+        .map_err(map_error)
+}
+
+#[tauri::command]
+pub fn clear_thumb_generation_logs(state: State<AppState>) -> CommandResult<()> {
+    state.db.clear_logs_by_scope(&["thumb_gen"]).map_err(map_error)
+}
+
+#[tauri::command]
 pub fn record_client_log(
     level: String,
     scope: String,
@@ -778,6 +839,8 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         clear_thumbnail_cache,
         clear_viewer_render_cache_command,
         get_recent_logs,
+        get_thumb_generation_logs,
+        clear_thumb_generation_logs,
         record_client_log,
         reset_local_database,
         clear_diagnostics,
