@@ -24,10 +24,15 @@
       "assetProtocol": {
         "enable": true,
         "scope": [
-          "$APPDATA/viewer-cache/**/*",
-          "$APPDATA/working/**/*",
-          "$HOME/**/*",
-          "/Volumes/**/*"
+          "$APPDATA/viewer-cache/**/*.mp4",
+          "$HOME/**/*.mp4",
+          "$HOME/**/*.m4v",
+          "$HOME/**/*.mov",
+          "$HOME/**/*.webm",
+          "/Volumes/**/*.mp4",
+          "/Volumes/**/*.m4v",
+          "/Volumes/**/*.mov",
+          "/Volumes/**/*.webm"
         ]
       }
     }
