@@ -18,8 +18,11 @@ use crate::util::errors::AppError;
 const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT: Duration = Duration::from_secs(30);
-const THUMBNAIL_JPEG_QUALITY: u8 = 94;
-const THUMBNAIL_SOURCE_JPEG_QUALITY: u8 = 96;
+const DEFAULT_THUMBNAIL_JPEG_QUALITY: u8 = 82;
+const DEFAULT_THUMBNAIL_SOURCE_JPEG_QUALITY: u8 = 82;
+const HIGH_QUALITY_THUMB_JPEG_QUALITY: u8 = 94;
+const HIGH_QUALITY_THUMB_SOURCE_JPEG_QUALITY: u8 = 96;
+const HIGH_QUALITY_THUMB_MAX_SIZE: u32 = 512;
 
 pub fn thumbnail_generator_label(path: &Path) -> &'static str {
     if is_video_path(path) {
@@ -50,20 +53,22 @@ pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<
     #[cfg(target_os = "macos")]
     {
         let render_size = thumbnail_render_size(size);
+        let source_quality = thumbnail_source_quality(size);
+        let output_quality = thumbnail_output_quality(size);
         if matches!(extension.as_str(), "heic" | "heif") {
             if let Some(bytes) = render_thumbnail_with_quicklook(path, render_size, working_dir)? {
                 return Ok(Some(normalize_image_bytes_to_square_jpeg(
                     &bytes,
                     size,
-                    THUMBNAIL_JPEG_QUALITY,
+                    output_quality,
                 )?));
             }
         }
-        if let Some(bytes) = render_with_sips(path, render_size, THUMBNAIL_SOURCE_JPEG_QUALITY, working_dir)? {
+        if let Some(bytes) = render_with_sips(path, render_size, source_quality, working_dir)? {
             return Ok(Some(normalize_image_bytes_to_square_jpeg(
                 &bytes,
                 size,
-                THUMBNAIL_JPEG_QUALITY,
+                output_quality,
             )?));
         }
     }
@@ -72,7 +77,7 @@ pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<
     Ok(Some(encode_square_thumbnail_to_jpeg(
         &image,
         size,
-        THUMBNAIL_JPEG_QUALITY,
+        thumbnail_output_quality(size),
     )?))
 }
 
@@ -509,7 +514,7 @@ fn render_video_thumbnail_with_ffmpeg(
     Ok(Some(encode_square_thumbnail_to_jpeg(
         &image,
         size,
-        THUMBNAIL_JPEG_QUALITY,
+        thumbnail_output_quality(size),
     )?))
 }
 
@@ -556,9 +561,35 @@ fn probe_video_seek_seconds(path: &Path) -> Option<f64> {
     })
 }
 
+fn use_high_quality_thumbnail_settings(size: u32) -> bool {
+    size <= HIGH_QUALITY_THUMB_MAX_SIZE
+}
+
+fn thumbnail_output_quality(size: u32) -> u8 {
+    if use_high_quality_thumbnail_settings(size) {
+        HIGH_QUALITY_THUMB_JPEG_QUALITY
+    } else {
+        DEFAULT_THUMBNAIL_JPEG_QUALITY
+    }
+}
+
+fn thumbnail_source_quality(size: u32) -> u8 {
+    if use_high_quality_thumbnail_settings(size) {
+        HIGH_QUALITY_THUMB_SOURCE_JPEG_QUALITY
+    } else {
+        DEFAULT_THUMBNAIL_SOURCE_JPEG_QUALITY
+    }
+}
+
 fn thumbnail_render_size(size: u32) -> u32 {
     let requested_size = size.max(1);
-    size.saturating_mul(2).clamp(requested_size, requested_size.max(512))
+    if use_high_quality_thumbnail_settings(requested_size) {
+        requested_size
+            .saturating_mul(2)
+            .clamp(requested_size, requested_size.max(512))
+    } else {
+        requested_size.max(192)
+    }
 }
 
 fn find_command_binary(name: &str) -> Option<PathBuf> {

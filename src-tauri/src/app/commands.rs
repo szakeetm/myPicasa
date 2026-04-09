@@ -39,7 +39,11 @@ const VIEWER_PREVIEW_SIZE: u32 = 2048;
 const THUMBNAIL_CACHE_VERSION: u32 = 2;
 
 fn thumbnail_cache_key(asset_id: i64, size: u32) -> String {
-    format!("v{THUMBNAIL_CACHE_VERSION}:{asset_id}:{size}")
+    if size >= VIEWER_PREVIEW_SIZE {
+        format!("{asset_id}:{size}")
+    } else {
+        format!("v{THUMBNAIL_CACHE_VERSION}:{asset_id}:{size}")
+    }
 }
 
 fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
