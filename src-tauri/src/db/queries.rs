@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 use rusqlite::{OptionalExtension, params};
 
@@ -68,6 +68,17 @@ pub trait DatabaseQueries {
     fn get_ingress_diagnostics(&self) -> Result<Vec<DiagnosticEntry>, AppError>;
     fn get_recent_logs(&self, limit: u32) -> Result<Vec<LogEntry>, AppError>;
     fn get_logs_by_scope(&self, scopes: &[&str], limit: u32) -> Result<Vec<LogEntry>, AppError>;
+    fn set_viewer_video_transcode_status(
+        &self,
+        asset_id: i64,
+        status: &str,
+        cache_path: Option<&str>,
+    ) -> Result<(), AppError>;
+    fn ready_viewer_video_transcode_asset_ids(
+        &self,
+        asset_ids: &[i64],
+    ) -> Result<HashSet<i64>, AppError>;
+    fn clear_viewer_video_transcode_statuses(&self) -> Result<(), AppError>;
 }
 
 impl DatabaseQueries for super::Database {
@@ -833,6 +844,59 @@ impl DatabaseQueries for super::Database {
                 })
             })?;
             Ok(rows.filter_map(Result::ok).collect())
+        })
+    }
+
+    fn set_viewer_video_transcode_status(
+        &self,
+        asset_id: i64,
+        status: &str,
+        cache_path: Option<&str>,
+    ) -> Result<(), AppError> {
+        self.with_connection(|conn| {
+            conn.execute(
+                "INSERT INTO viewer_video_transcodes (asset_id, status, cache_path, updated_at)
+                 VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(asset_id) DO UPDATE SET
+                   status = excluded.status,
+                   cache_path = excluded.cache_path,
+                   updated_at = excluded.updated_at",
+                params![asset_id, status, cache_path, utc_now()],
+            )?;
+            Ok(())
+        })
+    }
+
+    fn ready_viewer_video_transcode_asset_ids(
+        &self,
+        asset_ids: &[i64],
+    ) -> Result<HashSet<i64>, AppError> {
+        self.with_connection(|conn| {
+            if asset_ids.is_empty() {
+                return Ok(HashSet::new());
+            }
+
+            let placeholders = vec!["?"; asset_ids.len()].join(", ");
+            let sql = format!(
+                "SELECT asset_id
+                 FROM viewer_video_transcodes
+                 WHERE status = 'ready' AND asset_id IN ({placeholders})"
+            );
+            let mut stmt = conn.prepare(&sql)?;
+            let rows = stmt
+                .query_map(rusqlite::params_from_iter(asset_ids.iter()), |row| {
+                    row.get::<_, i64>(0)
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+
+            Ok(rows.into_iter().collect())
+        })
+    }
+
+    fn clear_viewer_video_transcode_statuses(&self) -> Result<(), AppError> {
+        self.with_connection(|conn| {
+            conn.execute("DELETE FROM viewer_video_transcodes", [])?;
+            Ok(())
         })
     }
 }

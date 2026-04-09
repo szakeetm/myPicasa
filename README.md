@@ -4,6 +4,8 @@ Read-only desktop browser for Google Photos Takeout exports.
 
 `myPicasa` is a Tauri desktop app with a Rust backend and React frontend. It indexes a Takeout library into SQLite, reads originals in place, generates thumbnails on demand, and gives you a fast timeline/album browser without rewriting your source files.
 
+The repo also now includes a parallel native macOS UI built with SwiftUI and UniFFI. It reuses the Rust backend in-process and leaves the existing Tauri app intact.
+
 ## Current Design
 
 - Read-only by design: source Takeout files are never modified or copied into the library database.
@@ -55,6 +57,11 @@ On macOS, `ffmpeg` and `ffprobe` are easiest to install with Homebrew:
 ```bash
 brew install ffmpeg
 ```
+
+For the native macOS UI you also need:
+
+- Xcode Command Line Tools or full Xcode with the macOS SDK
+- Swift 6 toolchain, which ships with current Xcode releases
 
 ## Project Dependencies
 
@@ -175,6 +182,38 @@ Useful additional commands:
 npm run frontend:dev
 npm run frontend:build
 npm run build
+npm run native:build
+npm run native:run
+```
+
+## Native macOS UI
+
+The native app lives under [native-macos/README.md](/Users/martonady/Repos/myPicasa/native-macos/README.md) and is additive. The Tauri app remains the default cross-platform UI.
+
+Build the Rust bridge and Swift bindings:
+
+```bash
+npm run native:build
+```
+
+Run the SwiftUI app:
+
+```bash
+npm run native:run
+```
+
+If you prefer to work directly with SwiftPM:
+
+```bash
+./scripts/build-swift-native.sh
+DYLD_LIBRARY_PATH="$PWD/native-macos/NativeLib" swift build --package-path native-macos
+DYLD_LIBRARY_PATH="$PWD/native-macos/NativeLib" swift run --package-path native-macos MyPicasaNativeApp
+```
+
+Open the native app in Xcode:
+
+```bash
+open native-macos/Package.swift
 ```
 
 ## Build

@@ -158,6 +158,14 @@ pub fn apply(conn: &Connection) -> Result<(), AppError> {
           asset_id INTEGER NULL
         );
         CREATE INDEX IF NOT EXISTS idx_app_logs_created_at ON app_logs(created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS viewer_video_transcodes (
+          asset_id INTEGER PRIMARY KEY,
+          status TEXT NOT NULL,
+          cache_path TEXT NULL,
+          updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_viewer_video_transcodes_status ON viewer_video_transcodes(status);
         ",
     )?;
 

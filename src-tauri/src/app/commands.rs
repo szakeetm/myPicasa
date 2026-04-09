@@ -481,6 +481,10 @@ fn queue_viewer_video_transcode(
     let temp_output_path = output_path.with_extension("tmp.mp4");
 
     if output_path.is_file() {
+        let path_string = output_path.to_string_lossy().to_string();
+        let _ = state
+            .db
+            .set_viewer_video_transcode_status(asset_id, "ready", Some(&path_string));
         let mut status = load_cached_transcoded_video(&output_path, codec, None)?;
         status.source_bytes = Some(source_bytes);
         status.output_bytes = Some(output_bytes_for_path(&output_path));
@@ -587,6 +591,10 @@ fn queue_viewer_video_transcode(
                         encoder: Some(encoder_used.clone()),
                     },
                 );
+                let path_string = path.to_string_lossy().to_string();
+                let _ = state
+                    .db
+                    .set_viewer_video_transcode_status(asset_id, "ready", Some(&path_string));
                 let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                 let _ = state.db.insert_log(
                     "info",
@@ -921,6 +929,10 @@ pub fn start_batch_viewer_transcode(
                 Duration::from_millis(timeout_ms),
             ) {
                 Ok(Some((path, cache_hit, encoder))) => {
+                    let path_string = path.to_string_lossy().to_string();
+                    let _ = worker_state
+                        .db
+                        .set_viewer_video_transcode_status(asset_id, "ready", Some(&path_string));
                     let output_bytes = output_bytes_for_path(&path);
                     let transcode_elapsed = human_elapsed_ms(transcode_started_at.elapsed().as_millis());
                     let video_duration = human_duration_ms(duration_ms);
@@ -1588,67 +1600,24 @@ pub fn stop_batch_thumbnail_generation(
 #[tauri::command]
 pub fn get_viewer_playback_hints(
     asset_ids: Vec<i64>,
-    support: ViewerPlaybackSupport,
     state: State<AppState>,
 ) -> CommandResult<Vec<ViewerPlaybackHint>> {
-    let mut hints = Vec::with_capacity(asset_ids.len());
+    let ready_asset_ids = state
+        .db
+        .ready_viewer_video_transcode_asset_ids(&asset_ids)
+        .map_err(map_error)?;
 
-    for asset_id in asset_ids {
-        let detail = match query_service::get_asset_detail(&state.db, asset_id) {
-            Ok(detail) => detail,
-            Err(_) => {
-                hints.push(ViewerPlaybackHint {
-                    asset_id,
-                    status: "none".to_string(),
-                });
-                continue;
-            }
-        };
-
-        if detail.media_kind != "video" {
-            hints.push(ViewerPlaybackHint {
-                asset_id,
-                status: "none".to_string(),
-            });
-            continue;
-        }
-
-        let Some(primary_path) = detail.primary_path else {
-            hints.push(ViewerPlaybackHint {
-                asset_id,
-                status: "none".to_string(),
-            });
-            continue;
-        };
-
-        let source_path = PathBuf::from(&primary_path);
-        let transcoded_ready = viewer_video_cache_path(
-            &source_path,
-            &state.app_data_dir.join("viewer-cache"),
-        )
-        .map_err(map_error)?
-        .as_deref()
-        .map(|path| path.is_file())
-        .unwrap_or(false);
-
-        let status = if transcoded_ready {
-            "transcoded"
-        } else {
-            let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
-            if source_is_natively_playable(&primary_path, codec.as_deref(), &support) {
-                "native"
-            } else {
-                "none"
-            }
-        };
-
-        hints.push(ViewerPlaybackHint {
+    Ok(asset_ids
+        .into_iter()
+        .map(|asset_id| ViewerPlaybackHint {
             asset_id,
-            status: status.to_string(),
-        });
-    }
-
-    Ok(hints)
+            status: if ready_asset_ids.contains(&asset_id) {
+                "transcoded".to_string()
+            } else {
+                "none".to_string()
+            },
+        })
+        .collect())
 }
 
 #[tauri::command]
@@ -1866,6 +1835,10 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
 pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResult<()> {
     clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     state.viewer_video_jobs.lock().clear();
+    state
+        .db
+        .clear_viewer_video_transcode_statuses()
+        .map_err(map_error)?;
     state
         .db
         .insert_log("info", "viewer", "cleared viewer render cache", None)

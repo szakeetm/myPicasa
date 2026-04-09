@@ -152,7 +152,7 @@ export function MediaGrid({
       }
 
       try {
-        const hints = await api.getViewerPlaybackHints(videoIds, getViewerPlaybackSupport());
+        const hints = await api.getViewerPlaybackHints(videoIds);
         if (cancelled) {
           return;
         }
@@ -172,7 +172,7 @@ export function MediaGrid({
     void refreshPlaybackHints();
     const timer = window.setInterval(() => {
       void refreshPlaybackHints();
-    }, 1000);
+    }, 2000);
 
     return () => {
       cancelled = true;
@@ -678,9 +678,6 @@ export function MediaGrid({
                 asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
                   ? "video-ready-transcoded"
                   : "",
-                asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
-                  ? "video-ready-native"
-                  : "",
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -749,27 +746,6 @@ export function MediaGrid({
       ) : null}
     </div>
   );
-}
-
-function getViewerPlaybackSupport() {
-  if (typeof document === "undefined") {
-    return {
-      mp4_h264: false,
-      mp4_hevc: false,
-      mov_h264: false,
-      mov_hevc: false,
-      webm: false,
-    };
-  }
-  const probe = document.createElement("video");
-  const probably = (value: string) => probe.canPlayType(value) === "probably";
-  return {
-    mp4_h264: probably('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
-    mp4_hevc: probably('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
-    mov_h264: probably('video/quicktime; codecs="avc1.42E01E, mp4a.40.2"'),
-    mov_hevc: probably('video/quicktime; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
-    webm: probably("video/webm"),
-  };
 }
 
 function formatDuration(durationMs: number) {
