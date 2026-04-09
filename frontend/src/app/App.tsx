@@ -384,7 +384,7 @@ export function App() {
     const text = thumbGenerationLogs
       .map(
         (entry) =>
-          `${entry.created_at} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}`,
+          `${formatLogTimestamp(entry.created_at)} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}`,
       )
       .join("\n");
     await navigator.clipboard.writeText(text);
@@ -534,7 +534,7 @@ export function App() {
               {thumbGenerationLogs.length > 0 ? (
                 thumbGenerationLogs.map((entry) => (
                   <div key={entry.id} className="thumb-log-line">
-                    <span className="thumb-log-timestamp">{entry.created_at}</span>
+                    <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
                     <span className="thumb-log-message">
                       [{entry.level}] asset={entry.asset_id ?? "?"} {entry.message}
                     </span>
@@ -565,4 +565,18 @@ function formatTimelineLabel(value?: string | null) {
   const parsed = dayjs(value);
   if (!parsed.isValid()) return undefined;
   return parsed.format("MMMM YYYY");
+}
+
+function formatLogTimestamp(value?: string | null) {
+  if (!value) return "";
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  const year = parsed.getFullYear();
+  const month = String(parsed.getMonth() + 1).padStart(2, "0");
+  const day = String(parsed.getDate()).padStart(2, "0");
+  const hours = String(parsed.getHours()).padStart(2, "0");
+  const minutes = String(parsed.getMinutes()).padStart(2, "0");
+  const seconds = String(parsed.getSeconds()).padStart(2, "0");
+  const millis = String(parsed.getMilliseconds()).padStart(3, "0");
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}.${millis}`;
 }

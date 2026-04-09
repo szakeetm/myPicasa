@@ -21,7 +21,7 @@ use app::{
 };
 use cache::thumb_cache::ThumbnailCache;
 use db::{Database, DatabaseQueries};
-use media::thumb::generate_thumbnail;
+use media::thumb::{generate_thumbnail, thumbnail_generator_label};
 use parking_lot::Mutex;
 use search::query_service;
 use tauri::Manager;
@@ -130,7 +130,8 @@ fn main() {
                         let Some(primary_path) = detail.primary_path else {
                             return Ok(None);
                         };
-                        let filename = std::path::PathBuf::from(&primary_path)
+                        let primary_path_buf = std::path::PathBuf::from(&primary_path);
+                        let filename = primary_path_buf
                             .file_name()
                             .and_then(|item| item.to_str())
                             .unwrap_or(&primary_path)
@@ -138,11 +139,12 @@ fn main() {
                         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
                         let started = std::time::Instant::now();
                         let kind = thumb_log_kind(job.size);
+                        let generator = thumbnail_generator_label(&primary_path_buf);
                         let _ = db.insert_log(
                             "info",
                             "thumb_gen",
                             &format!(
-                                "kind={kind} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={}",
+                                "kind={kind} generator={generator} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={}",
                                 worker_index,
                                 job.asset_id,
                                 job.size,
@@ -159,7 +161,6 @@ fn main() {
                             file_size,
                             job.size
                         ));
-                        let primary_path_buf = std::path::PathBuf::from(&primary_path);
                         let generated =
                             generate_thumbnail(&primary_path_buf, job.size, &working_dir)
                                 .map_err(|error| error.to_string())?;
@@ -170,7 +171,7 @@ fn main() {
                                     "info",
                                     "thumb_gen",
                                     &format!(
-                                        "kind={kind} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={} elapsed={}",
+                                        "kind={kind} generator={generator} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={} elapsed={}",
                                         worker_index,
                                         job.asset_id,
                                         job.size,
@@ -196,7 +197,7 @@ fn main() {
                                     "warning",
                                     "thumb_gen",
                                     &format!(
-                                        "kind={kind} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={} elapsed={}",
+                                        "kind={kind} generator={generator} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={} elapsed={}",
                                         worker_index,
                                         job.asset_id,
                                         job.size,

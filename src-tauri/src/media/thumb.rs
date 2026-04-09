@@ -14,6 +14,25 @@ use crate::util::errors::AppError;
 const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
 
+pub fn thumbnail_generator_label(path: &Path) -> &'static str {
+    if is_video_path(path) {
+        return "ffmpeg";
+    }
+
+    let extension = normalized_extension(path);
+
+    #[cfg(target_os = "macos")]
+    {
+        if matches!(extension.as_str(), "heic" | "heif") {
+            return "quicklook_or_sips";
+        }
+        return "sips_or_rust";
+    }
+
+    #[allow(unreachable_code)]
+    "rust"
+}
+
 pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
     if is_video_path(path) {
         return render_video_thumbnail_with_ffmpeg(path, size);

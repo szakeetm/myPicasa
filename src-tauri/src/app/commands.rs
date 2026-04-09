@@ -15,7 +15,7 @@ use crate::{
     media::thumb::{
         clear_viewer_render_cache, generate_thumbnail, generate_viewer_image,
         generate_viewer_image_file, generate_viewer_video, probe_primary_video_codec,
-        viewer_render_cache_stats, viewer_video_cache_path,
+        thumbnail_generator_label, viewer_render_cache_stats, viewer_video_cache_path,
     },
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
@@ -402,12 +402,13 @@ pub fn request_thumbnail(
     let (filename, file_size) = media_debug_info(&primary_path);
     let started = Instant::now();
     let kind = thumb_log_kind(size);
+    let generator = thumbnail_generator_label(&PathBuf::from(&primary_path));
     record_thumb_log(
         state.inner(),
         "info",
         asset_id,
         format!(
-            "kind={kind} status=start mode=direct size={size}px filename=\"{filename}\" file_size={}",
+            "kind={kind} generator={generator} status=start mode=direct size={size}px filename=\"{filename}\" file_size={}",
             human_size(file_size)
         ),
     )?;
@@ -420,7 +421,7 @@ pub fn request_thumbnail(
                 "info",
                 asset_id,
                 format!(
-                    "kind={kind} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={}",
+                    "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={}",
                     human_size(file_size),
                     human_size(bytes.len() as u64),
                     human_elapsed_ms(started.elapsed().as_millis())
@@ -438,7 +439,7 @@ pub fn request_thumbnail(
                 "warning",
                 asset_id,
                 format!(
-                    "kind={kind} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={}",
+                    "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={}",
                     human_size(file_size),
                     human_elapsed_ms(started.elapsed().as_millis())
                 ),
@@ -456,7 +457,7 @@ pub fn request_thumbnail(
                 "error",
                 asset_id,
                 format!(
-                    "kind={kind} status=failed mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={} error={error}",
+                    "kind={kind} generator={generator} status=failed mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={} error={error}",
                     human_size(file_size),
                     human_elapsed_ms(started.elapsed().as_millis())
                 ),
