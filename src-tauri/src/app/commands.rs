@@ -68,6 +68,18 @@ fn human_elapsed_ms(elapsed_ms: u128) -> String {
     format!("{:.1}s", elapsed_ms as f64 / 1000.0)
 }
 
+fn human_duration_ms(duration_ms: u64) -> String {
+    let total_seconds = duration_ms / 1000;
+    let hours = total_seconds / 3600;
+    let minutes = (total_seconds % 3600) / 60;
+    let seconds = total_seconds % 60;
+    if hours > 0 {
+        format!("{hours}:{minutes:02}:{seconds:02}")
+    } else {
+        format!("{minutes}:{seconds:02}")
+    }
+}
+
 fn thumb_log_kind(size: u32) -> &'static str {
     if size >= VIEWER_PREVIEW_SIZE {
         "preview"
@@ -472,6 +484,7 @@ fn batch_viewer_transcode_status_snapshot(
         },
         total: state.total,
         completed: state.completed,
+        succeeded: state.completed.saturating_sub(state.skipped),
         failed: state.failed,
         skipped: state.skipped,
         stop_requested: state.stop_requested,
@@ -529,6 +542,11 @@ pub fn start_batch_viewer_transcode(
             message: Some("Discovering videos...".to_string()),
         };
     }
+
+    state
+        .db
+        .clear_logs_by_scope(&["batch_viewer_transcode"])
+        .map_err(map_error)?;
 
     let state = state.inner().clone();
     let worker_state = state.clone();
@@ -626,6 +644,7 @@ pub fn start_batch_viewer_transcode(
                 .and_then(|value| u64::try_from(value).ok())
                 .unwrap_or(0);
             let timeout_ms = duration_ms.max(VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT.as_millis() as u64);
+            let transcode_started_at = Instant::now();
             match generate_viewer_video(
                 &PathBuf::from(&source_path),
                 &viewer_cache_dir,
@@ -633,6 +652,8 @@ pub fn start_batch_viewer_transcode(
             ) {
                 Ok(Some((path, cache_hit, encoder))) => {
                     let output_bytes = output_bytes_for_path(&path);
+                    let transcode_elapsed = human_elapsed_ms(transcode_started_at.elapsed().as_millis());
+                    let video_duration = human_duration_ms(duration_ms);
                     let mut status = worker_state.batch_viewer_transcode.lock();
                     status.completed += 1;
                     if cache_hit {
@@ -640,15 +661,28 @@ pub fn start_batch_viewer_transcode(
                     }
                     status.current_output_bytes = Some(output_bytes);
                     let status_label = if cache_hit { "skipped-present" } else { "success" };
+                    let log_message = if cache_hit {
+                        format!(
+                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} video_duration={} output_size={}",
+                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
+                            encoder,
+                            video_duration,
+                            human_size(output_bytes),
+                        )
+                    } else {
+                        format!(
+                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} video_duration={} transcode_duration={} output_size={}",
+                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
+                            encoder,
+                            video_duration,
+                            transcode_elapsed,
+                            human_size(output_bytes),
+                        )
+                    };
                     let _ = worker_state.db.insert_log(
                         "info",
                         "batch_viewer_transcode",
-                        &format!(
-                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} output_size={}",
-                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
-                            encoder,
-                            human_size(output_bytes),
-                        ),
+                        &log_message,
                         Some(asset_id),
                     );
                 }

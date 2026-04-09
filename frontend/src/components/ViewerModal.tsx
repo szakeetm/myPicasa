@@ -63,20 +63,27 @@ export function ViewerModal({
   const [displaySourceLabel, setDisplaySourceLabel] = useState<string>("Loading");
   const viewerMediaRef = useRef<HTMLDivElement | null>(null);
   const imageFrameRef = useRef<HTMLDivElement | null>(null);
+  const imageElementRef = useRef<HTMLImageElement | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const livePhotoVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const videoObjectUrlRef = useRef<string | undefined>(undefined);
   const livePhotoObjectUrlRef = useRef<string | undefined>(undefined);
+  const pendingZoomFocusRef = useRef<
+    | {
+        clientX: number;
+        clientY: number;
+        logicalX: number;
+        logicalY: number;
+        nextZoom: number;
+      }
+    | null
+  >(null);
   const videoSourceLabelRef = useRef<string>("unset");
   const livePhotoSourceLabelRef = useRef<string>("unset");
   const imageSourceLabelRef = useRef<string>("unset");
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
-  const canFullscreenVideo =
-    isVideo &&
-    typeof document !== "undefined" &&
-    typeof document.fullscreenEnabled !== "undefined";
   const livePhotoPath = asset?.live_photo_video_path
     ? convertFileSrc(asset.live_photo_video_path)
     : undefined;
@@ -616,16 +623,30 @@ export function ViewerModal({
     }
   }
 
-  async function toggleVideoFullscreen() {
-    const element = videoElementRef.current;
-    if (!element || typeof document === "undefined") {
-      return;
+  function setZoomWithFocus(nextZoom: number, clientX?: number, clientY?: number) {
+    const clampedZoom = Math.min(Math.max(nextZoom, 0.1), 8);
+    const imageElement = imageElementRef.current;
+    const mediaElement = viewerMediaRef.current;
+    if (
+      typeof clientX === "number" &&
+      typeof clientY === "number" &&
+      imageElement &&
+      mediaElement &&
+      effectiveZoom > 0
+    ) {
+      const imageRect = imageElement.getBoundingClientRect();
+      pendingZoomFocusRef.current = {
+        clientX,
+        clientY,
+        logicalX: (clientX - imageRect.left) / effectiveZoom,
+        logicalY: (clientY - imageRect.top) / effectiveZoom,
+        nextZoom: clampedZoom,
+      };
+    } else {
+      pendingZoomFocusRef.current = null;
     }
-    if (document.fullscreenElement === element) {
-      await document.exitFullscreen();
-      return;
-    }
-    await element.requestFullscreen();
+    setZoomMode("custom");
+    setZoom(clampedZoom);
   }
 
   function handleVideoDiagnostics(
@@ -651,6 +672,29 @@ export function ViewerModal({
       errorCode ? "error" : "info",
     );
   }
+
+  useEffect(() => {
+    const pendingFocus = pendingZoomFocusRef.current;
+    const mediaElement = viewerMediaRef.current;
+    const imageElement = imageElementRef.current;
+    if (!pendingFocus || !mediaElement || !imageElement || !isPhoto || zoomMode !== "custom") {
+      return;
+    }
+
+    const frame = window.requestAnimationFrame(() => {
+      const mediaRect = mediaElement.getBoundingClientRect();
+      const imageRect = imageElement.getBoundingClientRect();
+      const targetOffsetX = pendingFocus.clientX - mediaRect.left;
+      const targetOffsetY = pendingFocus.clientY - mediaRect.top;
+      const focusedPixelX = imageRect.left - mediaRect.left + pendingFocus.logicalX * pendingFocus.nextZoom;
+      const focusedPixelY = imageRect.top - mediaRect.top + pendingFocus.logicalY * pendingFocus.nextZoom;
+      mediaElement.scrollLeft += focusedPixelX - targetOffsetX;
+      mediaElement.scrollTop += focusedPixelY - targetOffsetY;
+      pendingZoomFocusRef.current = null;
+    });
+
+    return () => window.cancelAnimationFrame(frame);
+  }, [effectiveZoom, isPhoto, zoomMode]);
 
   useEffect(() => {
     if (!asset) return;
@@ -696,20 +740,31 @@ export function ViewerModal({
       event.preventDefault();
       const base = zoomMode === "fit" ? fitZoom : zoom;
       const factor = Math.exp(-event.deltaY * 0.01);
-      setZoomMode("custom");
-      setZoom(Math.min(Math.max(base * factor, 0.1), 8));
+      setZoomWithFocus(base * factor, event.clientX, event.clientY);
     };
     const onGestureStart = () => {
       gestureBaseZoom = zoomMode === "fit" ? fitZoom : zoom;
     };
     const onGestureChange = (event: Event) => {
-      const gestureEvent = event as Event & { scale?: number };
+      const gestureEvent = event as Event & {
+        scale?: number;
+        clientX?: number;
+        clientY?: number;
+        pageX?: number;
+        pageY?: number;
+      };
       if (typeof gestureEvent.scale !== "number") {
         return;
       }
       event.preventDefault();
-      setZoomMode("custom");
-      setZoom(Math.min(Math.max(gestureBaseZoom * gestureEvent.scale, 0.1), 8));
+      const mediaRect = element.getBoundingClientRect();
+      const fallbackClientX = mediaRect.left + mediaRect.width / 2;
+      const fallbackClientY = mediaRect.top + mediaRect.height / 2;
+      setZoomWithFocus(
+        gestureBaseZoom * gestureEvent.scale,
+        gestureEvent.clientX ?? gestureEvent.pageX ?? fallbackClientX,
+        gestureEvent.clientY ?? gestureEvent.pageY ?? fallbackClientY,
+      );
     };
 
     element.addEventListener("wheel", onWheel, { passive: false });
@@ -738,16 +793,14 @@ export function ViewerModal({
 
   return (
     <div className="viewer-backdrop" onClick={onClose}>
-      <div className="viewer-card" onClick={(event) => event.stopPropagation()}>
+      <div
+        className="viewer-card viewer-card-immersive"
+        onClick={(event) => event.stopPropagation()}
+      >
         <div className="viewer-toolbar">
           <strong>{asset.title ?? "Untitled asset"}</strong>
           <div className="button-row">
             <span className="viewer-source-badge">{formatViewerSourceLabel(displaySourceLabel)}</span>
-            {canFullscreenVideo ? (
-              <button className="button-secondary" onClick={() => void toggleVideoFullscreen()}>
-                Fullscreen
-              </button>
-            ) : null}
             {isPhoto ? (
               <>
                 {livePhotoPath ? (
@@ -780,7 +833,7 @@ export function ViewerModal({
             </button>
           </div>
         </div>
-        <div className="viewer-media" ref={viewerMediaRef}>
+        <div className="viewer-media viewer-media-immersive" ref={viewerMediaRef}>
           {asset.media_kind === "video" ? (
             videoSrc ? (
               <video
@@ -934,6 +987,7 @@ export function ViewerModal({
                 </button>
               ) : null}
               <img
+                ref={imageElementRef}
                 src={imageSrc}
                 alt={asset.title ?? "asset"}
                 className={livePhotoPath ? "viewer-live-photo-still" : undefined}
@@ -1082,19 +1136,16 @@ function describeImageSupport(src?: string | null) {
 }
 
 function shouldPreferOriginalVideoBytesForPath(path?: string | null) {
-  if (!path || typeof document === "undefined") {
+  if (!path) {
     return false;
   }
   const extension = path.split(".").pop()?.toLowerCase();
-  const probe = document.createElement("video");
   switch (extension) {
     case "mp4":
     case "m4v":
-      return probe.canPlayType("video/mp4") === "probably";
     case "mov":
-      return probe.canPlayType("video/quicktime") === "probably";
     case "webm":
-      return probe.canPlayType("video/webm") === "probably";
+      return true;
     default:
       return false;
   }

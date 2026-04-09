@@ -439,11 +439,19 @@ export function App() {
     setBatchTranscodeLogs([]);
   }
 
+  async function handleCloseBatchTranscode() {
+    if (batchTranscodeStatus?.status === "running") {
+      const status = await api.stopBatchViewerTranscode();
+      setBatchTranscodeStatus(status);
+    }
+    setBatchTranscodeOpen(false);
+  }
+
   async function handleCopyBatchTranscodeLog() {
     const text = batchTranscodeLogs
       .map(
         (entry) =>
-          `${formatLogTimestamp(entry.created_at)} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}`,
+          `${formatLogTimestamp(entry.created_at)} ${entry.message}`,
       )
       .join("\n");
     await navigator.clipboard.writeText(text);
@@ -550,7 +558,7 @@ export function App() {
       ) : null}
 
       {batchTranscodeOpen ? (
-        <div className="viewer-backdrop" onClick={() => setBatchTranscodeOpen(false)}>
+        <div className="viewer-backdrop" onClick={() => void handleCloseBatchTranscode()}>
           <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
             <div className="viewer-toolbar">
               <div>
@@ -582,7 +590,7 @@ export function App() {
                 <button className="button-secondary" onClick={() => void handleClearBatchTranscodeLog()}>
                   Clear Log
                 </button>
-                <button className="button-danger" onClick={() => setBatchTranscodeOpen(false)}>
+                <button className="button-danger" onClick={() => void handleCloseBatchTranscode()}>
                   Close
                 </button>
               </div>
@@ -614,9 +622,7 @@ export function App() {
                 batchTranscodeLogs.map((entry) => (
                   <div key={entry.id} className="thumb-log-line">
                     <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
-                    <span className="thumb-log-message">
-                      [{entry.level}] asset={entry.asset_id ?? "?"} {entry.message}
-                    </span>
+                    <span className="thumb-log-message">{entry.message}</span>
                   </div>
                 ))
               ) : (
@@ -681,7 +687,7 @@ function formatBatchStatusLine(status?: BatchViewerTranscodeStatus) {
   const parts = [
     status.status,
     `${processed}/${status.total} processed`,
-    `${status.completed} succeeded`,
+    `${status.succeeded} succeeded`,
   ];
   if (status.skipped > 0) {
     parts.push(`${status.skipped} skipped`);

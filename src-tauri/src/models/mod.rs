@@ -169,6 +169,7 @@ pub struct BatchViewerTranscodeStatus {
     pub status: String,
     pub total: u32,
     pub completed: u32,
+    pub succeeded: u32,
     pub failed: u32,
     pub skipped: u32,
     pub stop_requested: bool,

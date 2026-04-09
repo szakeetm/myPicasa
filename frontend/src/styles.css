@@ -397,6 +397,15 @@ button {
   overflow: hidden;
 }
 
+.viewer-card-immersive {
+  width: min(100%, 1680px);
+  height: calc(100vh - 24px);
+  max-height: calc(100vh - 24px);
+  border-radius: 18px;
+  display: flex;
+  flex-direction: column;
+}
+
 .thumb-log-card {
   width: min(1100px, 100%);
   max-height: 86vh;
@@ -467,6 +476,12 @@ button {
   padding: 12px;
 }
 
+.viewer-media-immersive {
+  max-height: none;
+  flex: 1;
+  min-height: 0;
+}
+
 .viewer-image-frame {
   position: relative;
   width: max-content;
@@ -475,6 +490,10 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+
+.viewer-media-immersive .viewer-image-frame {
+  min-height: calc(100vh - 180px);
 }
 
 .viewer-image-frame.zoomed {
@@ -514,6 +533,10 @@ button {
   margin: 0 auto;
 }
 
+.viewer-media-immersive video {
+  max-height: calc(100vh - 180px);
+}
+
 .viewer-loading-state {
   min-height: calc(68vh - 24px);
   display: grid;
@@ -521,6 +544,10 @@ button {
   color: rgba(255, 250, 243, 0.82);
   font-size: 1rem;
   letter-spacing: 0.02em;
+}
+
+.viewer-media-immersive .viewer-loading-state {
+  min-height: calc(100vh - 180px);
 }
 
 .viewer-meta {

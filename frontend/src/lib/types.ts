@@ -121,6 +121,7 @@ export type BatchViewerTranscodeStatus = {
   status: "idle" | "running" | "completed";
   total: number;
   completed: number;
+  succeeded: number;
   failed: number;
   skipped: number;
   stop_requested: boolean;
