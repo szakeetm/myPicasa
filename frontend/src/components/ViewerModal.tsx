@@ -16,6 +16,7 @@ type ViewerModalProps = {
   onPrevious: () => void;
   onNext: () => void;
   onClose: () => void;
+  onViewerPreviewReady?: (assetId: number) => void;
 };
 
 export function ViewerModal({
@@ -25,6 +26,7 @@ export function ViewerModal({
   onPrevious,
   onNext,
   onClose,
+  onViewerPreviewReady,
 }: ViewerModalProps) {
   const [imageSrc, setImageSrc] = useState<string>();
   const [imageError, setImageError] = useState<string>();
@@ -355,6 +357,7 @@ export function ViewerModal({
             "viewer.image",
             `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
           );
+          onViewerPreviewReady?.(assetId);
           setImageSrc(src);
           setImageError(undefined);
           return;
@@ -383,7 +386,7 @@ export function ViewerModal({
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.primary_path, isPhoto]);
+  }, [assetId, asset?.primary_path, isPhoto, onViewerPreviewReady]);
 
   function pauseModalPlayback() {
     videoElementRef.current?.pause();

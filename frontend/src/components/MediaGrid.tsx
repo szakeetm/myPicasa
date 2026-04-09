@@ -10,6 +10,7 @@ const VIEWER_PREVIEW_SIZE = 2048;
 type MediaGridProps = {
   assets: AssetListItem[];
   onSelect: (assetId: number) => void;
+  viewerPreviewReadyAssetIds?: number[];
   onLeadingDateChange?: (value?: string) => void;
   thumbnailResetKey?: number;
   hasMore?: boolean;
@@ -43,6 +44,7 @@ function columnCount(width: number) {
 export function MediaGrid({
   assets,
   onSelect,
+  viewerPreviewReadyAssetIds = [],
   onLeadingDateChange,
   thumbnailResetKey,
   hasMore = false,
@@ -90,6 +92,10 @@ export function MediaGrid({
   });
   const columns = columnCount(width);
   const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+  const viewerPreviewReadySet = useMemo(
+    () => new Set(viewerPreviewReadyAssetIds),
+    [viewerPreviewReadyAssetIds],
+  );
   const bootstrapVisibleIds = useMemo(
     () => assets.slice(0, Math.max(columns * 3, 12)).map((asset) => asset.id),
     [assets, columns],
@@ -203,6 +209,34 @@ export function MediaGrid({
   useEffect(() => {
     thumbsRef.current = thumbs;
   }, [thumbs]);
+
+  useEffect(() => {
+    if (viewerPreviewReadySet.size === 0 || assets.length === 0) {
+      return;
+    }
+
+    startTransition(() => {
+      setThumbs((current) => {
+        let changed = false;
+        const next = { ...current };
+        for (const asset of assets) {
+          if (!viewerPreviewReadySet.has(asset.id)) {
+            continue;
+          }
+          const existing = next[asset.id];
+          if (existing?.previewStatus === "ready") {
+            continue;
+          }
+          next[asset.id] = {
+            ...existing,
+            previewStatus: "ready",
+          };
+          changed = true;
+        }
+        return changed ? next : current;
+      });
+    });
+  }, [assets, viewerPreviewReadySet]);
 
   function summarizeThumbStates() {
     let ready = 0;

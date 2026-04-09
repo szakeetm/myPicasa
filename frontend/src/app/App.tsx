@@ -28,6 +28,7 @@ export function App() {
   const [nextAssetCursor, setNextAssetCursor] = useState<number>();
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
+  const [viewerPreviewReadyAssetIds, setViewerPreviewReadyAssetIds] = useState<number[]>([]);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
   const [batchThumbnailStatus, setBatchThumbnailStatus] = useState<BatchThumbnailGenerationStatus>();
@@ -98,6 +99,7 @@ export function App() {
     state.setAssets(response.items);
     setNextAssetCursor(response.next_cursor ?? undefined);
     setThumbnailResetKey((value) => value + 1);
+    setViewerPreviewReadyAssetIds([]);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
     await logClient(
       "ui.refresh",
@@ -404,6 +406,7 @@ export function App() {
     state.setViewMode("timeline");
     setNextAssetCursor(undefined);
     setLoadingMoreAssets(false);
+    setViewerPreviewReadyAssetIds([]);
 
     await api.resetLocalDatabase();
     window.location.reload();
@@ -431,6 +434,7 @@ export function App() {
     }
     await api.clearThumbnailCache();
     setThumbnailResetKey((value) => value + 1);
+    setViewerPreviewReadyAssetIds([]);
     if (thumbLogOpen) {
       setThumbGenerationLogs(await api.getThumbGenerationLogs());
     }
@@ -529,6 +533,12 @@ export function App() {
     await navigator.clipboard.writeText(text);
   }
 
+  function handleViewerPreviewReady(assetId: number) {
+    setViewerPreviewReadyAssetIds((current) =>
+      current.includes(assetId) ? current : [...current, assetId],
+    );
+  }
+
   const selectedAssetIndex = state.selectedAsset
     ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id)
     : -1;
@@ -561,6 +571,7 @@ export function App() {
           <MediaGrid
             assets={state.assets}
             onSelect={handleSelectAsset}
+            viewerPreviewReadyAssetIds={viewerPreviewReadyAssetIds}
             thumbnailResetKey={thumbnailResetKey}
             hasMore={nextAssetCursor != null}
             isLoadingMore={loadingMoreAssets}
@@ -743,6 +754,7 @@ export function App() {
         onPrevious={() => void handleStepAsset(-1)}
         onNext={() => void handleStepAsset(1)}
         onClose={() => state.setSelectedAsset(undefined)}
+        onViewerPreviewReady={handleViewerPreviewReady}
       />
     </div>
   );
