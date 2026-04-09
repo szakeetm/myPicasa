@@ -38,7 +38,7 @@ type GridEntry =
       kind: "placeholder";
       key: string;
       pageStartCursor: number;
-      observeHydration: boolean;
+      hydrationObserverKey: string | null;
     };
 
 function sortGridPages(pages: GridPage[]) {
@@ -59,7 +59,12 @@ function gridEntriesFromPages(pages: GridPage[]): GridEntry[] {
       kind: "placeholder" as const,
       key: `placeholder-${page.startCursor + index}`,
       pageStartCursor: page.startCursor,
-      observeHydration: index === 0,
+      hydrationObserverKey:
+        index === 0
+          ? `start-${page.startCursor}`
+          : index === page.count - 1
+            ? `end-${page.startCursor}`
+            : null,
     }));
   });
 }

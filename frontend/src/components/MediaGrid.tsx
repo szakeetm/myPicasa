@@ -22,7 +22,7 @@ type MediaGridProps = {
         kind: "placeholder";
         key: string;
         pageStartCursor: number;
-        observeHydration: boolean;
+      hydrationObserverKey: string | null;
       }
   >;
   onSelect: (assetId: number) => void;
@@ -82,7 +82,7 @@ export function MediaGrid({
   const loadPreviousRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
-  const placeholderRefs = useRef(new Map<number, HTMLDivElement>());
+  const placeholderRefs = useRef(new Map<string, HTMLDivElement>());
   const prependAnchorRef = useRef<{ assetId: number; top: number } | null>(null);
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
@@ -840,15 +840,15 @@ export function MediaGrid({
                 key={entry.key}
                 className="tile tile-placeholder"
                 aria-hidden="true"
-                data-page-start-cursor={entry.observeHydration ? entry.pageStartCursor : undefined}
+                data-page-start-cursor={entry.hydrationObserverKey ? entry.pageStartCursor : undefined}
                 ref={(element) => {
-                  if (!entry.observeHydration) {
+                  if (!entry.hydrationObserverKey) {
                     return;
                   }
                   if (element) {
-                    placeholderRefs.current.set(entry.pageStartCursor, element);
+                    placeholderRefs.current.set(entry.hydrationObserverKey, element);
                   } else {
-                    placeholderRefs.current.delete(entry.pageStartCursor);
+                    placeholderRefs.current.delete(entry.hydrationObserverKey);
                   }
                 }}
               >
