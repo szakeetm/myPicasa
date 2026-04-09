@@ -380,6 +380,16 @@ export function App() {
     await refreshDebugSurfaces();
   }
 
+  async function handleCopyThumbLog() {
+    const text = thumbGenerationLogs
+      .map(
+        (entry) =>
+          `${entry.created_at} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}`,
+      )
+      .join("\n");
+    await navigator.clipboard.writeText(text);
+  }
+
   async function handleClearViewerRenders() {
     await api.clearViewerRenderCache();
     const cacheStats = await api.getCacheStats();
@@ -508,6 +518,9 @@ export function App() {
               <div className="button-row">
                 <button className="button-secondary" onClick={() => void handleOpenThumbLog()}>
                   Refresh
+                </button>
+                <button className="button-secondary" onClick={() => void handleCopyThumbLog()}>
+                  Copy
                 </button>
                 <button className="button-secondary" onClick={() => void handleClearThumbLog()}>
                   Clear

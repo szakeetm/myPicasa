@@ -49,6 +49,31 @@ fn media_debug_info(path: &str) -> (String, u64) {
     (filename, file_size)
 }
 
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= MB {
+        format!("{:.1} MB", bytes_f64 / MB)
+    } else if bytes_f64 >= KB {
+        format!("{:.1} kB", bytes_f64 / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn human_elapsed_ms(elapsed_ms: u128) -> String {
+    format!("{:.1}s", elapsed_ms as f64 / 1000.0)
+}
+
+fn thumb_log_kind(size: u32) -> &'static str {
+    if size >= VIEWER_PREVIEW_SIZE {
+        "preview"
+    } else {
+        "thumb"
+    }
+}
+
 fn record_thumb_log(
     state: &AppState,
     level: &str,
@@ -376,12 +401,14 @@ pub fn request_thumbnail(
     };
     let (filename, file_size) = media_debug_info(&primary_path);
     let started = Instant::now();
+    let kind = thumb_log_kind(size);
     record_thumb_log(
         state.inner(),
         "info",
         asset_id,
         format!(
-            "status=start mode=direct size={size} filename=\"{filename}\" file_size={file_size}"
+            "kind={kind} status=start mode=direct size={size}px filename=\"{filename}\" file_size={}",
+            human_size(file_size)
         ),
     )?;
 
@@ -393,9 +420,10 @@ pub fn request_thumbnail(
                 "info",
                 asset_id,
                 format!(
-                    "status=success mode=direct size={size} filename=\"{filename}\" file_size={file_size} generated_bytes={} elapsed_ms={}",
-                    bytes.len(),
-                    started.elapsed().as_millis()
+                    "kind={kind} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={}",
+                    human_size(file_size),
+                    human_size(bytes.len() as u64),
+                    human_elapsed_ms(started.elapsed().as_millis())
                 ),
             )?;
             cache.lock().insert(key, bytes.clone());
@@ -410,8 +438,9 @@ pub fn request_thumbnail(
                 "warning",
                 asset_id,
                 format!(
-                    "status=unavailable mode=direct size={size} filename=\"{filename}\" file_size={file_size} elapsed_ms={}",
-                    started.elapsed().as_millis()
+                    "kind={kind} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={}",
+                    human_size(file_size),
+                    human_elapsed_ms(started.elapsed().as_millis())
                 ),
             )?;
             Ok(None)
@@ -427,8 +456,9 @@ pub fn request_thumbnail(
                 "error",
                 asset_id,
                 format!(
-                    "status=failed mode=direct size={size} filename=\"{filename}\" file_size={file_size} elapsed_ms={} error={error}",
-                    started.elapsed().as_millis()
+                    "kind={kind} status=failed mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={} error={error}",
+                    human_size(file_size),
+                    human_elapsed_ms(started.elapsed().as_millis())
                 ),
             )?;
             Ok(None)

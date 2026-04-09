@@ -35,6 +35,31 @@ fn preview_debug_log(message: String) {
     }
 }
 
+fn human_size(bytes: u64) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let bytes_f64 = bytes as f64;
+    if bytes_f64 >= MB {
+        format!("{:.1} MB", bytes_f64 / MB)
+    } else if bytes_f64 >= KB {
+        format!("{:.1} kB", bytes_f64 / KB)
+    } else {
+        format!("{bytes} B")
+    }
+}
+
+fn human_elapsed_ms(elapsed_ms: u128) -> String {
+    format!("{:.1}s", elapsed_ms as f64 / 1000.0)
+}
+
+fn thumb_log_kind(size: u32) -> &'static str {
+    if size >= VIEWER_PREVIEW_SIZE {
+        "preview"
+    } else {
+        "thumb"
+    }
+}
+
 fn main() {
     tracing_subscriber::registry()
         .with(
@@ -112,16 +137,17 @@ fn main() {
                             .to_string();
                         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
                         let started = std::time::Instant::now();
+                        let kind = thumb_log_kind(job.size);
                         let _ = db.insert_log(
                             "info",
                             "thumb_gen",
                             &format!(
-                                "status=start worker={} asset_id={} size={} filename=\"{}\" file_size={}",
+                                "kind={kind} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={}",
                                 worker_index,
                                 job.asset_id,
                                 job.size,
                                 filename,
-                                file_size
+                                human_size(file_size)
                             ),
                             Some(job.asset_id),
                         );
@@ -144,13 +170,14 @@ fn main() {
                                     "info",
                                     "thumb_gen",
                                     &format!(
-                                        "status=success worker={} asset_id={} size={} filename=\"{}\" file_size={} generated_bytes={} elapsed_ms={elapsed_ms}",
+                                        "kind={kind} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={} elapsed={}",
                                         worker_index,
                                         job.asset_id,
                                         job.size,
                                         filename,
-                                        file_size,
-                                        bytes.len(),
+                                        human_size(file_size),
+                                        human_size(bytes.len() as u64),
+                                        human_elapsed_ms(elapsed_ms),
                                     ),
                                     Some(job.asset_id),
                                 );
@@ -169,12 +196,13 @@ fn main() {
                                     "warning",
                                     "thumb_gen",
                                     &format!(
-                                        "status=unavailable worker={} asset_id={} size={} filename=\"{}\" file_size={} elapsed_ms={elapsed_ms}",
+                                        "kind={kind} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={} elapsed={}",
                                         worker_index,
                                         job.asset_id,
                                         job.size,
                                         filename,
-                                        file_size,
+                                        human_size(file_size),
+                                        human_elapsed_ms(elapsed_ms),
                                     ),
                                     Some(job.asset_id),
                                 );
@@ -212,8 +240,11 @@ fn main() {
                                 "error",
                                 "thumb_gen",
                                 &format!(
-                                    "status=failed worker={} asset_id={} size={} error={error}",
-                                    worker_index, job.asset_id, job.size
+                                    "kind={} status=failed worker={} asset_id={} size={}px error={error}",
+                                    thumb_log_kind(job.size),
+                                    worker_index,
+                                    job.asset_id,
+                                    job.size,
                                 ),
                                 Some(job.asset_id),
                             );
