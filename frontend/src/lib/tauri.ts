@@ -11,7 +11,7 @@ import type {
   LogEntry,
   RefreshRequest,
   ThumbnailBatchItem,
-  ViewerMediaSource,
+  ViewerMediaStatus,
 } from "./types";
 
 export const api = {
@@ -32,9 +32,9 @@ export const api = {
   loadViewerFrame: (assetId: number, preferOriginal?: boolean) =>
     invoke<string | null>("load_viewer_frame", { assetId, preferOriginal }),
   loadViewerVideo: (assetId: number, preferOriginal?: boolean) =>
-    invoke<ViewerMediaSource | null>("load_viewer_video", { assetId, preferOriginal }),
+    invoke<ViewerMediaStatus>("load_viewer_video", { assetId, preferOriginal }),
   loadLivePhotoMotion: (assetId: number, preferOriginal?: boolean) =>
-    invoke<ViewerMediaSource | null>("load_live_photo_motion", { assetId, preferOriginal }),
+    invoke<ViewerMediaStatus>("load_live_photo_motion", { assetId, preferOriginal }),
   requestThumbnailsBatch: (assetIds: number[], size: number) =>
     invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size }),
   requestThumbnail: (assetId: number, size: number) =>

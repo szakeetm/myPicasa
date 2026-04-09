@@ -191,42 +191,67 @@ export function ViewerModal({
     setVideoFallbackAttempted(false);
     setVideoFallbackAvailable(false);
     setVideoTranscoding(true);
+    setVideoSourceLabel("transcoding");
     void logClient(
       "viewer.video",
       `viewer-v2 asset ${assetId} loading backend video for ${asset?.primary_path ?? "unknown"} (${describeVideoSupport(asset?.primary_path)} source=${shouldPreferOriginalVideoBytes ? "original_bytes" : "transcode"})`,
     );
-    void api
-      .loadViewerVideo(assetId, shouldPreferOriginalVideoBytes)
-      .then(async (backendMedia) => {
-        if (cancelled) return;
-        setVideoTranscoding(false);
-        if (backendMedia) {
-          void logClient(
-            "viewer.video",
-            `viewer-v2 asset ${assetId} backend video ready source=${backendMedia.source}`,
-          );
-          setVideoSourceLabel(backendMedia.source);
-          const materialized = await materializeVideoSrc(backendMedia.src, videoObjectUrlRef);
-          if (cancelled) {
-            if (materialized.startsWith("blob:")) {
-              URL.revokeObjectURL(materialized);
+    void (async () => {
+      let loggedPending = false;
+      try {
+        while (!cancelled) {
+          const backendMedia = await api.loadViewerVideo(assetId, shouldPreferOriginalVideoBytes);
+          if (cancelled) return;
+          if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
+            setVideoTranscoding(false);
+            void logClient(
+              "viewer.video",
+              `viewer-v2 asset ${assetId} backend video ready source=${backendMedia.source}`,
+            );
+            setVideoSourceLabel(backendMedia.source);
+            const materialized = await materializeVideoSrc(backendMedia.src, videoObjectUrlRef);
+            if (cancelled) {
+              if (materialized.startsWith("blob:")) {
+                URL.revokeObjectURL(materialized);
+              }
+              return;
             }
+            setVideoSrc(materialized);
+            setVideoError(undefined);
             return;
           }
-          setVideoSrc(materialized);
-          setVideoError(undefined);
-        } else {
-          void logClient("viewer.video", `asset ${assetId} backend video unavailable`, "error");
-          setVideoError("Video playback unavailable");
+          if (backendMedia.status === "pending") {
+            setVideoTranscoding(true);
+            setVideoError(undefined);
+            setVideoSourceLabel("transcoding");
+            if (!loggedPending) {
+              loggedPending = true;
+              void logClient(
+                "viewer.video",
+                `viewer-v2 asset ${assetId} background video transcode in progress`,
+              );
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 750));
+            continue;
+          }
+
+          setVideoTranscoding(false);
+          void logClient(
+            "viewer.video",
+            `asset ${assetId} backend video unavailable: ${backendMedia.message ?? "unavailable"}`,
+            "error",
+          );
+          setVideoError(backendMedia.message ?? "Video playback unavailable");
+          return;
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!cancelled) {
           setVideoTranscoding(false);
           void logClient("viewer.video", `asset ${assetId} backend video failed: ${String(error)}`, "error");
           setVideoError(String(error));
         }
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -248,42 +273,67 @@ export function ViewerModal({
     setLivePhotoFallbackAttempted(false);
     setLivePhotoFallbackAvailable(false);
     setLivePhotoTranscoding(true);
+    setLivePhotoSourceLabel("transcoding");
     void logClient(
       "viewer.live_photo",
       `viewer-v2 asset ${assetId} loading backend motion for ${asset?.live_photo_video_path ?? "unknown"} (${describeVideoSupport(asset?.live_photo_video_path)} source=${shouldPreferOriginalLivePhotoBytes ? "original_bytes" : "transcode"})`,
     );
-    void api
-      .loadLivePhotoMotion(assetId, shouldPreferOriginalLivePhotoBytes)
-      .then(async (backendMedia) => {
-        if (cancelled) return;
-        setLivePhotoTranscoding(false);
-        if (backendMedia) {
-          void logClient(
-            "viewer.live_photo",
-            `viewer-v2 asset ${assetId} backend motion ready source=${backendMedia.source}`,
-          );
-          setLivePhotoSourceLabel(backendMedia.source);
-          const materialized = await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef);
-          if (cancelled) {
-            if (materialized.startsWith("blob:")) {
-              URL.revokeObjectURL(materialized);
+    void (async () => {
+      let loggedPending = false;
+      try {
+        while (!cancelled) {
+          const backendMedia = await api.loadLivePhotoMotion(assetId, shouldPreferOriginalLivePhotoBytes);
+          if (cancelled) return;
+          if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
+            setLivePhotoTranscoding(false);
+            void logClient(
+              "viewer.live_photo",
+              `viewer-v2 asset ${assetId} backend motion ready source=${backendMedia.source}`,
+            );
+            setLivePhotoSourceLabel(backendMedia.source);
+            const materialized = await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef);
+            if (cancelled) {
+              if (materialized.startsWith("blob:")) {
+                URL.revokeObjectURL(materialized);
+              }
+              return;
             }
+            setLivePhotoMotionSrc(materialized);
+            setLivePhotoMotionError(undefined);
             return;
           }
-          setLivePhotoMotionSrc(materialized);
-          setLivePhotoMotionError(undefined);
-        } else {
-          void logClient("viewer.live_photo", `asset ${assetId} backend motion unavailable`, "error");
-          setLivePhotoMotionError("Live photo playback unavailable");
+          if (backendMedia.status === "pending") {
+            setLivePhotoTranscoding(true);
+            setLivePhotoMotionError(undefined);
+            setLivePhotoSourceLabel("transcoding");
+            if (!loggedPending) {
+              loggedPending = true;
+              void logClient(
+                "viewer.live_photo",
+                `viewer-v2 asset ${assetId} background motion transcode in progress`,
+              );
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 750));
+            continue;
+          }
+
+          setLivePhotoTranscoding(false);
+          void logClient(
+            "viewer.live_photo",
+            `asset ${assetId} backend motion unavailable: ${backendMedia.message ?? "unavailable"}`,
+            "error",
+          );
+          setLivePhotoMotionError(backendMedia.message ?? "Live photo playback unavailable");
+          return;
         }
-      })
-      .catch((error) => {
+      } catch (error) {
         if (!cancelled) {
           setLivePhotoTranscoding(false);
           void logClient("viewer.live_photo", `asset ${assetId} backend motion failed: ${String(error)}`, "error");
           setLivePhotoMotionError(String(error));
         }
-      });
+      }
+    })();
 
     return () => {
       cancelled = true;
@@ -408,18 +458,27 @@ export function ViewerModal({
     setVideoFallbackAvailable(false);
     setVideoError(undefined);
     setVideoTranscoding(true);
+    setVideoSourceLabel("transcoding");
     void logClient("viewer.video", `asset ${assetId} switching to transcoded backend playback after backend-original error`);
     try {
-      const backendMedia = await api.loadViewerVideo(assetId, false);
-      setVideoTranscoding(false);
-      if (backendMedia) {
-        void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
-        setVideoSourceLabel(backendMedia.source);
-        setVideoSrc(await materializeVideoSrc(backendMedia.src, videoObjectUrlRef));
+      while (true) {
+        const backendMedia = await api.loadViewerVideo(assetId, false);
+        if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
+          setVideoTranscoding(false);
+          void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
+          setVideoSourceLabel(backendMedia.source);
+          setVideoSrc(await materializeVideoSrc(backendMedia.src, videoObjectUrlRef));
+          return;
+        }
+        if (backendMedia.status === "pending") {
+          await new Promise((resolve) => window.setTimeout(resolve, 750));
+          continue;
+        }
+        setVideoTranscoding(false);
+        void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
+        setVideoError(backendMedia.message ?? "Video playback unavailable");
         return;
       }
-      void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
-      setVideoError("Video playback unavailable");
     } catch (error) {
       setVideoTranscoding(false);
       void logClient("viewer.video", `asset ${assetId} transcoded backend playback failed after backend-original error: ${String(error)}`, "error");
@@ -435,18 +494,27 @@ export function ViewerModal({
     setLivePhotoFallbackAvailable(false);
     setLivePhotoMotionError(undefined);
     setLivePhotoTranscoding(true);
+    setLivePhotoSourceLabel("transcoding");
     void logClient("viewer.live_photo", `asset ${assetId} switching to transcoded backend motion after backend-original error`);
     try {
-      const backendMedia = await api.loadLivePhotoMotion(assetId, false);
-      setLivePhotoTranscoding(false);
-      if (backendMedia) {
-        void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
-        setLivePhotoSourceLabel(backendMedia.source);
-        setLivePhotoMotionSrc(await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef));
+      while (true) {
+        const backendMedia = await api.loadLivePhotoMotion(assetId, false);
+        if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
+          setLivePhotoTranscoding(false);
+          void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
+          setLivePhotoSourceLabel(backendMedia.source);
+          setLivePhotoMotionSrc(await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef));
+          return;
+        }
+        if (backendMedia.status === "pending") {
+          await new Promise((resolve) => window.setTimeout(resolve, 750));
+          continue;
+        }
+        setLivePhotoTranscoding(false);
+        void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
+        setLivePhotoMotionError(backendMedia.message ?? "Live photo playback unavailable");
         return;
       }
-      void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
-      setLivePhotoMotionError("Live photo playback unavailable");
     } catch (error) {
       setLivePhotoTranscoding(false);
       void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion failed after backend-original error: ${String(error)}`, "error");

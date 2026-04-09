@@ -113,28 +113,14 @@ pub fn generate_viewer_image_file(
 }
 
 pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(PathBuf, bool)>, AppError> {
-    if !is_video_path(path) {
+    let Some(output_path) = viewer_video_cache_path(path, cache_dir)? else {
         return Ok(None);
-    }
+    };
 
     let ffmpeg = match find_command_binary("ffmpeg") {
         Some(path) => path,
         None => return Ok(None),
     };
-
-    let metadata = fs::metadata(path)?;
-    let modified = metadata
-        .modified()
-        .ok()
-        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_secs())
-        .unwrap_or(0);
-    let cache_key = format!("{}:{}:{}", path.display(), metadata.len(), modified);
-    fs::create_dir_all(cache_dir)?;
-    let output_path = cache_dir.join(format!(
-        "my-picasa-viewer-{}.mp4",
-        blake3::hash(cache_key.as_bytes()).to_hex()
-    ));
 
     if output_path.is_file() {
         return Ok(Some((output_path, true)));
@@ -180,6 +166,26 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(Pa
 
     fs::rename(&temp_output, &output_path)?;
     Ok(Some((output_path, false)))
+}
+
+pub fn viewer_video_cache_path(path: &Path, cache_dir: &Path) -> Result<Option<PathBuf>, AppError> {
+    if !is_video_path(path) {
+        return Ok(None);
+    }
+
+    let metadata = fs::metadata(path)?;
+    let modified = metadata
+        .modified()
+        .ok()
+        .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
+        .map(|value| value.as_secs())
+        .unwrap_or(0);
+    let cache_key = format!("{}:{}:{}", path.display(), metadata.len(), modified);
+    fs::create_dir_all(cache_dir)?;
+    Ok(Some(cache_dir.join(format!(
+        "my-picasa-viewer-{}.mp4",
+        blake3::hash(cache_key.as_bytes()).to_hex()
+    ))))
 }
 
 pub fn viewer_render_cache_stats(cache_dir: &Path) -> Result<(u32, u64), AppError> {

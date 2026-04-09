@@ -212,6 +212,7 @@ fn clear_deleted_asset_caches(state: &AppState) -> Result<(), AppError> {
     state.failed_thumbnails.lock().clear();
     state.thumbnail_cache.lock().clear();
     state.preview_cache.lock().clear();
+    state.viewer_video_jobs.lock().clear();
     clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache"))?;
     Ok(())
 }

@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, mpsc::Sender};
@@ -16,6 +16,14 @@ pub struct ThumbnailJob {
 }
 
 #[derive(Clone)]
+pub enum ViewerTranscodeState {
+    Pending,
+    Ready { path: PathBuf },
+    Unavailable,
+    Failed { message: String },
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
     pub app_data_dir: Arc<PathBuf>,
@@ -26,4 +34,5 @@ pub struct AppState {
     pub failed_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub thumbnail_generation: Arc<AtomicU64>,
     pub thumbnail_job_sender: Sender<ThumbnailJob>,
+    pub viewer_video_jobs: Arc<Mutex<HashMap<String, ViewerTranscodeState>>>,
 }

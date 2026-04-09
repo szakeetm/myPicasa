@@ -108,3 +108,10 @@ export type ViewerMediaSource = {
   src: string;
   source: string;
 };
+
+export type ViewerMediaStatus = {
+  status: "ready" | "pending" | "unavailable";
+  src?: string | null;
+  source?: string | null;
+  message?: string | null;
+};

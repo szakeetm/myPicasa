@@ -10,7 +10,7 @@ mod models;
 mod search;
 mod util;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::{fs, path::PathBuf, sync::Arc, thread};
@@ -189,6 +189,7 @@ fn main() {
                 failed_thumbnails,
                 thumbnail_generation,
                 thumbnail_job_sender,
+                viewer_video_jobs: Arc::new(Mutex::new(HashMap::new())),
             };
 
             state

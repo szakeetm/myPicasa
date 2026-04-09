@@ -151,7 +151,9 @@ pub struct ThumbnailBatchItem {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ViewerMediaSource {
-    pub src: String,
-    pub source: String,
+pub struct ViewerMediaStatus {
+    pub status: String,
+    pub src: Option<String>,
+    pub source: Option<String>,
+    pub message: Option<String>,
 }
