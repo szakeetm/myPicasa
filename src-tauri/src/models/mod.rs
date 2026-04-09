@@ -171,10 +171,21 @@ pub struct BatchViewerTranscodeStatus {
     pub completed: u32,
     pub failed: u32,
     pub skipped: u32,
+    pub stop_requested: bool,
     pub current_asset_id: Option<i64>,
     pub current_filename: Option<String>,
+    pub current_codec: Option<String>,
     pub current_source_bytes: Option<u64>,
     pub current_output_bytes: Option<u64>,
     pub elapsed_ms: Option<u64>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewerPlaybackSupport {
+    pub mp4_h264: bool,
+    pub mp4_hevc: bool,
+    pub mov_h264: bool,
+    pub mov_hevc: bool,
+    pub webm: bool,
 }

@@ -123,10 +123,20 @@ export type BatchViewerTranscodeStatus = {
   completed: number;
   failed: number;
   skipped: number;
+  stop_requested: boolean;
   current_asset_id?: number | null;
   current_filename?: string | null;
+  current_codec?: string | null;
   current_source_bytes?: number | null;
   current_output_bytes?: number | null;
   elapsed_ms?: number | null;
   message?: string | null;
+};
+
+export type ViewerPlaybackSupport = {
+  mp4_h264: boolean;
+  mp4_hevc: boolean;
+  mov_h264: boolean;
+  mov_hevc: boolean;
+  webm: boolean;
 };

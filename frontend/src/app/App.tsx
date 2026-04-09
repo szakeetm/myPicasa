@@ -11,7 +11,12 @@ import { logClient } from "../lib/logger";
 import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
-import type { AssetListRequest, BatchViewerTranscodeStatus, LogEntry } from "../lib/types";
+import type {
+  AssetListRequest,
+  BatchViewerTranscodeStatus,
+  LogEntry,
+  ViewerPlaybackSupport,
+} from "../lib/types";
 
 const ASSET_PAGE_SIZE = 200;
 
@@ -415,7 +420,12 @@ export function App() {
   }
 
   async function handleStartBatchTranscode() {
-    const status = await api.startBatchViewerTranscode();
+    const status = await api.startBatchViewerTranscode(getViewerPlaybackSupport());
+    setBatchTranscodeStatus(status);
+  }
+
+  async function handleStopBatchTranscode() {
+    const status = await api.stopBatchViewerTranscode();
     setBatchTranscodeStatus(status);
   }
 
@@ -535,6 +545,13 @@ export function App() {
                 </button>
                 <button
                   className="button-secondary"
+                  onClick={() => void handleStopBatchTranscode()}
+                  disabled={!batchTranscodeStatus?.status || batchTranscodeStatus.status !== "running"}
+                >
+                  Stop After Current
+                </button>
+                <button
+                  className="button-secondary"
                   onClick={() => void api.getBatchViewerTranscodeStatus().then(setBatchTranscodeStatus)}
                 >
                   Refresh
@@ -550,6 +567,11 @@ export function App() {
                 <div style={{ marginTop: 16 }}>
                   <strong>Current file</strong>
                   <div className="muted">{batchTranscodeStatus.current_filename}</div>
+                </div>
+              ) : null}
+              {batchTranscodeStatus?.current_codec ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Source codec {batchTranscodeStatus.current_codec}
                 </div>
               ) : null}
               {typeof batchTranscodeStatus?.current_source_bytes === "number" ? (
@@ -622,10 +644,13 @@ function formatBatchStatusLine(status?: BatchViewerTranscodeStatus) {
     `${status.completed} succeeded`,
   ];
   if (status.skipped > 0) {
-    parts.push(`${status.skipped} cached`);
+    parts.push(`${status.skipped} skipped`);
   }
   if (status.failed > 0) {
     parts.push(`${status.failed} failed`);
+  }
+  if (status.stop_requested) {
+    parts.push("stop requested");
   }
   if (typeof status.elapsed_ms === "number") {
     parts.push(`${(status.elapsed_ms / 1000).toFixed(1)}s elapsed`);
@@ -634,4 +659,25 @@ function formatBatchStatusLine(status?: BatchViewerTranscodeStatus) {
     parts.push(status.message);
   }
   return parts.join(" • ");
+}
+
+function getViewerPlaybackSupport(): ViewerPlaybackSupport {
+  if (typeof document === "undefined") {
+    return {
+      mp4_h264: false,
+      mp4_hevc: false,
+      mov_h264: false,
+      mov_hevc: false,
+      webm: false,
+    };
+  }
+  const probe = document.createElement("video");
+  const probably = (value: string) => probe.canPlayType(value) === "probably";
+  return {
+    mp4_h264: probably('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+    mp4_hevc: probably('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
+    mov_h264: probably('video/quicktime; codecs="avc1.42E01E, mp4a.40.2"'),
+    mov_hevc: probably('video/quicktime; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
+    webm: probably("video/webm"),
+  };
 }

@@ -22,7 +22,7 @@ use crate::{
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, BatchViewerTranscodeStatus,
         CacheStats, DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest,
-        ThumbnailBatchItem, ViewerMediaStatus,
+        ThumbnailBatchItem, ViewerMediaStatus, ViewerPlaybackSupport,
     },
     search::query_service,
 };
@@ -440,6 +440,25 @@ fn collect_all_video_assets(state: &AppState) -> Result<Vec<(i64, String, u64)>,
     Ok(items)
 }
 
+fn source_is_natively_playable(
+    source_path: &str,
+    codec: Option<&str>,
+    support: &ViewerPlaybackSupport,
+) -> bool {
+    let extension = PathBuf::from(source_path)
+        .extension()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    match (extension.as_deref(), codec) {
+        (Some("mp4" | "m4v"), Some("h264")) => support.mp4_h264,
+        (Some("mp4" | "m4v"), Some("hevc")) => support.mp4_hevc,
+        (Some("mov"), Some("h264")) => support.mov_h264,
+        (Some("mov"), Some("hevc")) => support.mov_hevc,
+        (Some("webm"), Some(_)) => support.webm,
+        _ => false,
+    }
+}
+
 fn batch_viewer_transcode_status_snapshot(
     state: &BatchViewerTranscodeState,
 ) -> BatchViewerTranscodeStatus {
@@ -455,8 +474,10 @@ fn batch_viewer_transcode_status_snapshot(
         completed: state.completed,
         failed: state.failed,
         skipped: state.skipped,
+        stop_requested: state.stop_requested,
         current_asset_id: state.current_asset_id,
         current_filename: state.current_filename.clone(),
+        current_codec: state.current_codec.clone(),
         current_source_bytes: state.current_source_bytes,
         current_output_bytes: state.current_output_bytes,
         elapsed_ms: state
@@ -478,6 +499,7 @@ pub fn get_batch_viewer_transcode_status(
 #[tauri::command]
 pub fn start_batch_viewer_transcode(
     state: State<AppState>,
+    support: ViewerPlaybackSupport,
 ) -> CommandResult<BatchViewerTranscodeStatus> {
     {
         let status = state.batch_viewer_transcode.lock();
@@ -494,8 +516,10 @@ pub fn start_batch_viewer_transcode(
             completed: 0,
             failed: 0,
             skipped: 0,
+            stop_requested: false,
             current_asset_id: None,
             current_filename: None,
+            current_codec: None,
             current_source_bytes: None,
             current_output_bytes: None,
             started_at: Some(Instant::now()),
@@ -531,11 +555,33 @@ pub fn start_batch_viewer_transcode(
 
         let viewer_cache_dir = worker_state.app_data_dir.join("viewer-cache");
         for (index, (asset_id, source_path, source_bytes)) in videos.into_iter().enumerate() {
+            {
+                let status = worker_state.batch_viewer_transcode.lock();
+                if status.stop_requested {
+                    drop(status);
+                    let mut status = worker_state.batch_viewer_transcode.lock();
+                    status.running = false;
+                    status.current_asset_id = None;
+                    status.current_filename = None;
+                    status.current_codec = None;
+                    status.current_source_bytes = None;
+                    status.current_output_bytes = None;
+                    status.message = Some(format!(
+                        "Stopped after {} processed videos",
+                        status.completed + status.failed
+                    ));
+                    return;
+                }
+            }
+
             let filename = PathBuf::from(&source_path)
                 .file_name()
                 .and_then(|value| value.to_str())
                 .unwrap_or(&source_path)
                 .to_string();
+            let codec = probe_primary_video_codec(&PathBuf::from(&source_path))
+                .ok()
+                .flatten();
             let total = {
                 let status = worker_state.batch_viewer_transcode.lock();
                 status.total
@@ -544,9 +590,28 @@ pub fn start_batch_viewer_transcode(
                 let mut status = worker_state.batch_viewer_transcode.lock();
                 status.current_asset_id = Some(asset_id);
                 status.current_filename = Some(filename.clone());
+                status.current_codec = codec.clone();
                 status.current_source_bytes = Some(source_bytes);
                 status.current_output_bytes = None;
                 status.message = Some(format!("Transcoding {} of {}", index + 1, total));
+            }
+
+            if source_is_natively_playable(&source_path, codec.as_deref(), &support) {
+                let mut status = worker_state.batch_viewer_transcode.lock();
+                status.completed += 1;
+                status.skipped += 1;
+                status.current_output_bytes = None;
+                    let _ = worker_state.db.insert_log(
+                        "info",
+                        "batch_viewer_transcode",
+                        &format!(
+                            "asset_id={asset_id} filename=\"{filename}\" status=skipped reason=native_format source_codec={} source_size={}",
+                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
+                            human_size(source_bytes)
+                        ),
+                        Some(asset_id),
+                    );
+                continue;
             }
 
             let duration_ms = probe_media_duration_ms(&PathBuf::from(&source_path))
@@ -572,9 +637,11 @@ pub fn start_batch_viewer_transcode(
                         "info",
                         "batch_viewer_transcode",
                         &format!(
-                            "asset_id={asset_id} filename=\"{filename}\" source={} encoder={} output_bytes={output_bytes}",
+                            "asset_id={asset_id} filename=\"{filename}\" status=success source={} source_codec={} encoder={} output_size={}",
                             if cache_hit { "cache_hit" } else { "transcoded" },
+                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
                             encoder,
+                            human_size(output_bytes),
                         ),
                         Some(asset_id),
                     );
@@ -585,7 +652,10 @@ pub fn start_batch_viewer_transcode(
                     let _ = worker_state.db.insert_log(
                         "warning",
                         "batch_viewer_transcode",
-                        &format!("asset_id={asset_id} filename=\"{filename}\" transcode unavailable"),
+                        &format!(
+                            "asset_id={asset_id} filename=\"{filename}\" status=unavailable source_codec={}",
+                            codec.clone().unwrap_or_else(|| "unknown".to_string())
+                        ),
                         Some(asset_id),
                     );
                 }
@@ -595,7 +665,10 @@ pub fn start_batch_viewer_transcode(
                     let _ = worker_state.db.insert_log(
                         "error",
                         "batch_viewer_transcode",
-                        &format!("asset_id={asset_id} filename=\"{filename}\" error={error}"),
+                        &format!(
+                            "asset_id={asset_id} filename=\"{filename}\" status=failed source_codec={} error={error}",
+                            codec.clone().unwrap_or_else(|| "unknown".to_string())
+                        ),
                         Some(asset_id),
                     );
                 }
@@ -606,6 +679,7 @@ pub fn start_batch_viewer_transcode(
         status.running = false;
         status.current_asset_id = None;
         status.current_filename = None;
+        status.current_codec = None;
         status.current_source_bytes = None;
         status.current_output_bytes = None;
         status.message = Some(format!(
@@ -618,6 +692,18 @@ pub fn start_batch_viewer_transcode(
     Ok(batch_viewer_transcode_status_snapshot(
         &state.batch_viewer_transcode.lock(),
     ))
+}
+
+#[tauri::command]
+pub fn stop_batch_viewer_transcode(
+    state: State<AppState>,
+) -> CommandResult<BatchViewerTranscodeStatus> {
+    let mut status = state.batch_viewer_transcode.lock();
+    status.stop_requested = true;
+    if status.running {
+        status.message = Some("Will stop after current file".to_string());
+    }
+    Ok(batch_viewer_transcode_status_snapshot(&status))
 }
 
 #[tauri::command]
@@ -1234,6 +1320,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_cache_stats,
         get_batch_viewer_transcode_status,
         start_batch_viewer_transcode,
+        stop_batch_viewer_transcode,
         clear_thumbnail_cache,
         clear_viewer_render_cache_command,
         get_recent_logs,

@@ -13,6 +13,7 @@ import type {
   RefreshRequest,
   ThumbnailBatchItem,
   ViewerMediaStatus,
+  ViewerPlaybackSupport,
 } from "./types";
 
 export const api = {
@@ -45,8 +46,10 @@ export const api = {
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),
   getBatchViewerTranscodeStatus: () =>
     invoke<BatchViewerTranscodeStatus>("get_batch_viewer_transcode_status"),
-  startBatchViewerTranscode: () =>
-    invoke<BatchViewerTranscodeStatus>("start_batch_viewer_transcode"),
+  startBatchViewerTranscode: (support: ViewerPlaybackSupport) =>
+    invoke<BatchViewerTranscodeStatus>("start_batch_viewer_transcode", { support }),
+  stopBatchViewerTranscode: () =>
+    invoke<BatchViewerTranscodeStatus>("stop_batch_viewer_transcode"),
   clearThumbnailCache: () => invoke<void>("clear_thumbnail_cache"),
   clearViewerRenderCache: () => invoke<void>("clear_viewer_render_cache_command"),
   getRecentLogs: (limit = 150) =>
