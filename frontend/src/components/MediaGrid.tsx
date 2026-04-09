@@ -784,6 +784,9 @@ export function MediaGrid({
             className={[
               "tile",
               thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
+              asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
+                ? "video-ready-native"
+                : "",
               asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
                 ? "video-ready-transcoded"
                 : "",
@@ -803,6 +806,9 @@ export function MediaGrid({
             <div
               className={[
                 "thumb",
+                asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
+                  ? "video-ready-native"
+                  : "",
                 asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
                   ? "video-ready-transcoded"
                   : "",

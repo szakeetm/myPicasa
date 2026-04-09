@@ -894,6 +894,9 @@ pub fn start_batch_viewer_transcode(
             }
 
             if source_is_natively_playable(&source_path, codec.as_deref(), &support) {
+                let _ = worker_state
+                    .db
+                    .set_viewer_video_transcode_status(asset_id, "native", None);
                 let mut status = worker_state.batch_viewer_transcode.lock();
                 status.completed += 1;
                 status.skipped += 1;
@@ -1630,19 +1633,19 @@ pub fn get_viewer_playback_hints(
     asset_ids: Vec<i64>,
     state: State<AppState>,
 ) -> CommandResult<Vec<ViewerPlaybackHint>> {
-    let ready_asset_ids = state
+    let statuses = state
         .db
-        .ready_viewer_video_transcode_asset_ids(&asset_ids)
+        .get_viewer_video_playback_statuses(&asset_ids)
         .map_err(map_error)?;
 
     Ok(asset_ids
         .into_iter()
         .map(|asset_id| ViewerPlaybackHint {
             asset_id,
-            status: if ready_asset_ids.contains(&asset_id) {
-                "transcoded".to_string()
-            } else {
-                "none".to_string()
+            status: match statuses.get(&asset_id).map(String::as_str) {
+                Some("ready") => "transcoded".to_string(),
+                Some("native") => "native".to_string(),
+                _ => "none".to_string(),
             },
         })
         .collect())
@@ -1737,6 +1740,10 @@ pub fn load_viewer_video(
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
         let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
+        state
+            .db
+            .set_viewer_video_transcode_status(asset_id, "native", None)
+            .map_err(map_error)?;
         state
             .db
             .insert_log(

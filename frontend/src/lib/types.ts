@@ -71,7 +71,7 @@ export type AssetDetail = {
 
 export type ViewerPlaybackHint = {
   asset_id: number;
-  status: "none" | "transcoded";
+  status: "none" | "native" | "transcoded";
 };
 
 export type DiagnosticEntry = {

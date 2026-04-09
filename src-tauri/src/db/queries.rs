@@ -1,4 +1,4 @@
-use std::{collections::HashSet, path::Path};
+use std::{collections::HashMap, path::Path};
 
 use rusqlite::{OptionalExtension, params};
 
@@ -74,10 +74,10 @@ pub trait DatabaseQueries {
         status: &str,
         cache_path: Option<&str>,
     ) -> Result<(), AppError>;
-    fn ready_viewer_video_transcode_asset_ids(
+    fn get_viewer_video_playback_statuses(
         &self,
         asset_ids: &[i64],
-    ) -> Result<HashSet<i64>, AppError>;
+    ) -> Result<HashMap<i64, String>, AppError>;
     fn clear_viewer_video_transcode_statuses(&self) -> Result<(), AppError>;
 }
 
@@ -867,25 +867,25 @@ impl DatabaseQueries for super::Database {
         })
     }
 
-    fn ready_viewer_video_transcode_asset_ids(
+    fn get_viewer_video_playback_statuses(
         &self,
         asset_ids: &[i64],
-    ) -> Result<HashSet<i64>, AppError> {
+    ) -> Result<HashMap<i64, String>, AppError> {
         self.with_connection(|conn| {
             if asset_ids.is_empty() {
-                return Ok(HashSet::new());
+                return Ok(HashMap::new());
             }
 
             let placeholders = vec!["?"; asset_ids.len()].join(", ");
             let sql = format!(
-                "SELECT asset_id
+                "SELECT asset_id, status
                  FROM viewer_video_transcodes
-                 WHERE status = 'ready' AND asset_id IN ({placeholders})"
+                 WHERE status IN ('ready', 'native') AND asset_id IN ({placeholders})"
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt
                 .query_map(rusqlite::params_from_iter(asset_ids.iter()), |row| {
-                    row.get::<_, i64>(0)
+                    Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
 
