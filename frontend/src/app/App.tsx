@@ -20,12 +20,16 @@ import type {
 } from "../lib/types";
 
 const ASSET_PAGE_SIZE = 200;
+const MAX_GRID_ASSETS = 1000;
 
 export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
   const [timelineLabel, setTimelineLabel] = useState<string>();
-  const [nextAssetCursor, setNextAssetCursor] = useState<number>();
+  const [assetWindowStartCursor, setAssetWindowStartCursor] = useState(0);
+  const [hasPreviousAssetPage, setHasPreviousAssetPage] = useState(false);
+  const [hasNextAssetPage, setHasNextAssetPage] = useState(false);
+  const [loadingPreviousAssets, setLoadingPreviousAssets] = useState(false);
   const [debugPanelCollapsed, setDebugPanelCollapsed] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
@@ -92,47 +96,92 @@ export function App() {
     mediaKind?: string;
   }) {
     const generation = ++assetQueryGenerationRef.current;
+    setLoadingPreviousAssets(false);
     setLoadingMoreAssets(false);
     const { response, viewMode } = await fetchAssetsPage(options ?? {}, undefined);
     if (generation !== assetQueryGenerationRef.current) {
       return;
     }
     state.setAssets(response.items);
-    setNextAssetCursor(response.next_cursor ?? undefined);
+    setAssetWindowStartCursor(0);
+    setHasPreviousAssetPage(false);
+    setHasNextAssetPage(response.next_cursor != null);
     setThumbnailResetKey((value) => value + 1);
     setViewerPreviewReadyAssetIds([]);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
     await logClient(
       "ui.refresh",
-      `loaded ${response.items.length} assets in ${viewMode} mode next_cursor=${response.next_cursor ?? "end"}`,
+      `loaded ${response.items.length} assets in ${viewMode} mode start_cursor=0 next_cursor=${response.next_cursor ?? "end"}`,
     );
   }
 
   async function loadMoreAssets() {
-    if (loadingMoreAssets || nextAssetCursor == null) {
+    if (loadingMoreAssets || !hasNextAssetPage) {
       return;
     }
 
     const generation = assetQueryGenerationRef.current;
     setLoadingMoreAssets(true);
     try {
-      const { response, viewMode } = await fetchAssetsPage({}, nextAssetCursor);
+      const currentAssets = useAppState.getState().assets;
+      const nextCursor = assetWindowStartCursor + currentAssets.length;
+      const { response, viewMode } = await fetchAssetsPage({}, nextCursor);
       if (generation !== assetQueryGenerationRef.current) {
         return;
       }
 
-      const currentAssets = useAppState.getState().assets;
       const seen = new Set(currentAssets.map((asset) => asset.id));
       const appendedItems = response.items.filter((asset) => !seen.has(asset.id));
-      state.setAssets([...currentAssets, ...appendedItems]);
-      setNextAssetCursor(response.next_cursor ?? undefined);
+      const mergedAssets = [...currentAssets, ...appendedItems];
+      const overflow = Math.max(0, mergedAssets.length - MAX_GRID_ASSETS);
+      const nextAssets = overflow > 0 ? mergedAssets.slice(overflow) : mergedAssets;
+      const nextStartCursor = assetWindowStartCursor + overflow;
+      state.setAssets(nextAssets);
+      setAssetWindowStartCursor(nextStartCursor);
+      setHasPreviousAssetPage(nextStartCursor > 0);
+      setHasNextAssetPage(response.next_cursor != null);
       await logClient(
         "ui.refresh",
-        `appended ${appendedItems.length} assets in ${viewMode} mode total=${currentAssets.length + appendedItems.length} next_cursor=${response.next_cursor ?? "end"}`,
+        `appended ${appendedItems.length} assets in ${viewMode} mode total=${nextAssets.length} start_cursor=${nextStartCursor} next_cursor=${response.next_cursor ?? "end"}`,
       );
     } finally {
       if (generation === assetQueryGenerationRef.current) {
         setLoadingMoreAssets(false);
+      }
+    }
+  }
+
+  async function loadPreviousAssets() {
+    if (loadingPreviousAssets || assetWindowStartCursor <= 0) {
+      return;
+    }
+
+    const generation = assetQueryGenerationRef.current;
+    setLoadingPreviousAssets(true);
+    try {
+      const currentAssets = useAppState.getState().assets;
+      const previousCursor = Math.max(0, assetWindowStartCursor - ASSET_PAGE_SIZE);
+      const { response, viewMode } = await fetchAssetsPage({}, previousCursor);
+      if (generation !== assetQueryGenerationRef.current) {
+        return;
+      }
+
+      const seen = new Set(currentAssets.map((asset) => asset.id));
+      const prependedItems = response.items.filter((asset) => !seen.has(asset.id));
+      const mergedAssets = [...prependedItems, ...currentAssets];
+      const overflow = Math.max(0, mergedAssets.length - MAX_GRID_ASSETS);
+      const nextAssets = overflow > 0 ? mergedAssets.slice(0, MAX_GRID_ASSETS) : mergedAssets;
+      state.setAssets(nextAssets);
+      setAssetWindowStartCursor(previousCursor);
+      setHasPreviousAssetPage(previousCursor > 0);
+      setHasNextAssetPage(hasNextAssetPage || overflow > 0);
+      await logClient(
+        "ui.refresh",
+        `prepended ${prependedItems.length} assets in ${viewMode} mode total=${nextAssets.length} start_cursor=${previousCursor} trimmed_bottom=${overflow}`,
+      );
+    } finally {
+      if (generation === assetQueryGenerationRef.current) {
+        setLoadingPreviousAssets(false);
       }
     }
   }
@@ -405,7 +454,10 @@ export function App() {
     state.setImportStatus(undefined);
     state.setSelectedAlbumId(undefined);
     state.setViewMode("timeline");
-    setNextAssetCursor(undefined);
+    setAssetWindowStartCursor(0);
+    setHasPreviousAssetPage(false);
+    setHasNextAssetPage(false);
+    setLoadingPreviousAssets(false);
     setLoadingMoreAssets(false);
     setViewerPreviewReadyAssetIds([]);
 
@@ -574,8 +626,11 @@ export function App() {
             onSelect={handleSelectAsset}
             viewerPreviewReadyAssetIds={viewerPreviewReadyAssetIds}
             thumbnailResetKey={thumbnailResetKey}
-            hasMore={nextAssetCursor != null}
+            hasMoreBefore={hasPreviousAssetPage}
+            hasMoreAfter={hasNextAssetPage}
+            isLoadingMoreBefore={loadingPreviousAssets}
             isLoadingMore={loadingMoreAssets}
+            onLoadMoreBefore={loadPreviousAssets}
             onLoadMore={loadMoreAssets}
             onLeadingDateChange={(value) => {
               if (state.viewMode === "timeline") {

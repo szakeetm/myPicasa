@@ -1,4 +1,4 @@
-import { startTransition, useEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
 import { api } from "../lib/tauri";
@@ -13,8 +13,11 @@ type MediaGridProps = {
   viewerPreviewReadyAssetIds?: number[];
   onLeadingDateChange?: (value?: string) => void;
   thumbnailResetKey?: number;
-  hasMore?: boolean;
+  hasMoreBefore?: boolean;
+  hasMoreAfter?: boolean;
+  isLoadingMoreBefore?: boolean;
   isLoadingMore?: boolean;
+  onLoadMoreBefore?: () => void;
   onLoadMore?: () => void;
   thumbnailPreload?: {
     active: boolean;
@@ -47,15 +50,20 @@ export function MediaGrid({
   viewerPreviewReadyAssetIds = [],
   onLeadingDateChange,
   thumbnailResetKey,
-  hasMore = false,
+  hasMoreBefore = false,
+  hasMoreAfter = false,
+  isLoadingMoreBefore = false,
   isLoadingMore = false,
+  onLoadMoreBefore,
   onLoadMore,
   thumbnailPreload,
   onThumbnailPreloadProgress,
 }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
+  const loadPreviousRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
+  const prependAnchorRef = useRef<{ assetId: number; top: number } | null>(null);
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [videoPlaybackHints, setVideoPlaybackHints] = useState<Record<number, ViewerPlaybackHint["status"]>>({});
@@ -472,9 +480,83 @@ export function MediaGrid({
   }, [assets, columns]);
 
   useEffect(() => {
+    if (!isLoadingMoreBefore) {
+      return;
+    }
+
+    const root = parentRef.current;
+    if (!root) {
+      return;
+    }
+
+    const anchorAsset = assets.find((asset) => effectiveVisibleIdSet.has(asset.id)) ?? assets[0];
+    if (!anchorAsset) {
+      prependAnchorRef.current = null;
+      return;
+    }
+
+    const element = tileRefs.current.get(anchorAsset.id);
+    if (!element) {
+      prependAnchorRef.current = null;
+      return;
+    }
+
+    prependAnchorRef.current = {
+      assetId: anchorAsset.id,
+      top: element.getBoundingClientRect().top - root.getBoundingClientRect().top,
+    };
+  }, [assets, effectiveVisibleIdSet, isLoadingMoreBefore]);
+
+  useLayoutEffect(() => {
+    if (isLoadingMoreBefore) {
+      return;
+    }
+
+    const anchor = prependAnchorRef.current;
+    const root = parentRef.current;
+    if (!anchor || !root) {
+      return;
+    }
+
+    const element = tileRefs.current.get(anchor.assetId);
+    if (!element) {
+      prependAnchorRef.current = null;
+      return;
+    }
+
+    const nextTop = element.getBoundingClientRect().top - root.getBoundingClientRect().top;
+    root.scrollTop += nextTop - anchor.top;
+    prependAnchorRef.current = null;
+  }, [assets, isLoadingMoreBefore]);
+
+  useEffect(() => {
+    const root = parentRef.current;
+    const sentinel = loadPreviousRef.current;
+    if (!root || !sentinel || !hasMoreBefore) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting) && !isLoadingMoreBefore) {
+          onLoadMoreBefore?.();
+        }
+      },
+      {
+        root,
+        rootMargin: "400px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMoreBefore, isLoadingMoreBefore, onLoadMoreBefore, assets.length]);
+
+  useEffect(() => {
     const root = parentRef.current;
     const sentinel = loadMoreRef.current;
-    if (!root || !sentinel || !hasMore) {
+    if (!root || !sentinel || !hasMoreAfter) {
       return;
     }
 
@@ -493,7 +575,7 @@ export function MediaGrid({
 
     observer.observe(sentinel);
     return () => observer.disconnect();
-  }, [hasMore, isLoadingMore, onLoadMore, assets.length]);
+  }, [hasMoreAfter, isLoadingMore, onLoadMore, assets.length]);
 
   useEffect(() => {
     let disposed = false;
@@ -685,6 +767,11 @@ export function MediaGrid({
 
   return (
     <div className="grid-scroller" ref={parentRef}>
+      {hasMoreBefore || isLoadingMoreBefore ? (
+        <div className="grid-load-more grid-load-more-top" ref={loadPreviousRef} aria-live="polite">
+          {isLoadingMoreBefore ? "Loading earlier media..." : "Scroll up to load earlier media"}
+        </div>
+      ) : null}
       <div
         className="media-grid"
         style={{
@@ -773,7 +860,7 @@ export function MediaGrid({
           </button>
         ))}
       </div>
-      {hasMore || isLoadingMore ? (
+      {hasMoreAfter || isLoadingMore ? (
         <div className="grid-load-more" ref={loadMoreRef} aria-live="polite">
           {isLoadingMore ? "Loading more media..." : "Scroll to load more"}
         </div>
