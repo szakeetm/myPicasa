@@ -880,7 +880,7 @@ impl DatabaseQueries for super::Database {
             let sql = format!(
                 "SELECT asset_id, status
                  FROM viewer_video_transcodes
-                 WHERE status IN ('ready', 'native') AND asset_id IN ({placeholders})"
+                 WHERE status IN ('ready', 'native', 'requires_transcode') AND asset_id IN ({placeholders})"
             );
             let mut stmt = conn.prepare(&sql)?;
             let rows = stmt

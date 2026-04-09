@@ -49,8 +49,8 @@ export const api = {
     invoke<BatchThumbnailGenerationStatus>("start_batch_thumbnail_generation"),
   stopBatchThumbnailGeneration: () =>
     invoke<BatchThumbnailGenerationStatus>("stop_batch_thumbnail_generation"),
-  getViewerPlaybackHints: (assetIds: number[]) =>
-    invoke<ViewerPlaybackHint[]>("get_viewer_playback_hints", { assetIds }),
+  getViewerPlaybackHints: (assetIds: number[], support: ViewerPlaybackSupport) =>
+    invoke<ViewerPlaybackHint[]>("get_viewer_playback_hints", { assetIds, support }),
   getDiagnostics: () =>
     invoke<DiagnosticEntry[]>("get_ingress_diagnostics"),
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),

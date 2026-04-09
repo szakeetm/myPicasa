@@ -4,7 +4,7 @@ import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
-import type { AssetListItem, ViewerPlaybackHint } from "../lib/types";
+import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from "../lib/types";
 
 const VIEWER_PREVIEW_SIZE = 2048;
 const GRID_TILE_WIDTH = 210;
@@ -33,6 +33,7 @@ type MediaGridProps = {
     previewsCompleted: number;
     previewsTotal: number;
   }) => void;
+  viewerPlaybackSupport: ViewerPlaybackSupport;
 };
 
 type ThumbnailState = {
@@ -60,6 +61,7 @@ export function MediaGrid({
   onLoadMore,
   thumbnailPreload,
   onThumbnailPreloadProgress,
+  viewerPlaybackSupport,
 }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
   const loadPreviousRef = useRef<HTMLDivElement | null>(null);
@@ -165,7 +167,7 @@ export function MediaGrid({
       }
 
       try {
-        const hints = await api.getViewerPlaybackHints(videoIds);
+        const hints = await api.getViewerPlaybackHints(videoIds, viewerPlaybackSupport);
         if (cancelled) {
           return;
         }
@@ -191,7 +193,7 @@ export function MediaGrid({
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [assets, effectiveVisibleIdSet]);
+  }, [assets, effectiveVisibleIdSet, viewerPlaybackSupport]);
 
   useEffect(() => {
     const assetIds = new Set(assets.map((asset) => asset.id));

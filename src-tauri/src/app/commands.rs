@@ -715,6 +715,48 @@ fn source_is_natively_playable(
     }
 }
 
+fn populate_missing_viewer_playback_statuses(
+    asset_ids: &[i64],
+    support: &ViewerPlaybackSupport,
+    state: &AppState,
+    known_statuses: &mut HashMap<i64, String>,
+) {
+    for asset_id in asset_ids {
+        if known_statuses.contains_key(asset_id) {
+            continue;
+        }
+
+        let Ok(detail) = query_service::get_asset_detail(&state.db, *asset_id) else {
+            continue;
+        };
+        if detail.media_kind != "video" {
+            continue;
+        }
+        let Some(primary_path) = detail.primary_path else {
+            continue;
+        };
+
+        let codec = match probe_primary_video_codec(&PathBuf::from(&primary_path)) {
+            Ok(codec) => codec,
+            Err(_) => continue,
+        };
+
+        let status = if source_is_natively_playable(&primary_path, codec.as_deref(), support) {
+            "native"
+        } else {
+            "requires_transcode"
+        };
+
+        if state
+            .db
+            .set_viewer_video_transcode_status(*asset_id, status, None)
+            .is_ok()
+        {
+            known_statuses.insert(*asset_id, status.to_string());
+        }
+    }
+}
+
 fn batch_viewer_transcode_status_snapshot(
     state: &BatchViewerTranscodeState,
 ) -> BatchViewerTranscodeStatus {
@@ -1631,12 +1673,14 @@ pub fn stop_batch_thumbnail_generation(
 #[tauri::command]
 pub fn get_viewer_playback_hints(
     asset_ids: Vec<i64>,
+    support: ViewerPlaybackSupport,
     state: State<AppState>,
 ) -> CommandResult<Vec<ViewerPlaybackHint>> {
-    let statuses = state
+    let mut statuses = state
         .db
         .get_viewer_video_playback_statuses(&asset_ids)
         .map_err(map_error)?;
+    populate_missing_viewer_playback_statuses(&asset_ids, &support, state.inner(), &mut statuses);
 
     Ok(asset_ids
         .into_iter()

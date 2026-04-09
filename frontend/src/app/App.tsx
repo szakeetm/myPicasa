@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
@@ -25,6 +25,7 @@ const MAX_GRID_ASSETS = 1000;
 export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
+  const viewerPlaybackSupport = useMemo(() => getViewerPlaybackSupport(), []);
   const [timelineLabel, setTimelineLabel] = useState<string>();
   const [assetWindowStartCursor, setAssetWindowStartCursor] = useState(0);
   const [hasPreviousAssetPage, setHasPreviousAssetPage] = useState(false);
@@ -624,6 +625,7 @@ export function App() {
           <MediaGrid
             assets={state.assets}
             onSelect={handleSelectAsset}
+            viewerPlaybackSupport={viewerPlaybackSupport}
             viewerPreviewReadyAssetIds={viewerPreviewReadyAssetIds}
             thumbnailResetKey={thumbnailResetKey}
             hasMoreBefore={hasPreviousAssetPage}
