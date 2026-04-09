@@ -434,6 +434,21 @@ export function App() {
     setBatchTranscodeStatus(status);
   }
 
+  async function handleClearBatchTranscodeLog() {
+    await api.clearBatchViewerTranscodeLogs();
+    setBatchTranscodeLogs([]);
+  }
+
+  async function handleCopyBatchTranscodeLog() {
+    const text = batchTranscodeLogs
+      .map(
+        (entry) =>
+          `${formatLogTimestamp(entry.created_at)} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}`,
+      )
+      .join("\n");
+    await navigator.clipboard.writeText(text);
+  }
+
   const selectedAssetIndex = state.selectedAsset
     ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id)
     : -1;
@@ -560,6 +575,12 @@ export function App() {
                   onClick={() => void api.getBatchViewerTranscodeStatus().then(setBatchTranscodeStatus)}
                 >
                   Refresh
+                </button>
+                <button className="button-secondary" onClick={() => void handleCopyBatchTranscodeLog()}>
+                  Copy Log
+                </button>
+                <button className="button-secondary" onClick={() => void handleClearBatchTranscodeLog()}>
+                  Clear Log
                 </button>
                 <button className="button-danger" onClick={() => setBatchTranscodeOpen(false)}>
                   Close

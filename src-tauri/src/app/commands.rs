@@ -480,9 +480,11 @@ fn batch_viewer_transcode_status_snapshot(
         current_codec: state.current_codec.clone(),
         current_source_bytes: state.current_source_bytes,
         current_output_bytes: state.current_output_bytes,
-        elapsed_ms: state
-            .started_at
-            .map(|started_at| started_at.elapsed().as_millis() as u64),
+        elapsed_ms: state.elapsed_ms.or_else(|| {
+            state
+                .started_at
+                .map(|started_at| started_at.elapsed().as_millis() as u64)
+        }),
         message: state.message.clone(),
     }
 }
@@ -523,6 +525,7 @@ pub fn start_batch_viewer_transcode(
             current_source_bytes: None,
             current_output_bytes: None,
             started_at: Some(Instant::now()),
+            elapsed_ms: None,
             message: Some("Discovering videos...".to_string()),
         };
     }
@@ -566,6 +569,9 @@ pub fn start_batch_viewer_transcode(
                     status.current_codec = None;
                     status.current_source_bytes = None;
                     status.current_output_bytes = None;
+                    status.elapsed_ms = status
+                        .started_at
+                        .map(|started_at| started_at.elapsed().as_millis() as u64);
                     status.message = Some(format!(
                         "Stopped after {} processed videos",
                         status.completed + status.failed
@@ -601,16 +607,16 @@ pub fn start_batch_viewer_transcode(
                 status.completed += 1;
                 status.skipped += 1;
                 status.current_output_bytes = None;
-                    let _ = worker_state.db.insert_log(
-                        "info",
-                        "batch_viewer_transcode",
-                        &format!(
-                            "asset_id={asset_id} filename=\"{filename}\" status=skipped reason=native_format source_codec={} source_size={}",
-                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
-                            human_size(source_bytes)
-                        ),
-                        Some(asset_id),
-                    );
+                let _ = worker_state.db.insert_log(
+                    "info",
+                    "batch_viewer_transcode",
+                    &format!(
+                        "[skipped-native] filename=\"{filename}\" source_codec={} source_size={}",
+                        codec.clone().unwrap_or_else(|| "unknown".to_string()),
+                        human_size(source_bytes)
+                    ),
+                    Some(asset_id),
+                );
                 continue;
             }
 
@@ -633,12 +639,12 @@ pub fn start_batch_viewer_transcode(
                         status.skipped += 1;
                     }
                     status.current_output_bytes = Some(output_bytes);
+                    let status_label = if cache_hit { "skipped-present" } else { "success" };
                     let _ = worker_state.db.insert_log(
                         "info",
                         "batch_viewer_transcode",
                         &format!(
-                            "asset_id={asset_id} filename=\"{filename}\" status=success source={} source_codec={} encoder={} output_size={}",
-                            if cache_hit { "cache_hit" } else { "transcoded" },
+                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} output_size={}",
                             codec.clone().unwrap_or_else(|| "unknown".to_string()),
                             encoder,
                             human_size(output_bytes),
@@ -653,7 +659,7 @@ pub fn start_batch_viewer_transcode(
                         "warning",
                         "batch_viewer_transcode",
                         &format!(
-                            "asset_id={asset_id} filename=\"{filename}\" status=unavailable source_codec={}",
+                            "[unavailable] filename=\"{filename}\" source_codec={}",
                             codec.clone().unwrap_or_else(|| "unknown".to_string())
                         ),
                         Some(asset_id),
@@ -666,7 +672,7 @@ pub fn start_batch_viewer_transcode(
                         "error",
                         "batch_viewer_transcode",
                         &format!(
-                            "asset_id={asset_id} filename=\"{filename}\" status=failed source_codec={} error={error}",
+                            "[failed] filename=\"{filename}\" source_codec={} error={error}",
                             codec.clone().unwrap_or_else(|| "unknown".to_string())
                         ),
                         Some(asset_id),
@@ -682,6 +688,9 @@ pub fn start_batch_viewer_transcode(
         status.current_codec = None;
         status.current_source_bytes = None;
         status.current_output_bytes = None;
+        status.elapsed_ms = status
+            .started_at
+            .map(|started_at| started_at.elapsed().as_millis() as u64);
         status.message = Some(format!(
             "Finished {} videos with {} failures",
             status.completed,
@@ -1256,6 +1265,14 @@ pub fn clear_thumb_generation_logs(state: State<AppState>) -> CommandResult<()> 
 }
 
 #[tauri::command]
+pub fn clear_batch_viewer_transcode_logs(state: State<AppState>) -> CommandResult<()> {
+    state
+        .db
+        .clear_logs_by_scope(&["batch_viewer_transcode"])
+        .map_err(map_error)
+}
+
+#[tauri::command]
 pub fn record_client_log(
     level: String,
     scope: String,
@@ -1336,6 +1353,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_thumb_generation_logs,
         get_batch_viewer_transcode_logs,
         clear_thumb_generation_logs,
+        clear_batch_viewer_transcode_logs,
         record_client_log,
         reset_local_database,
         clear_diagnostics,

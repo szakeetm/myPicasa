@@ -59,6 +59,7 @@ pub struct BatchViewerTranscodeState {
     pub current_source_bytes: Option<u64>,
     pub current_output_bytes: Option<u64>,
     pub started_at: Option<std::time::Instant>,
+    pub elapsed_ms: Option<u64>,
     pub message: Option<String>,
 }
 
@@ -77,6 +78,7 @@ impl BatchViewerTranscodeState {
             current_source_bytes: None,
             current_output_bytes: None,
             started_at: None,
+            elapsed_ms: None,
             message: None,
         }
     }
