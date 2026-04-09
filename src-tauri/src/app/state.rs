@@ -20,6 +20,7 @@ pub enum ViewerTranscodeState {
     Pending {
         started_at: std::time::Instant,
         codec: Option<String>,
+        encoder: Option<String>,
         timeout_ms: u64,
         source_bytes: u64,
         temp_path: PathBuf,
@@ -27,15 +28,18 @@ pub enum ViewerTranscodeState {
     Ready {
         path: PathBuf,
         codec: Option<String>,
+        encoder: Option<String>,
     },
     Unavailable {
         codec: Option<String>,
+        encoder: Option<String>,
         source_bytes: u64,
         output_bytes: u64,
     },
     Failed {
         message: String,
         codec: Option<String>,
+        encoder: Option<String>,
         source_bytes: u64,
         output_bytes: u64,
     },

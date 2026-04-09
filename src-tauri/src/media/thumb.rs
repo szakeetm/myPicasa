@@ -13,7 +13,7 @@ use crate::util::errors::AppError;
 
 const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
-pub const VIEWER_VIDEO_TRANSCODE_TIMEOUT: Duration = Duration::from_secs(30);
+pub const VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn thumbnail_generator_label(path: &Path) -> &'static str {
     if is_video_path(path) {
@@ -132,7 +132,11 @@ pub fn generate_viewer_image_file(
     Ok(Some(output_path))
 }
 
-pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(PathBuf, bool)>, AppError> {
+pub fn generate_viewer_video(
+    path: &Path,
+    cache_dir: &Path,
+    timeout: Duration,
+) -> Result<Option<(PathBuf, bool, String)>, AppError> {
     let Some(output_path) = viewer_video_cache_path(path, cache_dir)? else {
         return Ok(None);
     };
@@ -143,41 +147,28 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(Pa
     };
 
     if output_path.is_file() {
-        return Ok(Some((output_path, true)));
+        return Ok(Some((output_path, true, "cached_transcoded_mp4".to_string())));
     }
 
     let temp_output = output_path.with_extension("tmp.mp4");
     let _ = fs::remove_file(&temp_output);
 
-    let status = wait_for_status_with_timeout(
-        Command::new(ffmpeg)
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-y")
-        .arg("-i")
-        .arg(path)
-        .arg("-movflags")
-        .arg("+faststart")
-        .arg("-pix_fmt")
-        .arg("yuv420p")
-        .arg("-vcodec")
-        .arg("libx264")
-        .arg("-preset")
-        .arg("veryfast")
-        .arg("-crf")
-        .arg("22")
-        .arg("-acodec")
-        .arg("aac")
-        .arg("-b:a")
-        .arg("160k")
-        .arg(&temp_output)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?,
-        VIEWER_VIDEO_TRANSCODE_TIMEOUT,
+    let mut used_encoder = preferred_viewer_video_encoder(true);
+    let mut status = wait_for_status_with_timeout(
+        build_viewer_transcode_command(&ffmpeg, path, &temp_output, true)?.spawn()?,
+        timeout,
         "ffmpeg viewer transcode",
     )?;
+
+    if !status.success() {
+        let _ = fs::remove_file(&temp_output);
+        used_encoder = preferred_viewer_video_encoder(false);
+        status = wait_for_status_with_timeout(
+            build_viewer_transcode_command(&ffmpeg, path, &temp_output, false)?.spawn()?,
+            timeout,
+            "ffmpeg viewer transcode fallback",
+        )?;
+    }
 
     if !status.success() || !temp_output.is_file() {
         let _ = fs::remove_file(&temp_output);
@@ -185,7 +176,72 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(Pa
     }
 
     fs::rename(&temp_output, &output_path)?;
-    Ok(Some((output_path, false)))
+    Ok(Some((output_path, false, used_encoder.to_string())))
+}
+
+fn build_viewer_transcode_command(
+    ffmpeg: &Path,
+    input_path: &Path,
+    output_path: &Path,
+    prefer_hardware: bool,
+) -> Result<Command, AppError> {
+    let mut command = Command::new(ffmpeg);
+    command
+        .arg("-hide_banner")
+        .arg("-loglevel")
+        .arg("error")
+        .arg("-y")
+        .arg("-i")
+        .arg(input_path)
+        .arg("-vf")
+        .arg("scale='if(gt(iw,ih),min(iw,1920),-2)':'if(gt(ih,iw),min(ih,1080),-2)':force_original_aspect_ratio=decrease")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg("-pix_fmt")
+        .arg("yuv420p");
+
+    if prefer_hardware && cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        command
+            .arg("-vcodec")
+            .arg("h264_videotoolbox")
+            .arg("-b:v")
+            .arg("4500k")
+            .arg("-maxrate")
+            .arg("6000k");
+    } else {
+        command
+            .arg("-vcodec")
+            .arg("libx264")
+            .arg("-preset")
+            .arg("veryfast")
+            .arg("-b:v")
+            .arg("4500k")
+            .arg("-maxrate")
+            .arg("6000k")
+            .arg("-bufsize")
+            .arg("9000k")
+            .arg("-crf")
+            .arg("22");
+    }
+
+    command
+        .arg("-acodec")
+        .arg("aac")
+        .arg("-b:a")
+        .arg("160k")
+        .arg(output_path)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    Ok(command)
+}
+
+fn preferred_viewer_video_encoder(prefer_hardware: bool) -> &'static str {
+    if prefer_hardware && cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+        "h264_videotoolbox"
+    } else {
+        "libx264"
+    }
 }
 
 pub fn viewer_video_cache_path(path: &Path, cache_dir: &Path) -> Result<Option<PathBuf>, AppError> {

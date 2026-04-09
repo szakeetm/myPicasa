@@ -35,6 +35,7 @@ export function ViewerModal({
   const [videoTranscoding, setVideoTranscoding] = useState(false);
   const [videoTranscodeStatus, setVideoTranscodeStatus] = useState<{
     codec?: string;
+    encoder?: string;
     elapsedMs?: number;
     timeoutMs?: number;
     sourceBytes?: number;
@@ -47,6 +48,7 @@ export function ViewerModal({
   const [livePhotoTranscoding, setLivePhotoTranscoding] = useState(false);
   const [livePhotoTranscodeStatus, setLivePhotoTranscodeStatus] = useState<{
     codec?: string;
+    encoder?: string;
     elapsedMs?: number;
     timeoutMs?: number;
     sourceBytes?: number;
@@ -244,6 +246,7 @@ export function ViewerModal({
             setVideoSourceLabel("transcoding");
             setVideoTranscodeStatus({
               codec: backendMedia.codec ?? undefined,
+              encoder: backendMedia.encoder ?? undefined,
               elapsedMs: backendMedia.elapsed_ms ?? undefined,
               timeoutMs: backendMedia.timeout_ms ?? undefined,
               sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -263,6 +266,7 @@ export function ViewerModal({
           setVideoTranscoding(false);
           setVideoTranscodeStatus({
             codec: backendMedia.codec ?? undefined,
+            encoder: backendMedia.encoder ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
             sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -343,6 +347,7 @@ export function ViewerModal({
             setLivePhotoSourceLabel("transcoding");
             setLivePhotoTranscodeStatus({
               codec: backendMedia.codec ?? undefined,
+              encoder: backendMedia.encoder ?? undefined,
               elapsedMs: backendMedia.elapsed_ms ?? undefined,
               timeoutMs: backendMedia.timeout_ms ?? undefined,
               sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -362,6 +367,7 @@ export function ViewerModal({
           setLivePhotoTranscoding(false);
           setLivePhotoTranscodeStatus({
             codec: backendMedia.codec ?? undefined,
+            encoder: backendMedia.encoder ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
             sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -525,6 +531,7 @@ export function ViewerModal({
         if (backendMedia.status === "pending") {
           setVideoTranscodeStatus({
             codec: backendMedia.codec ?? undefined,
+            encoder: backendMedia.encoder ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
             sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -536,6 +543,7 @@ export function ViewerModal({
         setVideoTranscoding(false);
         setVideoTranscodeStatus({
           codec: backendMedia.codec ?? undefined,
+          encoder: backendMedia.encoder ?? undefined,
           elapsedMs: backendMedia.elapsed_ms ?? undefined,
           timeoutMs: backendMedia.timeout_ms ?? undefined,
           sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -578,6 +586,7 @@ export function ViewerModal({
         if (backendMedia.status === "pending") {
           setLivePhotoTranscodeStatus({
             codec: backendMedia.codec ?? undefined,
+            encoder: backendMedia.encoder ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
             sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -589,6 +598,7 @@ export function ViewerModal({
         setLivePhotoTranscoding(false);
         setLivePhotoTranscodeStatus({
           codec: backendMedia.codec ?? undefined,
+          encoder: backendMedia.encoder ?? undefined,
           elapsedMs: backendMedia.elapsed_ms ?? undefined,
           timeoutMs: backendMedia.timeout_ms ?? undefined,
           sourceBytes: backendMedia.source_bytes ?? undefined,
@@ -778,7 +788,6 @@ export function ViewerModal({
                 ref={videoElementRef}
                 controls
                 autoPlay
-                src={videoSrc}
                 preload="metadata"
                 onLoadedMetadata={(event) => handleVideoDiagnostics("viewer.video", "loadedmetadata", event)}
                 onCanPlay={(event) => {
@@ -806,12 +815,20 @@ export function ViewerModal({
                   }
                   setVideoError("Video playback unavailable");
                 }}
-              />
+              >
+                <source
+                  src={videoSrc}
+                  type={inferVideoMimeType(videoSrc) ?? "video/mp4"}
+                />
+              </video>
             ) : videoError ? (
               <div className="viewer-loading-state">
                 <div className="muted">{videoError}</div>
                 {videoTranscodeStatus.codec ? (
                   <div className="muted">Source codec: {videoTranscodeStatus.codec}</div>
+                ) : null}
+                {videoTranscodeStatus.encoder ? (
+                  <div className="muted">Transcode encoder: {videoTranscodeStatus.encoder}</div>
                 ) : null}
                 {videoFallbackAvailable ? (
                   <button className="button-secondary" onClick={() => void fallbackVideoToBackend()}>
@@ -836,7 +853,6 @@ export function ViewerModal({
                 autoPlay
                 muted
                 loop
-                src={livePhotoMotionSrc}
                 preload="metadata"
                 onLoadedMetadata={(event) =>
                   handleVideoDiagnostics("viewer.live_photo", "loadedmetadata", event)
@@ -874,12 +890,20 @@ export function ViewerModal({
                   }
                   setLivePhotoMotionError("Live photo playback unavailable");
                 }}
-              />
+              >
+                <source
+                  src={livePhotoMotionSrc}
+                  type={inferVideoMimeType(livePhotoMotionSrc) ?? "video/mp4"}
+                />
+              </video>
             ) : livePhotoMotionError ? (
               <div className="viewer-loading-state">
                 <div className="muted">{livePhotoMotionError}</div>
                 {livePhotoTranscodeStatus.codec ? (
                   <div className="muted">Source codec: {livePhotoTranscodeStatus.codec}</div>
+                ) : null}
+                {livePhotoTranscodeStatus.encoder ? (
+                  <div className="muted">Transcode encoder: {livePhotoTranscodeStatus.encoder}</div>
                 ) : null}
                 {livePhotoFallbackAvailable ? (
                   <button className="button-secondary" onClick={() => void fallbackLivePhotoToBackend()}>
@@ -1001,8 +1025,21 @@ async function materializeVideoSrc(src: string, objectUrlRef: React.MutableRefOb
   if (!src.startsWith("data:video/")) {
     return src;
   }
-  const response = await fetch(src);
-  const blob = await response.blob();
+  const [header, base64Payload] = src.split(",", 2);
+  const mimeType = header.slice("data:".length).split(";")[0] || "video/mp4";
+  const payload = base64Payload ?? "";
+  const binary = atob(payload);
+  const chunkSize = 1024 * 1024;
+  const chunks: Uint8Array[] = [];
+  for (let offset = 0; offset < binary.length; offset += chunkSize) {
+    const chunk = binary.slice(offset, offset + chunkSize);
+    const bytes = new Uint8Array(chunk.length);
+    for (let index = 0; index < chunk.length; index += 1) {
+      bytes[index] = chunk.charCodeAt(index);
+    }
+    chunks.push(bytes);
+  }
+  const blob = new Blob(chunks as BlobPart[], { type: mimeType });
   const objectUrl = URL.createObjectURL(blob);
   objectUrlRef.current = objectUrl;
   return objectUrl;
@@ -1084,6 +1121,7 @@ function formatViewerSourceLabel(label: string) {
 
 function formatTranscodeProgress(status: {
   codec?: string;
+  encoder?: string;
   elapsedMs?: number;
   timeoutMs?: number;
   sourceBytes?: number;
@@ -1093,12 +1131,12 @@ function formatTranscodeProgress(status: {
   if (status.codec) {
     parts.push(`Source codec: ${status.codec}`);
   }
+  if (status.encoder) {
+    parts.push(`Encoder: ${status.encoder}`);
+  }
   if (typeof status.sourceBytes === "number" && status.sourceBytes > 0) {
     const written = typeof status.outputBytes === "number" ? status.outputBytes : 0;
-    const progressRatio = Math.max(0, Math.min(1, written / status.sourceBytes));
-    parts.push(
-      `Written ${formatFileSize(written)} / ${formatFileSize(status.sourceBytes)} (${Math.round(progressRatio * 100)}%)`,
-    );
+    parts.push(`Written ${formatFileSize(written)} • source ${formatFileSize(status.sourceBytes)}`);
   } else if (typeof status.outputBytes === "number" && status.outputBytes > 0) {
     parts.push(`Written ${formatFileSize(status.outputBytes)}`);
   }
