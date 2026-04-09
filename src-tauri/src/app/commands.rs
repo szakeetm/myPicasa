@@ -447,9 +447,8 @@ fn load_cached_transcoded_video(
     codec: Option<String>,
     encoder: Option<String>,
 ) -> Result<ViewerMediaStatus, InvokeError> {
-    let bytes = fs::read(path).map_err(map_error)?;
     Ok(ready_viewer_media_status(
-        format!("data:video/mp4;base64,{}", STANDARD.encode(bytes)),
+        path.to_string_lossy().to_string(),
         "transcoded_mp4".to_string(),
         codec,
         encoder,
@@ -1716,7 +1715,6 @@ pub fn load_viewer_video(
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
         let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
-        let bytes = fs::read(&source_path).map_err(map_error)?;
         state
             .db
             .insert_log(
@@ -1729,11 +1727,7 @@ pub fn load_viewer_video(
             )
             .map_err(map_error)?;
         return Ok(ready_viewer_media_status(
-            format!(
-                "data:{};base64,{}",
-                video_mime_type(&source_path),
-                STANDARD.encode(bytes)
-            ),
+            source_path.to_string_lossy().to_string(),
             match video_mime_type(&source_path) {
                 "video/quicktime" => "original_quicktime".to_string(),
                 "video/webm" => "original_webm".to_string(),
@@ -1764,7 +1758,6 @@ pub fn load_live_photo_motion(
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
         let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
-        let bytes = fs::read(&source_path).map_err(map_error)?;
         state
             .db
             .insert_log(
@@ -1777,11 +1770,7 @@ pub fn load_live_photo_motion(
             )
             .map_err(map_error)?;
         return Ok(ready_viewer_media_status(
-            format!(
-                "data:{};base64,{}",
-                video_mime_type(&source_path),
-                STANDARD.encode(bytes)
-            ),
+            source_path.to_string_lossy().to_string(),
             match video_mime_type(&source_path) {
                 "video/quicktime" => "original_quicktime".to_string(),
                 "video/webm" => "original_webm".to_string(),
