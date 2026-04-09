@@ -25,7 +25,7 @@ use crate::{
         VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT,
     },
     models::{
-        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse,
+        AlbumSummary, AppSettings, AssetDetail, AssetListRequest, AssetListResponse,
         BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats, DiagnosticEntry,
         ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem, ViewerMediaStatus,
         ViewerPlaybackHint, ViewerPlaybackSupport,
@@ -35,12 +35,11 @@ use crate::{
 
 type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
-const VIEWER_PREVIEW_SIZE: u32 = 2048;
 const THUMBNAIL_CACHE_VERSION: u32 = 2;
 const PREVIEW_CACHE_VERSION: u32 = 2;
 
-fn thumbnail_cache_key(asset_id: i64, size: u32) -> String {
-    if size >= VIEWER_PREVIEW_SIZE {
+fn thumbnail_cache_key(asset_id: i64, size: u32, use_preview_cache: bool) -> String {
+    if use_preview_cache {
         format!("pv{PREVIEW_CACHE_VERSION}:{asset_id}:{size}")
     } else {
         format!("v{THUMBNAIL_CACHE_VERSION}:{asset_id}:{size}")
@@ -96,8 +95,8 @@ fn human_duration_ms(duration_ms: u64) -> String {
     }
 }
 
-fn thumb_log_kind(size: u32) -> &'static str {
-    if size >= VIEWER_PREVIEW_SIZE {
+fn thumb_log_kind(use_preview_cache: bool) -> &'static str {
+    if use_preview_cache {
         "preview"
     } else {
         "thumb"
@@ -120,10 +119,10 @@ fn enqueue_thumbnail_job(
     state: &AppState,
     asset_id: i64,
     size: u32,
+    use_preview_cache: bool,
     generation: u64,
 ) -> Result<bool, InvokeError> {
-    let key = thumbnail_cache_key(asset_id, size);
-    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
     let cache = if use_preview_cache {
         &state.preview_cache
     } else {
@@ -158,6 +157,7 @@ fn enqueue_thumbnail_job(
         size,
         key: key.clone(),
         generation,
+        use_preview_cache,
     }) {
         if !use_preview_cache {
             state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -239,9 +239,9 @@ fn thumbnail_batch_output_state(
     state: &AppState,
     asset_id: i64,
     size: u32,
+    use_preview_cache: bool,
 ) -> ThumbnailBatchOutputState {
-    let key = thumbnail_cache_key(asset_id, size);
-    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
     let cache = if use_preview_cache {
         &state.preview_cache
     } else {
@@ -257,6 +257,19 @@ fn thumbnail_batch_output_state(
     } else {
         ThumbnailBatchOutputState::Missing
     }
+}
+
+#[tauri::command]
+pub fn get_app_settings(state: State<AppState>) -> CommandResult<AppSettings> {
+    Ok(state.app_settings_snapshot())
+}
+
+#[tauri::command]
+pub fn update_app_settings(
+    settings: AppSettings,
+    state: State<AppState>,
+) -> CommandResult<AppSettings> {
+    state.update_app_settings(settings).map_err(map_error)
 }
 
 fn collect_all_media_assets(state: &AppState) -> Result<Vec<BatchThumbnailAsset>, InvokeError> {
@@ -1210,10 +1223,11 @@ pub fn get_ingress_diagnostics(state: State<AppState>) -> CommandResult<Vec<Diag
 pub fn request_thumbnail(
     asset_id: i64,
     size: u32,
+    prefer_preview_cache: Option<bool>,
     state: State<AppState>,
 ) -> CommandResult<Option<String>> {
-    let key = thumbnail_cache_key(asset_id, size);
-    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let use_preview_cache = prefer_preview_cache.unwrap_or(false);
+    let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
     let cache = if use_preview_cache {
         &state.preview_cache
     } else {
@@ -1228,7 +1242,7 @@ pub fn request_thumbnail(
         return Ok(None);
     };
     let (filename, file_size) = media_debug_info(&primary_path);
-    let kind = thumb_log_kind(size);
+    let kind = thumb_log_kind(use_preview_cache);
     let generator = thumbnail_generator_label(&PathBuf::from(&primary_path));
     record_thumb_log(
         state.inner(),
@@ -1297,10 +1311,11 @@ pub fn request_thumbnail(
 pub fn request_thumbnails_batch(
     asset_ids: Vec<i64>,
     size: u32,
+    prefer_preview_cache: Option<bool>,
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
     let generation = state.thumbnail_generation.load(Ordering::SeqCst);
-    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let use_preview_cache = prefer_preview_cache.unwrap_or(false);
     let cache = if use_preview_cache {
         state.preview_cache.clone()
     } else {
@@ -1310,7 +1325,7 @@ pub fn request_thumbnails_batch(
     let items = asset_ids
         .into_iter()
         .map(|asset_id| {
-            let key = thumbnail_cache_key(asset_id, size);
+            let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
 
             let cached_path = {
                 let mut cache_guard = cache.lock();
@@ -1364,6 +1379,7 @@ pub fn request_thumbnails_batch(
                     size,
                     key: key.clone(),
                     generation,
+                    use_preview_cache,
                 }) {
                     if !use_preview_cache {
                         state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -1467,6 +1483,7 @@ pub fn start_batch_thumbnail_generation(
     let worker_state = state.inner().clone();
     thread::spawn(move || {
         const THUMB_SIZE: u32 = 256;
+        let preview_size = worker_state.viewer_preview_size();
         let assets = match collect_all_media_assets(&worker_state) {
             Ok(assets) => assets,
             Err(error) => {
@@ -1501,9 +1518,10 @@ pub fn start_batch_thumbnail_generation(
                     break;
                 };
 
-                let thumb_state = thumbnail_batch_output_state(&worker_state, asset.asset_id, THUMB_SIZE);
+                let thumb_state =
+                    thumbnail_batch_output_state(&worker_state, asset.asset_id, THUMB_SIZE, false);
                 let preview_state = if asset.needs_preview {
-                    thumbnail_batch_output_state(&worker_state, asset.asset_id, VIEWER_PREVIEW_SIZE)
+                    thumbnail_batch_output_state(&worker_state, asset.asset_id, preview_size, true)
                 } else {
                     ThumbnailBatchOutputState::Ready
                 };
@@ -1527,7 +1545,7 @@ pub fn start_batch_thumbnail_generation(
                         status.completed += 1;
                         status.skipped += 1;
                         let preview_suffix = if asset.needs_preview {
-                            format!(" preview_size={}px", VIEWER_PREVIEW_SIZE)
+                            format!(" preview_size={}px", preview_size)
                         } else {
                             "".to_string()
                         };
@@ -1554,6 +1572,7 @@ pub fn start_batch_thumbnail_generation(
                         &worker_state,
                         asset.asset_id,
                         THUMB_SIZE,
+                        false,
                         worker_state.thumbnail_generation.load(Ordering::SeqCst),
                     );
                 }
@@ -1563,7 +1582,8 @@ pub fn start_batch_thumbnail_generation(
                     let _ = enqueue_thumbnail_job(
                         &worker_state,
                         asset.asset_id,
-                        VIEWER_PREVIEW_SIZE,
+                        preview_size,
+                        true,
                         worker_state.thumbnail_generation.load(Ordering::SeqCst),
                     );
                 }
@@ -1573,9 +1593,10 @@ pub fn start_batch_thumbnail_generation(
 
             let mut finished_ids = Vec::new();
             for (asset_id, asset) in &active {
-                let thumb_state = thumbnail_batch_output_state(&worker_state, *asset_id, THUMB_SIZE);
+                let thumb_state =
+                    thumbnail_batch_output_state(&worker_state, *asset_id, THUMB_SIZE, false);
                 let preview_state = if asset.needs_preview {
-                    thumbnail_batch_output_state(&worker_state, *asset_id, VIEWER_PREVIEW_SIZE)
+                    thumbnail_batch_output_state(&worker_state, *asset_id, preview_size, true)
                 } else {
                     ThumbnailBatchOutputState::Ready
                 };
@@ -2084,6 +2105,8 @@ pub fn open_url_in_browser(url: String) -> CommandResult<()> {
 
 pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
+        get_app_settings,
+        update_app_settings,
         refresh_index,
         start_refresh_index,
         get_import_status,

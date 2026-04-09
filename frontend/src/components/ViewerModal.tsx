@@ -7,10 +7,9 @@ import { logClient } from "../lib/logger";
 import { api } from "../lib/tauri";
 import type { AssetDetail } from "../lib/types";
 
-const VIEWER_PREVIEW_SIZE = 2048;
-
 type ViewerModalProps = {
   asset?: AssetDetail;
+  viewerPreviewSize: number;
   hasPrevious: boolean;
   hasNext: boolean;
   onPrevious: () => void;
@@ -21,6 +20,7 @@ type ViewerModalProps = {
 
 export function ViewerModal({
   asset,
+  viewerPreviewSize,
   hasPrevious,
   hasNext,
   onPrevious,
@@ -348,14 +348,14 @@ export function ViewerModal({
     );
 
     void api
-      .requestThumbnail(assetId, VIEWER_PREVIEW_SIZE)
+      .requestThumbnail(assetId, viewerPreviewSize, true)
       .then((src) => {
         if (cancelled) return;
         if (src) {
           setImageSourceLabel("preview");
           void logClient(
             "viewer.image",
-            `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
+            `asset ${assetId} loaded ${viewerPreviewSize}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
           );
           onViewerPreviewReady?.(assetId);
           setImageSrc(materializeImageSrc(src));
@@ -365,7 +365,7 @@ export function ViewerModal({
 
         void logClient(
           "viewer.image",
-          `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail unavailable path=${asset?.primary_path ?? "unknown"}`,
+          `asset ${assetId} ${viewerPreviewSize}px viewer preview thumbnail unavailable path=${asset?.primary_path ?? "unknown"}`,
           "error",
         );
         setImageSrc(undefined);
@@ -375,7 +375,7 @@ export function ViewerModal({
         if (!cancelled) {
           void logClient(
             "viewer.image",
-            `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview load failed: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
+            `asset ${assetId} ${viewerPreviewSize}px viewer preview load failed: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
             "error",
           );
           setImageSrc(undefined);
@@ -386,7 +386,7 @@ export function ViewerModal({
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.primary_path, isPhoto, onViewerPreviewReady]);
+  }, [assetId, asset?.primary_path, isPhoto, onViewerPreviewReady, viewerPreviewSize]);
 
   function pauseModalPlayback() {
     videoElementRef.current?.pause();

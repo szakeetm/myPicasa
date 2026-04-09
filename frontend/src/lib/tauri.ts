@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AlbumSummary,
+  AppSettings,
   AssetDetail,
   AssetListRequest,
   AssetListResponse,
@@ -19,6 +20,9 @@ import type {
 } from "./types";
 
 export const api = {
+  getAppSettings: () => invoke<AppSettings>("get_app_settings"),
+  updateAppSettings: (settings: AppSettings) =>
+    invoke<AppSettings>("update_app_settings", { settings }),
   startRefreshIndex: (request: RefreshRequest) =>
     invoke<void>("start_refresh_index", { request }),
   refreshIndex: (request: RefreshRequest) =>
@@ -39,10 +43,10 @@ export const api = {
     invoke<ViewerMediaStatus>("load_viewer_video", { assetId, preferOriginal }),
   loadLivePhotoMotion: (assetId: number, preferOriginal?: boolean) =>
     invoke<ViewerMediaStatus>("load_live_photo_motion", { assetId, preferOriginal }),
-  requestThumbnailsBatch: (assetIds: number[], size: number) =>
-    invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size }),
-  requestThumbnail: (assetId: number, size: number) =>
-    invoke<string | null>("request_thumbnail", { assetId, size }),
+  requestThumbnailsBatch: (assetIds: number[], size: number, preferPreviewCache = false) =>
+    invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size, preferPreviewCache }),
+  requestThumbnail: (assetId: number, size: number, preferPreviewCache = false) =>
+    invoke<string | null>("request_thumbnail", { assetId, size, preferPreviewCache }),
   getBatchThumbnailGenerationStatus: () =>
     invoke<BatchThumbnailGenerationStatus>("get_batch_thumbnail_generation_status"),
   startBatchThumbnailGeneration: () =>

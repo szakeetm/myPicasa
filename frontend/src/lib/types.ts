@@ -1,5 +1,9 @@
 export type RefreshRequest = { roots: string[] };
 
+export type AppSettings = {
+  viewer_preview_size: number;
+};
+
 export type ImportProgress = {
   import_id: number;
   status: string;

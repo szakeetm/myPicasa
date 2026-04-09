@@ -12,9 +12,11 @@ import type {
 } from "../lib/types";
 
 type ViewMode = "timeline" | "album";
+const DEFAULT_VIEWER_PREVIEW_SIZE = 1000;
 
 type AppState = {
   rootsInput: string;
+  viewerPreviewSize: number;
   query: string;
   mediaKind: string;
   dateFrom: string;
@@ -29,6 +31,7 @@ type AppState = {
   cacheStats?: CacheStats;
   importStatus?: ImportProgress | null;
   setRootsInput: (value: string) => void;
+  setViewerPreviewSize: (value: number) => void;
   setQuery: (value: string) => void;
   setMediaKind: (value: string) => void;
   setDateFrom: (value: string) => void;
@@ -48,6 +51,7 @@ export const useAppState = create<AppState>()(
   persist(
     (set) => ({
       rootsInput: "",
+      viewerPreviewSize: DEFAULT_VIEWER_PREVIEW_SIZE,
       query: "",
       mediaKind: "",
       dateFrom: "",
@@ -58,6 +62,7 @@ export const useAppState = create<AppState>()(
       diagnostics: [],
       logs: [],
       setRootsInput: (rootsInput) => set({ rootsInput }),
+      setViewerPreviewSize: (viewerPreviewSize) => set({ viewerPreviewSize }),
       setQuery: (query) => set({ query }),
       setMediaKind: (mediaKind) => set({ mediaKind }),
       setDateFrom: (dateFrom) => set({ dateFrom }),
@@ -77,6 +82,7 @@ export const useAppState = create<AppState>()(
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
         rootsInput: state.rootsInput,
+        viewerPreviewSize: state.viewerPreviewSize,
       }),
     },
   ),

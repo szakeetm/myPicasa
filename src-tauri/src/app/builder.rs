@@ -12,6 +12,7 @@ use parking_lot::Mutex;
 
 use crate::app::state::{
     AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
+    app_settings_path, load_app_settings, persist_app_settings,
 };
 use crate::cache::thumb_cache::ThumbnailCache;
 use crate::db::{Database, DatabaseQueries};
@@ -20,7 +21,6 @@ use crate::search::query_service;
 use crate::util::errors::AppError;
 
 const PREVIEW_DEBUG_LOGS: bool = false;
-const VIEWER_PREVIEW_SIZE: u32 = 2048;
 
 pub fn default_worker_count() -> usize {
     std::thread::available_parallelism()
@@ -36,6 +36,7 @@ pub fn build_app_state(
     fs::create_dir_all(&app_data_dir)?;
 
     let db_path = app_data_dir.join("my_picasa.sqlite");
+    let settings_path = app_settings_path(&app_data_dir);
     let thumbnail_cache_dir = app_data_dir.join("thumbnail-cache");
     let preview_cache_dir = app_data_dir.join("preview-cache");
     let viewer_cache_dir = app_data_dir.join("viewer-cache");
@@ -44,6 +45,8 @@ pub fn build_app_state(
     fs::create_dir_all(&preview_cache_dir)?;
     fs::create_dir_all(&viewer_cache_dir)?;
     fs::create_dir_all(&working_dir)?;
+    let app_settings = load_app_settings(&settings_path)?;
+    persist_app_settings(&settings_path, &app_settings)?;
 
     let database = Database::new(&db_path)?;
     let (thumbnail_job_sender, thumbnail_job_receiver) = mpsc::channel::<ThumbnailJob>();
@@ -85,6 +88,8 @@ pub fn build_app_state(
     let state = AppState {
         db: Arc::new(database),
         app_data_dir: Arc::new(app_data_dir),
+        settings_path: Arc::new(settings_path),
+        app_settings: Arc::new(Mutex::new(app_settings)),
         thumbnail_worker_count: worker_count,
         import_status: Arc::new(Mutex::new(None)),
         thumbnail_cache,
@@ -126,8 +131,8 @@ fn human_size(bytes: u64) -> String {
     }
 }
 
-fn thumb_log_kind(size: u32) -> &'static str {
-    if size >= VIEWER_PREVIEW_SIZE {
+fn thumb_log_kind(use_preview_cache: bool) -> &'static str {
+    if use_preview_cache {
         "preview"
     } else {
         "thumb"
@@ -159,7 +164,7 @@ fn process_thumbnail_job(
             .unwrap_or(&primary_path)
             .to_string();
         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
-        let kind = thumb_log_kind(job.size);
+        let kind = thumb_log_kind(job.use_preview_cache);
         let generator = thumbnail_generator_label(&primary_path_buf);
         let _ = db.insert_log(
             "info",
@@ -223,7 +228,7 @@ fn process_thumbnail_job(
     match result {
         Ok(Some(bytes)) => {
             if generation.load(Ordering::SeqCst) == job.generation {
-                let cache = if job.size >= VIEWER_PREVIEW_SIZE {
+                let cache = if job.use_preview_cache {
                     preview_cache
                 } else {
                     thumbnail_cache
@@ -244,7 +249,7 @@ fn process_thumbnail_job(
                     "thumb_gen",
                     &format!(
                         "kind={} status=failed worker={} asset_id={} size={}px error={error}",
-                        thumb_log_kind(job.size),
+                        thumb_log_kind(job.use_preview_cache),
                         worker_index,
                         job.asset_id,
                         job.size,

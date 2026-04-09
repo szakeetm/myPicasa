@@ -3,11 +3,13 @@ import dayjs from "dayjs";
 
 type SidebarProps = {
   rootsInput: string;
+  viewerPreviewSize: number;
   importStatus?: ImportProgress | null;
   browseEnabled?: boolean;
   albums: AlbumSummary[];
   selectedAlbumId?: number;
   onRootsInputChange: (value: string) => void;
+  onViewerPreviewSizeChange: (value: number) => void;
   onBrowseRoot: () => void;
   onRefresh: () => void;
   onResetDatabase: () => void;
@@ -17,11 +19,13 @@ type SidebarProps = {
 
 export function Sidebar({
   rootsInput,
+  viewerPreviewSize,
   importStatus,
   browseEnabled = true,
   albums,
   selectedAlbumId,
   onRootsInputChange,
+  onViewerPreviewSizeChange,
   onBrowseRoot,
   onRefresh,
   onResetDatabase,
@@ -94,6 +98,24 @@ export function Sidebar({
         <div className="muted">
           Removes the local SQLite index, logs, albums, diagnostics, and cached app state.
           Source Takeout files are not touched.
+        </div>
+        <div className="setting-row">
+          <label className="setting-label" htmlFor="viewer-preview-size">
+            Viewer preview size
+          </label>
+          <select
+            id="viewer-preview-size"
+            value={String(viewerPreviewSize)}
+            onChange={(event) => onViewerPreviewSizeChange(Number(event.target.value))}
+          >
+            <option value="1000">1000 px</option>
+            <option value="1280">1280 px</option>
+            <option value="1600">1600 px</option>
+            <option value="2048">2048 px</option>
+          </select>
+        </div>
+        <div className="muted">
+          Controls the generated still-image size used for the viewer and grid preview warming.
         </div>
       </div>
 

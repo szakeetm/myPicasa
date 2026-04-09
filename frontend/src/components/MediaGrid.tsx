@@ -6,7 +6,6 @@ import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
 import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from "../lib/types";
 
-const VIEWER_PREVIEW_SIZE = 2048;
 const GRID_TILE_WIDTH = 210;
 const GRID_GAP = 6;
 const GRID_PADDING = 6;
@@ -40,6 +39,7 @@ type MediaGridProps = {
     active: boolean;
     runId: number;
   };
+  viewerPreviewSize: number;
   onThumbnailPreloadProgress?: (value?: {
     thumbsCompleted: number;
     thumbsTotal: number;
@@ -88,6 +88,7 @@ export function MediaGrid({
   onLoadMoreBefore,
   onLoadMore,
   thumbnailPreload,
+  viewerPreviewSize,
   onThumbnailPreloadProgress,
   viewerPlaybackSupport,
 }: MediaGridProps) {
@@ -407,7 +408,7 @@ export function MediaGrid({
       previewRequestInFlightRef.current = true;
       try {
         const requestStarted = performance.now();
-        const batch = await api.requestThumbnailsBatch(targetIds, VIEWER_PREVIEW_SIZE);
+        const batch = await api.requestThumbnailsBatch(targetIds, viewerPreviewSize, true);
         if (disposed) {
           return;
         }
@@ -435,7 +436,7 @@ export function MediaGrid({
         const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
         void logClient(
           "grid",
-          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=${VIEWER_PREVIEW_SIZE} mode=auto elapsed_ms=${Math.round(performance.now() - requestStarted)}`,
+          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=${viewerPreviewSize} mode=auto elapsed_ms=${Math.round(performance.now() - requestStarted)}`,
         );
       } catch (error) {
         if (disposed) {
@@ -467,7 +468,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, thumbnailPreload?.active]);
+  }, [assets, thumbnailPreload?.active, viewerPreviewSize]);
 
   useEffect(() => {
     const root = parentRef.current;

@@ -87,6 +87,7 @@ export function App() {
   const [batchTranscodeStatus, setBatchTranscodeStatus] = useState<BatchViewerTranscodeStatus>();
   const [batchTranscodeLogs, setBatchTranscodeLogs] = useState<LogEntry[]>([]);
   const didInitFilterEffect = useRef(false);
+  const didInitViewerPreviewSizeEffect = useRef(false);
   const assetQueryGenerationRef = useRef(0);
   const gridPagesRef = useRef<GridPage[]>([]);
   const hydratingPageStartsRef = useRef(new Set<number>());
@@ -299,6 +300,11 @@ export function App() {
   useEffect(() => {
     void logClient("ui.bootstrap", "frontend booted");
     void api.clearThumbGenerationLogs();
+    if (tauriRuntime) {
+      void api.getAppSettings().then((settings) => {
+        state.setViewerPreviewSize(settings.viewer_preview_size);
+      });
+    }
     void refreshDebugSurfaces();
     void refreshAllAssets();
     void Promise.all([
@@ -406,6 +412,16 @@ export function App() {
     return () => window.clearTimeout(timer);
   }, [state.mediaKind, state.query]);
 
+  useEffect(() => {
+    if (!didInitViewerPreviewSizeEffect.current) {
+      didInitViewerPreviewSizeEffect.current = true;
+      return;
+    }
+
+    setThumbnailResetKey((value) => value + 1);
+    setViewerPreviewReadyAssetIds([]);
+  }, [state.viewerPreviewSize]);
+
   async function handleRefreshIndex() {
     const roots = state.rootsInput
       .split(";")
@@ -496,6 +512,24 @@ export function App() {
       viewMode: "album",
       selectedAlbumId: albumId,
     });
+  }
+
+  async function handleViewerPreviewSizeChange(value: number) {
+    state.setViewerPreviewSize(value);
+    if (!tauriRuntime) {
+      return;
+    }
+
+    try {
+      const settings = await api.updateAppSettings({
+        viewer_preview_size: value,
+      });
+      if (settings.viewer_preview_size !== value) {
+        state.setViewerPreviewSize(settings.viewer_preview_size);
+      }
+    } catch (error) {
+      await logClient("ui.settings", `failed to update viewer preview size: ${String(error)}`, "error");
+    }
   }
 
   async function handleShowTimeline() {
@@ -719,11 +753,13 @@ export function App() {
     <div className={`app-shell${debugPanelCollapsed ? " debug-collapsed" : ""}`}>
       <Sidebar
         rootsInput={state.rootsInput}
+        viewerPreviewSize={state.viewerPreviewSize}
         importStatus={state.importStatus}
         browseEnabled={tauriRuntime}
         albums={state.albums}
         selectedAlbumId={state.selectedAlbumId}
         onRootsInputChange={state.setRootsInput}
+        onViewerPreviewSizeChange={(value) => void handleViewerPreviewSizeChange(value)}
         onBrowseRoot={handleBrowseRoot}
         onRefresh={handleRefreshIndex}
         onResetDatabase={handleResetDatabase}
@@ -743,6 +779,7 @@ export function App() {
           <MediaGrid
             assets={state.assets}
             entries={gridEntries}
+            viewerPreviewSize={state.viewerPreviewSize}
             onSelect={handleSelectAsset}
             onHydratePlaceholderPage={hydratePlaceholderPage}
             viewerPlaybackSupport={viewerPlaybackSupport}
@@ -943,6 +980,7 @@ export function App() {
 
       <ViewerModal
         asset={state.selectedAsset}
+        viewerPreviewSize={state.viewerPreviewSize}
         hasPrevious={selectedAssetIndex > 0}
         hasNext={selectedAssetIndex >= 0 && selectedAssetIndex < state.assets.length - 1}
         onPrevious={() => void handleStepAsset(-1)}

@@ -1,6 +1,11 @@
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppSettings {
+    pub viewer_preview_size: u32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RefreshRequest {
     pub roots: Vec<String>,
 }

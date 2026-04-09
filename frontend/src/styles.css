@@ -170,6 +170,19 @@ button {
   gap: 10px;
 }
 
+.setting-row {
+  display: grid;
+  gap: 6px;
+}
+
+.setting-label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--text-soft);
+}
+
 .button-primary,
 .button-secondary,
 .button-danger {
