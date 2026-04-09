@@ -159,4 +159,6 @@ pub struct ViewerMediaStatus {
     pub codec: Option<String>,
     pub elapsed_ms: Option<u64>,
     pub timeout_ms: Option<u64>,
+    pub source_bytes: Option<u64>,
+    pub output_bytes: Option<u64>,
 }

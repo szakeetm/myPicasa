@@ -112,4 +112,6 @@ export type ViewerMediaStatus = {
   codec?: string | null;
   elapsed_ms?: number | null;
   timeout_ms?: number | null;
+  source_bytes?: number | null;
+  output_bytes?: number | null;
 };

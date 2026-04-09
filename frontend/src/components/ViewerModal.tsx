@@ -37,6 +37,8 @@ export function ViewerModal({
     codec?: string;
     elapsedMs?: number;
     timeoutMs?: number;
+    sourceBytes?: number;
+    outputBytes?: number;
   }>({});
   const [livePhotoMotionSrc, setLivePhotoMotionSrc] = useState<string>();
   const [livePhotoMotionError, setLivePhotoMotionError] = useState<string>();
@@ -47,6 +49,8 @@ export function ViewerModal({
     codec?: string;
     elapsedMs?: number;
     timeoutMs?: number;
+    sourceBytes?: number;
+    outputBytes?: number;
   }>({});
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
@@ -242,6 +246,8 @@ export function ViewerModal({
               codec: backendMedia.codec ?? undefined,
               elapsedMs: backendMedia.elapsed_ms ?? undefined,
               timeoutMs: backendMedia.timeout_ms ?? undefined,
+              sourceBytes: backendMedia.source_bytes ?? undefined,
+              outputBytes: backendMedia.output_bytes ?? undefined,
             });
             if (!loggedPending) {
               loggedPending = true;
@@ -259,6 +265,8 @@ export function ViewerModal({
             codec: backendMedia.codec ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
+            sourceBytes: backendMedia.source_bytes ?? undefined,
+            outputBytes: backendMedia.output_bytes ?? undefined,
           });
           void logClient(
             "viewer.video",
@@ -337,6 +345,8 @@ export function ViewerModal({
               codec: backendMedia.codec ?? undefined,
               elapsedMs: backendMedia.elapsed_ms ?? undefined,
               timeoutMs: backendMedia.timeout_ms ?? undefined,
+              sourceBytes: backendMedia.source_bytes ?? undefined,
+              outputBytes: backendMedia.output_bytes ?? undefined,
             });
             if (!loggedPending) {
               loggedPending = true;
@@ -354,6 +364,8 @@ export function ViewerModal({
             codec: backendMedia.codec ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
+            sourceBytes: backendMedia.source_bytes ?? undefined,
+            outputBytes: backendMedia.output_bytes ?? undefined,
           });
           void logClient(
             "viewer.live_photo",
@@ -515,6 +527,8 @@ export function ViewerModal({
             codec: backendMedia.codec ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
+            sourceBytes: backendMedia.source_bytes ?? undefined,
+            outputBytes: backendMedia.output_bytes ?? undefined,
           });
           await new Promise((resolve) => window.setTimeout(resolve, 750));
           continue;
@@ -524,6 +538,8 @@ export function ViewerModal({
           codec: backendMedia.codec ?? undefined,
           elapsedMs: backendMedia.elapsed_ms ?? undefined,
           timeoutMs: backendMedia.timeout_ms ?? undefined,
+          sourceBytes: backendMedia.source_bytes ?? undefined,
+          outputBytes: backendMedia.output_bytes ?? undefined,
         });
         void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
         setVideoError(backendMedia.message ?? "Video playback unavailable");
@@ -564,6 +580,8 @@ export function ViewerModal({
             codec: backendMedia.codec ?? undefined,
             elapsedMs: backendMedia.elapsed_ms ?? undefined,
             timeoutMs: backendMedia.timeout_ms ?? undefined,
+            sourceBytes: backendMedia.source_bytes ?? undefined,
+            outputBytes: backendMedia.output_bytes ?? undefined,
           });
           await new Promise((resolve) => window.setTimeout(resolve, 750));
           continue;
@@ -573,6 +591,8 @@ export function ViewerModal({
           codec: backendMedia.codec ?? undefined,
           elapsedMs: backendMedia.elapsed_ms ?? undefined,
           timeoutMs: backendMedia.timeout_ms ?? undefined,
+          sourceBytes: backendMedia.source_bytes ?? undefined,
+          outputBytes: backendMedia.output_bytes ?? undefined,
         });
         void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
         setLivePhotoMotionError(backendMedia.message ?? "Live photo playback unavailable");
@@ -1066,10 +1086,21 @@ function formatTranscodeProgress(status: {
   codec?: string;
   elapsedMs?: number;
   timeoutMs?: number;
+  sourceBytes?: number;
+  outputBytes?: number;
 }) {
   const parts: string[] = [];
   if (status.codec) {
     parts.push(`Source codec: ${status.codec}`);
+  }
+  if (typeof status.sourceBytes === "number" && status.sourceBytes > 0) {
+    const written = typeof status.outputBytes === "number" ? status.outputBytes : 0;
+    const progressRatio = Math.max(0, Math.min(1, written / status.sourceBytes));
+    parts.push(
+      `Written ${formatFileSize(written)} / ${formatFileSize(status.sourceBytes)} (${Math.round(progressRatio * 100)}%)`,
+    );
+  } else if (typeof status.outputBytes === "number" && status.outputBytes > 0) {
+    parts.push(`Written ${formatFileSize(status.outputBytes)}`);
   }
   if (typeof status.elapsedMs === "number" && typeof status.timeoutMs === "number") {
     parts.push(
