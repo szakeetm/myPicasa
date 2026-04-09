@@ -8,6 +8,8 @@ import type { AssetListItem, ViewerPlaybackHint } from "../lib/types";
 
 const VIEWER_PREVIEW_SIZE = 2048;
 const GRID_TILE_WIDTH = 210;
+const GRID_GAP = 6;
+const GRID_PADDING = 6;
 
 type MediaGridProps = {
   assets: AssetListItem[];
@@ -40,7 +42,8 @@ type ThumbnailState = {
 };
 
 function columnCount(width: number) {
-  return Math.max(1, Math.floor(width / GRID_TILE_WIDTH));
+  const usableWidth = Math.max(0, width - GRID_PADDING * 2);
+  return Math.max(1, Math.floor((usableWidth + GRID_GAP) / (GRID_TILE_WIDTH + GRID_GAP)));
 }
 
 export function MediaGrid({
@@ -114,11 +117,8 @@ export function MediaGrid({
     return new Set(bootstrapVisibleIds);
   }, [bootstrapVisibleIds, visibleIdSet]);
   const thumbnailSize = useMemo(() => {
-    const devicePixelRatio =
-      typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
-    const estimatedTileWidth = Math.max(width / columns, 160);
-    return Math.min(256, Math.max(256, Math.ceil(estimatedTileWidth * devicePixelRatio * 0.75)));
-  }, [columns, width]);
+    return GRID_TILE_WIDTH;
+  }, []);
 
   useEffect(() => {
     const element = parentRef.current;
@@ -774,7 +774,7 @@ export function MediaGrid({
       <div
         className="media-grid"
         style={{
-          gridTemplateColumns: `repeat(${columns}, ${GRID_TILE_WIDTH}px)`,
+          gridTemplateColumns: `repeat(auto-fit, ${GRID_TILE_WIDTH}px)`,
         }}
       >
         {assets.map((asset) => (

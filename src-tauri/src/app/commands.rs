@@ -36,6 +36,11 @@ use crate::{
 type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
 const VIEWER_PREVIEW_SIZE: u32 = 2048;
+const THUMBNAIL_CACHE_VERSION: u32 = 2;
+
+fn thumbnail_cache_key(asset_id: i64, size: u32) -> String {
+    format!("v{THUMBNAIL_CACHE_VERSION}:{asset_id}:{size}")
+}
 
 fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
@@ -112,7 +117,7 @@ fn enqueue_thumbnail_job(
     size: u32,
     generation: u64,
 ) -> Result<bool, InvokeError> {
-    let key = format!("{asset_id}:{size}");
+    let key = thumbnail_cache_key(asset_id, size);
     let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
     let cache = if use_preview_cache {
         &state.preview_cache
@@ -230,7 +235,7 @@ fn thumbnail_batch_output_state(
     asset_id: i64,
     size: u32,
 ) -> ThumbnailBatchOutputState {
-    let key = format!("{asset_id}:{size}");
+    let key = thumbnail_cache_key(asset_id, size);
     let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
     let cache = if use_preview_cache {
         &state.preview_cache
@@ -1157,7 +1162,7 @@ pub fn request_thumbnail(
     size: u32,
     state: State<AppState>,
 ) -> CommandResult<Option<String>> {
-    let key = format!("{asset_id}:{size}");
+    let key = thumbnail_cache_key(asset_id, size);
     let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
     let cache = if use_preview_cache {
         &state.preview_cache
@@ -1257,7 +1262,7 @@ pub fn request_thumbnails_batch(
     let items = asset_ids
         .into_iter()
         .map(|asset_id| {
-            let key = format!("{asset_id}:{size}");
+            let key = thumbnail_cache_key(asset_id, size);
 
             let cached_path = {
                 let mut cache_guard = cache.lock();

@@ -7,13 +7,19 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use image::{DynamicImage, ImageDecoder, ImageReader, codecs::jpeg::JpegEncoder};
+use image::{
+    DynamicImage, ImageDecoder, ImageReader,
+    codecs::jpeg::JpegEncoder,
+    imageops::FilterType,
+};
 
 use crate::util::errors::AppError;
 
 const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT: Duration = Duration::from_secs(30);
+const THUMBNAIL_JPEG_QUALITY: u8 = 94;
+const THUMBNAIL_SOURCE_JPEG_QUALITY: u8 = 96;
 
 pub fn thumbnail_generator_label(path: &Path) -> &'static str {
     if is_video_path(path) {
@@ -43,23 +49,31 @@ pub fn generate_thumbnail(path: &Path, size: u32, working_dir: &Path) -> Result<
 
     #[cfg(target_os = "macos")]
     {
+        let render_size = thumbnail_render_size(size);
         if matches!(extension.as_str(), "heic" | "heif") {
-            if let Some(bytes) = render_thumbnail_with_quicklook(path, size.max(192), working_dir)? {
-                return Ok(Some(normalize_image_bytes_to_jpeg(&bytes, 82)?));
+            if let Some(bytes) = render_thumbnail_with_quicklook(path, render_size, working_dir)? {
+                return Ok(Some(normalize_image_bytes_to_square_jpeg(
+                    &bytes,
+                    size,
+                    THUMBNAIL_JPEG_QUALITY,
+                )?));
             }
         }
-        if let Some(bytes) = render_with_sips(path, size.max(192), 82, working_dir)? {
-            return Ok(Some(normalize_image_bytes_to_jpeg(&bytes, 82)?));
+        if let Some(bytes) = render_with_sips(path, render_size, THUMBNAIL_SOURCE_JPEG_QUALITY, working_dir)? {
+            return Ok(Some(normalize_image_bytes_to_square_jpeg(
+                &bytes,
+                size,
+                THUMBNAIL_JPEG_QUALITY,
+            )?));
         }
     }
 
     let image = load_image(path, size, working_dir)?;
-    let thumb = image.thumbnail(size, size);
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 82);
-    encoder.encode_image(&thumb)?;
-    Ok(Some(buffer))
+    Ok(Some(encode_square_thumbnail_to_jpeg(
+        &image,
+        size,
+        THUMBNAIL_JPEG_QUALITY,
+    )?))
 }
 
 pub fn generate_viewer_image(path: &Path, max_dimension: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
@@ -492,12 +506,11 @@ fn render_video_thumbnail_with_ffmpeg(
     let bytes = fs::read(&temp_output)?;
     let _ = fs::remove_file(&temp_output);
     let image = image::load_from_memory(&bytes)?;
-    let thumb = image.thumbnail(size, size);
-    let mut buffer = Vec::new();
-    let mut cursor = Cursor::new(&mut buffer);
-    let mut encoder = JpegEncoder::new_with_quality(&mut cursor, 82);
-    encoder.encode_image(&thumb)?;
-    Ok(Some(buffer))
+    Ok(Some(encode_square_thumbnail_to_jpeg(
+        &image,
+        size,
+        THUMBNAIL_JPEG_QUALITY,
+    )?))
 }
 
 fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::DynamicImage, AppError> {
@@ -541,6 +554,10 @@ fn probe_video_seek_seconds(path: &Path) -> Option<f64> {
     } else {
         (duration * 0.1).clamp(0.5, 2.0)
     })
+}
+
+fn thumbnail_render_size(size: u32) -> u32 {
+    size.saturating_mul(2).clamp(size.max(1), 512)
 }
 
 fn find_command_binary(name: &str) -> Option<PathBuf> {
@@ -747,14 +764,31 @@ fn temp_render_dir(path: &Path, working_dir: &Path) -> PathBuf {
     working_dir.join(format!("mypicasa-ql-{stem}-{stamp}"))
 }
 
-fn normalize_image_bytes_to_jpeg(bytes: &[u8], quality: u8) -> Result<Vec<u8>, AppError> {
-    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
-    let image = decode_with_orientation(reader)?;
+fn render_center_square(image: &DynamicImage, size: u32) -> DynamicImage {
+    image.resize_to_fill(size, size, FilterType::Lanczos3)
+}
+
+fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, AppError> {
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);
-    encoder.encode_image(&image)?;
+    encoder.encode_image(image)?;
     Ok(buffer)
+}
+
+fn encode_square_thumbnail_to_jpeg(
+    image: &DynamicImage,
+    size: u32,
+    quality: u8,
+) -> Result<Vec<u8>, AppError> {
+    let thumb = render_center_square(image, size.max(1));
+    encode_jpeg(&thumb, quality)
+}
+
+fn normalize_image_bytes_to_square_jpeg(bytes: &[u8], size: u32, quality: u8) -> Result<Vec<u8>, AppError> {
+    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let image = decode_with_orientation(reader)?;
+    encode_square_thumbnail_to_jpeg(&image, size, quality)
 }
 
 fn wait_for_status_with_timeout(
