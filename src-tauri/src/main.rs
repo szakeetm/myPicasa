@@ -87,18 +87,20 @@ fn process_thumbnail_job(
             .to_string();
         let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
         let started = std::time::Instant::now();
+        let queued_elapsed_ms = job.queued_at.elapsed().as_millis();
         let kind = thumb_log_kind(job.size);
         let generator = thumbnail_generator_label(&primary_path_buf);
         let _ = db.insert_log(
             "info",
             "thumb_gen",
             &format!(
-                "kind={kind} generator={generator} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={}",
+                "kind={kind} generator={generator} status=start worker={} asset_id={} size={}px filename=\"{}\" file_size={} queue_elapsed={}",
                 worker_index,
                 job.asset_id,
                 job.size,
                 filename,
-                human_size(file_size)
+                human_size(file_size),
+                human_elapsed_ms(queued_elapsed_ms),
             ),
             Some(job.asset_id),
         );
@@ -112,14 +114,14 @@ fn process_thumbnail_job(
         ));
         let generated =
             generate_thumbnail(&primary_path_buf, job.size, working_dir).map_err(|error| error.to_string())?;
-        match &generated {
+        match &generated.bytes {
             Some(bytes) => {
                 let elapsed_ms = started.elapsed().as_millis();
                 let _ = db.insert_log(
                     "info",
                     "thumb_gen",
                     &format!(
-                        "kind={kind} generator={generator} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={} elapsed={}",
+                        "kind={kind} generator={generator} status=success worker={} asset_id={} size={}px filename=\"{}\" file_size={} generated_size={} elapsed={} total_elapsed={} metrics=\"{}\"",
                         worker_index,
                         job.asset_id,
                         job.size,
@@ -127,6 +129,8 @@ fn process_thumbnail_job(
                         human_size(file_size),
                         human_size(bytes.len() as u64),
                         human_elapsed_ms(elapsed_ms),
+                        human_elapsed_ms(queued_elapsed_ms + elapsed_ms),
+                        generated.metrics,
                     ),
                     Some(job.asset_id),
                 );
@@ -145,13 +149,15 @@ fn process_thumbnail_job(
                     "warning",
                     "thumb_gen",
                     &format!(
-                        "kind={kind} generator={generator} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={} elapsed={}",
+                        "kind={kind} generator={generator} status=unavailable worker={} asset_id={} size={}px filename=\"{}\" file_size={} elapsed={} total_elapsed={} metrics=\"{}\"",
                         worker_index,
                         job.asset_id,
                         job.size,
                         filename,
                         human_size(file_size),
                         human_elapsed_ms(elapsed_ms),
+                        human_elapsed_ms(queued_elapsed_ms + elapsed_ms),
+                        generated.metrics,
                     ),
                     Some(job.asset_id),
                 );
@@ -164,7 +170,7 @@ fn process_thumbnail_job(
                 ));
             }
         }
-        Ok(generated)
+        Ok(generated.bytes)
     })();
 
     match result {

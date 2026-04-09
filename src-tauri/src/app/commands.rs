@@ -37,10 +37,11 @@ type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
 const VIEWER_PREVIEW_SIZE: u32 = 2048;
 const THUMBNAIL_CACHE_VERSION: u32 = 2;
+const PREVIEW_CACHE_VERSION: u32 = 2;
 
 fn thumbnail_cache_key(asset_id: i64, size: u32) -> String {
     if size >= VIEWER_PREVIEW_SIZE {
-        format!("{asset_id}:{size}")
+        format!("pv{PREVIEW_CACHE_VERSION}:{asset_id}:{size}")
     } else {
         format!("v{THUMBNAIL_CACHE_VERSION}:{asset_id}:{size}")
     }
@@ -157,6 +158,7 @@ fn enqueue_thumbnail_job(
         size,
         key: key.clone(),
         generation,
+        queued_at: Instant::now(),
     }) {
         if !use_preview_cache {
             state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -1197,16 +1199,20 @@ pub fn request_thumbnail(
 
     let working_dir = state.app_data_dir.join("working");
     match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
-        Ok(Some(bytes)) => {
+        Ok(result) => {
+            let metrics = result.metrics;
+            let generated = result.bytes;
+            if let Some(bytes) = generated {
             record_thumb_log(
                 state.inner(),
                 "info",
                 asset_id,
                 format!(
-                    "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={}",
+                    "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={} metrics=\"{}\"",
                     human_size(file_size),
                     human_size(bytes.len() as u64),
-                    human_elapsed_ms(started.elapsed().as_millis())
+                    human_elapsed_ms(started.elapsed().as_millis()),
+                    metrics,
                 ),
             )?;
             let mut cache = cache.lock();
@@ -1214,19 +1220,20 @@ pub fn request_thumbnail(
             Ok(cache
                 .cached_path(&key)
                 .map(|path| path.to_string_lossy().to_string()))
-        }
-        Ok(None) => {
+            } else {
             record_thumb_log(
                 state.inner(),
                 "warning",
                 asset_id,
                 format!(
-                    "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={}",
+                    "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={} elapsed={} metrics=\"{}\"",
                     human_size(file_size),
-                    human_elapsed_ms(started.elapsed().as_millis())
+                    human_elapsed_ms(started.elapsed().as_millis()),
+                    metrics,
                 ),
             )?;
             Ok(None)
+            }
         }
         Err(error) => {
             error!(asset_id, %error, "thumbnail generation failed");
@@ -1255,6 +1262,7 @@ pub fn request_thumbnails_batch(
     size: u32,
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
+    let started = Instant::now();
     let generation = state.thumbnail_generation.load(Ordering::SeqCst);
     let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
     let cache = if use_preview_cache {
@@ -1320,6 +1328,7 @@ pub fn request_thumbnails_batch(
                     size,
                     key: key.clone(),
                     generation,
+                    queued_at: Instant::now(),
                 }) {
                     if !use_preview_cache {
                         state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
@@ -1357,6 +1366,25 @@ pub fn request_thumbnails_batch(
             }
         })
         .collect::<Vec<_>>();
+
+    if use_preview_cache {
+        let ready = items.iter().filter(|item| item.status == "ready").count();
+        let pending = items.iter().filter(|item| item.status == "pending").count();
+        let unavailable = items.iter().filter(|item| item.status == "unavailable").count();
+        let _ = state.db.insert_log(
+            "info",
+            "thumbnail_batch",
+            &format!(
+                "kind=preview status=batch requested={} ready={} pending={} unavailable={} elapsed={}",
+                items.len(),
+                ready,
+                pending,
+                unavailable,
+                human_elapsed_ms(started.elapsed().as_millis()),
+            ),
+            None,
+        );
+    }
 
     Ok(items)
 }

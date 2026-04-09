@@ -13,6 +13,7 @@ pub struct ThumbnailJob {
     pub size: u32,
     pub key: String,
     pub generation: u64,
+    pub queued_at: std::time::Instant,
 }
 
 #[derive(Clone)]

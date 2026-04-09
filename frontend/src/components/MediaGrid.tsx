@@ -338,7 +338,7 @@ export function MediaGrid({
           return (
             asset.media_kind !== "video" &&
             state?.status === "ready" &&
-            !state.previewStatus
+            (state.previewStatus === undefined || state.previewStatus === "pending")
           );
         })
         .slice(0, 4)
@@ -370,6 +370,7 @@ export function MediaGrid({
 
       previewRequestInFlightRef.current = true;
       try {
+        const requestStarted = performance.now();
         const batch = await api.requestThumbnailsBatch(targetIds, VIEWER_PREVIEW_SIZE);
         if (disposed) {
           return;
@@ -386,7 +387,7 @@ export function MediaGrid({
                     ? "ready"
                     : item.status === "unavailable"
                       ? "unavailable"
-                      : undefined,
+                      : "pending",
               };
             }
             return next;
@@ -398,7 +399,7 @@ export function MediaGrid({
         const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
         void logClient(
           "grid",
-          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=${VIEWER_PREVIEW_SIZE} mode=auto`,
+          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=${VIEWER_PREVIEW_SIZE} mode=auto elapsed_ms=${Math.round(performance.now() - requestStarted)}`,
         );
       } catch (error) {
         if (disposed) {
