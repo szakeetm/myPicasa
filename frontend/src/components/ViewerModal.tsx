@@ -2,6 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 
 import dayjs from "dayjs";
 import { convertFileSrc } from "@tauri-apps/api/core";
+import {
+  TransformComponent,
+  TransformWrapper,
+  type ReactZoomPanPinchRef,
+} from "react-zoom-pan-pinch";
 
 import { logClient } from "../lib/logger";
 import { api } from "../lib/tauri";
@@ -62,22 +67,11 @@ export function ViewerModal({
   const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>();
   const [displaySourceLabel, setDisplaySourceLabel] = useState<string>("Loading");
   const viewerMediaRef = useRef<HTMLDivElement | null>(null);
-  const imageFrameRef = useRef<HTMLDivElement | null>(null);
-  const imageElementRef = useRef<HTMLImageElement | null>(null);
+  const imageTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const livePhotoVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const videoObjectUrlRef = useRef<string | undefined>(undefined);
   const livePhotoObjectUrlRef = useRef<string | undefined>(undefined);
-  const pendingZoomFocusRef = useRef<
-    | {
-        clientX: number;
-        clientY: number;
-        logicalX: number;
-        logicalY: number;
-        nextZoom: number;
-      }
-    | null
-  >(null);
   const videoSourceLabelRef = useRef<string>("unset");
   const livePhotoSourceLabelRef = useRef<string>("unset");
   const imageSourceLabelRef = useRef<string>("unset");
@@ -157,27 +151,27 @@ export function ViewerModal({
       ? fitZoom
       : zoom
     : 1;
-  const isScrollable =
-    !!canonicalImageSize &&
-    !!viewportSize &&
-    (canonicalImageSize.width * effectiveZoom > viewportSize.width ||
-      canonicalImageSize.height * effectiveZoom > viewportSize.height);
 
   function setActualSize() {
     setZoomMode("custom");
     setZoom(1);
+    imageTransformRef.current?.setTransform(0, 0, 1, 150, "easeOut");
   }
 
   function setFitMode() {
     setZoomMode("fit");
+    if (fitZoom > 0) {
+      imageTransformRef.current?.setTransform(0, 0, fitZoom, 150, "easeOut");
+      setZoom(fitZoom);
+    }
   }
 
   function adjustZoom(delta: number) {
+    const base = imageTransformRef.current?.state.scale ?? effectiveZoom;
+    const nextZoom = Math.min(Math.max(base + delta, 0.1), 8);
     setZoomMode("custom");
-    setZoom((current) => {
-      const base = zoomMode === "fit" ? fitZoom : current;
-      return Math.min(Math.max(base + delta, 0.1), 8);
-    });
+    setZoom(nextZoom);
+    imageTransformRef.current?.zoomToElement("viewer-photo-image", nextZoom);
   }
 
   function setImageSourceLabel(label: string) {
@@ -623,32 +617,6 @@ export function ViewerModal({
     }
   }
 
-  function setZoomWithFocus(nextZoom: number, clientX?: number, clientY?: number) {
-    const clampedZoom = Math.min(Math.max(nextZoom, 0.1), 8);
-    const imageElement = imageElementRef.current;
-    const mediaElement = viewerMediaRef.current;
-    if (
-      typeof clientX === "number" &&
-      typeof clientY === "number" &&
-      imageElement &&
-      mediaElement &&
-      effectiveZoom > 0
-    ) {
-      const imageRect = imageElement.getBoundingClientRect();
-      pendingZoomFocusRef.current = {
-        clientX,
-        clientY,
-        logicalX: (clientX - imageRect.left) / effectiveZoom,
-        logicalY: (clientY - imageRect.top) / effectiveZoom,
-        nextZoom: clampedZoom,
-      };
-    } else {
-      pendingZoomFocusRef.current = null;
-    }
-    setZoomMode("custom");
-    setZoom(clampedZoom);
-  }
-
   function handleVideoDiagnostics(
     scope: "viewer.video" | "viewer.live_photo",
     label: string,
@@ -672,29 +640,6 @@ export function ViewerModal({
       errorCode ? "error" : "info",
     );
   }
-
-  useEffect(() => {
-    const pendingFocus = pendingZoomFocusRef.current;
-    const mediaElement = viewerMediaRef.current;
-    const imageElement = imageElementRef.current;
-    if (!pendingFocus || !mediaElement || !imageElement || !isPhoto || zoomMode !== "custom") {
-      return;
-    }
-
-    const frame = window.requestAnimationFrame(() => {
-      const mediaRect = mediaElement.getBoundingClientRect();
-      const imageRect = imageElement.getBoundingClientRect();
-      const targetOffsetX = pendingFocus.clientX - mediaRect.left;
-      const targetOffsetY = pendingFocus.clientY - mediaRect.top;
-      const focusedPixelX = imageRect.left - mediaRect.left + pendingFocus.logicalX * pendingFocus.nextZoom;
-      const focusedPixelY = imageRect.top - mediaRect.top + pendingFocus.logicalY * pendingFocus.nextZoom;
-      mediaElement.scrollLeft += focusedPixelX - targetOffsetX;
-      mediaElement.scrollTop += focusedPixelY - targetOffsetY;
-      pendingZoomFocusRef.current = null;
-    });
-
-    return () => window.cancelAnimationFrame(frame);
-  }, [effectiveZoom, isPhoto, zoomMode]);
 
   useEffect(() => {
     if (!asset) return;
@@ -727,55 +672,12 @@ export function ViewerModal({
   }, [asset, fitZoom, hasNext, hasPrevious, isPhoto, onClose, onNext, onPrevious, zoomMode]);
 
   useEffect(() => {
-    const element = viewerMediaRef.current;
-    if (!element || !isPhoto) {
+    if (!isPhoto || zoomMode !== "fit" || fitZoom <= 0) {
       return;
     }
-
-    let gestureBaseZoom = 1;
-    const onWheel = (event: WheelEvent) => {
-      if (!event.ctrlKey) {
-        return;
-      }
-      event.preventDefault();
-      const base = zoomMode === "fit" ? fitZoom : zoom;
-      const factor = Math.exp(-event.deltaY * 0.01);
-      setZoomWithFocus(base * factor, event.clientX, event.clientY);
-    };
-    const onGestureStart = () => {
-      gestureBaseZoom = zoomMode === "fit" ? fitZoom : zoom;
-    };
-    const onGestureChange = (event: Event) => {
-      const gestureEvent = event as Event & {
-        scale?: number;
-        clientX?: number;
-        clientY?: number;
-        pageX?: number;
-        pageY?: number;
-      };
-      if (typeof gestureEvent.scale !== "number") {
-        return;
-      }
-      event.preventDefault();
-      const mediaRect = element.getBoundingClientRect();
-      const fallbackClientX = mediaRect.left + mediaRect.width / 2;
-      const fallbackClientY = mediaRect.top + mediaRect.height / 2;
-      setZoomWithFocus(
-        gestureBaseZoom * gestureEvent.scale,
-        gestureEvent.clientX ?? gestureEvent.pageX ?? fallbackClientX,
-        gestureEvent.clientY ?? gestureEvent.pageY ?? fallbackClientY,
-      );
-    };
-
-    element.addEventListener("wheel", onWheel, { passive: false });
-    element.addEventListener("gesturestart", onGestureStart as EventListener);
-    element.addEventListener("gesturechange", onGestureChange as EventListener);
-    return () => {
-      element.removeEventListener("wheel", onWheel);
-      element.removeEventListener("gesturestart", onGestureStart as EventListener);
-      element.removeEventListener("gesturechange", onGestureChange as EventListener);
-    };
-  }, [fitZoom, isPhoto, zoom, zoomMode]);
+    imageTransformRef.current?.setTransform(0, 0, fitZoom, 150, "easeOut");
+    setZoom(fitZoom);
+  }, [fitZoom, isPhoto, zoomMode]);
 
   useEffect(() => {
     if (showLivePhotoMotion) {
@@ -973,67 +875,97 @@ export function ViewerModal({
               <div className="muted">Loading live photo…</div>
             )
           ) : imageSrc && assetId === asset.id ? (
-            <div
-              ref={imageFrameRef}
-              className={`viewer-image-frame${isScrollable ? " zoomed" : ""}`}
-            >
-              {livePhotoPath ? (
-                <button
-                  className="viewer-live-photo-button"
-                  type="button"
-                  onClick={() => setShowLivePhotoMotion(true)}
-                >
-                  Play Live Photo
-                </button>
-              ) : null}
-              <img
-                ref={imageElementRef}
-                src={imageSrc}
-                alt={asset.title ?? "asset"}
-                className={livePhotoPath ? "viewer-live-photo-still" : undefined}
-                style={
-                  canonicalImageSize
-                    ? {
-                        width: `${Math.max(1, Math.round(canonicalImageSize.width * effectiveZoom))}px`,
-                        height: `${Math.max(1, Math.round(canonicalImageSize.height * effectiveZoom))}px`,
-                      }
-                    : undefined
+            <TransformWrapper
+              centerOnInit
+              doubleClick={{ disabled: true }}
+              initialScale={Math.max(fitZoom, 0.1)}
+              maxScale={8}
+              minScale={Math.min(Math.max(fitZoom, 0.1), 1)}
+              pinch={{ step: 5 }}
+              wheel={{ step: 0.12 }}
+              panning={{ velocityDisabled: true }}
+              onInit={(ref) => {
+                imageTransformRef.current = ref;
+                if (zoomMode === "fit" && fitZoom > 0) {
+                  ref.setTransform(0, 0, fitZoom, 0, "easeOut");
+                  setZoom(fitZoom);
+                } else {
+                  setZoom(ref.state.scale);
                 }
-                onLoad={(event) => {
-                  void logClient(
-                    "viewer.image",
-                    `asset ${assetId} image loaded source=${imageSourceLabelRef.current} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
-                  );
-                  setNaturalSize({
-                    width: event.currentTarget.naturalWidth,
-                    height: event.currentTarget.naturalHeight,
-                  });
-                }}
-                onClick={() => {
-                  if (livePhotoPath) {
-                    setShowLivePhotoMotion(true);
-                  }
-                }}
-                onError={() => {
-                  if (!forceRenderedFrame) {
-                    void logClient(
-                      "viewer.image",
-                      `asset ${assetId} backend original image failed, switching to rendered fallback path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
-                      "error",
-                    );
-                    setForceRenderedFrame(true);
-                    return;
-                  }
-                  void logClient(
-                    "viewer.image",
-                    `asset ${assetId} image unavailable after fallback path=${asset?.primary_path ?? "unknown"}`,
-                    "error",
-                  );
-                  setImageSrc(undefined);
-                  setImageError("Image preview unavailable");
-                }}
-              />
-            </div>
+              }}
+              onTransform={(_, state) => {
+                const scale = state.scale;
+                setZoom(scale);
+                if (zoomMode === "fit" && Math.abs(scale - fitZoom) > 0.01) {
+                  setZoomMode("custom");
+                }
+              }}
+            >
+              <TransformComponent
+                contentClass="viewer-transform-content"
+                wrapperClass="viewer-transform-wrapper"
+                wrapperStyle={{ width: "100%", height: "100%" }}
+              >
+                <div className="viewer-image-frame">
+                  {livePhotoPath ? (
+                    <button
+                      className="viewer-live-photo-button"
+                      type="button"
+                      onClick={() => setShowLivePhotoMotion(true)}
+                    >
+                      Play Live Photo
+                    </button>
+                  ) : null}
+                  <img
+                    id="viewer-photo-image"
+                    src={imageSrc}
+                    alt={asset.title ?? "asset"}
+                    className={livePhotoPath ? "viewer-live-photo-still" : undefined}
+                    style={
+                      canonicalImageSize
+                        ? {
+                            width: `${Math.max(1, Math.round(canonicalImageSize.width))}px`,
+                            height: `${Math.max(1, Math.round(canonicalImageSize.height))}px`,
+                          }
+                        : undefined
+                    }
+                    onLoad={(event) => {
+                      void logClient(
+                        "viewer.image",
+                        `asset ${assetId} image loaded source=${imageSourceLabelRef.current} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
+                      );
+                      setNaturalSize({
+                        width: event.currentTarget.naturalWidth,
+                        height: event.currentTarget.naturalHeight,
+                      });
+                    }}
+                    onClick={() => {
+                      if (livePhotoPath) {
+                        setShowLivePhotoMotion(true);
+                      }
+                    }}
+                    onError={() => {
+                      if (!forceRenderedFrame) {
+                        void logClient(
+                          "viewer.image",
+                          `asset ${assetId} backend original image failed, switching to rendered fallback path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
+                          "error",
+                        );
+                        setForceRenderedFrame(true);
+                        return;
+                      }
+                      void logClient(
+                        "viewer.image",
+                        `asset ${assetId} image unavailable after fallback path=${asset?.primary_path ?? "unknown"}`,
+                        "error",
+                      );
+                      setImageSrc(undefined);
+                      setImageError("Image preview unavailable");
+                    }}
+                  />
+                </div>
+              </TransformComponent>
+            </TransformWrapper>
           ) : imageError ? (
             <div className="muted">{imageError}</div>
           ) : (

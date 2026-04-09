@@ -33,8 +33,7 @@ export function DebugPanel({
             <div className="debug-cache-summary">
               <div className="muted">
                 thumbnails: {cacheStats.thumbnail_items} items •{" "}
-                {Math.round((cacheStats.thumbnail_bytes / 1024 / 1024) * 10) / 10} /{" "}
-                {Math.round(cacheStats.thumbnail_budget_bytes / 1024 / 1024)} MB
+                {Math.round((cacheStats.thumbnail_bytes / 1024 / 1024) * 10) / 10} MB
               </div>
               <div className="button-row">
                 <button className="button-secondary" onClick={onOpenThumbLog}>
@@ -51,8 +50,7 @@ export function DebugPanel({
             <div className="debug-cache-summary">
               <div className="muted">
                 viewer previews: {cacheStats.preview_items} items •{" "}
-                {Math.round((cacheStats.preview_bytes / 1024 / 1024) * 10) / 10} /{" "}
-                {Math.round(cacheStats.preview_budget_bytes / 1024 / 1024)} MB
+                {Math.round((cacheStats.preview_bytes / 1024 / 1024) * 10) / 10} MB
               </div>
             </div>
             <div className="debug-cache-summary">

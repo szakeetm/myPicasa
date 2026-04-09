@@ -176,8 +176,12 @@ pub struct BatchViewerTranscodeStatus {
     pub current_asset_id: Option<i64>,
     pub current_filename: Option<String>,
     pub current_codec: Option<String>,
+    pub current_width: Option<u32>,
+    pub current_height: Option<u32>,
+    pub current_duration_ms: Option<u64>,
     pub current_source_bytes: Option<u64>,
     pub current_output_bytes: Option<u64>,
+    pub current_elapsed_ms: Option<u64>,
     pub elapsed_ms: Option<u64>,
     pub message: Option<String>,
 }

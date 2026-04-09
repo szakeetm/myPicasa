@@ -15,7 +15,7 @@ use crate::{
     media::thumb::{
         clear_viewer_render_cache, generate_thumbnail, generate_viewer_image,
         generate_viewer_image_file, generate_viewer_video, probe_media_duration_ms,
-        probe_primary_video_codec,
+        probe_primary_video_codec, probe_video_dimensions,
         thumbnail_generator_label, viewer_render_cache_stats, viewer_video_cache_path,
         VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT,
     },
@@ -474,6 +474,10 @@ fn source_is_natively_playable(
 fn batch_viewer_transcode_status_snapshot(
     state: &BatchViewerTranscodeState,
 ) -> BatchViewerTranscodeStatus {
+    let current_output_bytes = state.current_output_path.as_deref().map(output_bytes_for_path);
+    let current_elapsed_ms = state
+        .current_started_at
+        .map(|started_at| started_at.elapsed().as_millis() as u64);
     BatchViewerTranscodeStatus {
         status: if state.running {
             "running".to_string()
@@ -491,8 +495,12 @@ fn batch_viewer_transcode_status_snapshot(
         current_asset_id: state.current_asset_id,
         current_filename: state.current_filename.clone(),
         current_codec: state.current_codec.clone(),
+        current_width: state.current_width,
+        current_height: state.current_height,
+        current_duration_ms: state.current_duration_ms,
         current_source_bytes: state.current_source_bytes,
-        current_output_bytes: state.current_output_bytes,
+        current_output_bytes: current_output_bytes.or(state.current_output_bytes),
+        current_elapsed_ms,
         elapsed_ms: state.elapsed_ms.or_else(|| {
             state
                 .started_at
@@ -535,8 +543,13 @@ pub fn start_batch_viewer_transcode(
             current_asset_id: None,
             current_filename: None,
             current_codec: None,
+            current_width: None,
+            current_height: None,
+            current_duration_ms: None,
             current_source_bytes: None,
             current_output_bytes: None,
+            current_started_at: None,
+            current_output_path: None,
             started_at: Some(Instant::now()),
             elapsed_ms: None,
             message: Some("Discovering videos...".to_string()),
@@ -585,8 +598,13 @@ pub fn start_batch_viewer_transcode(
                     status.current_asset_id = None;
                     status.current_filename = None;
                     status.current_codec = None;
+                    status.current_width = None;
+                    status.current_height = None;
+                    status.current_duration_ms = None;
                     status.current_source_bytes = None;
                     status.current_output_bytes = None;
+                    status.current_started_at = None;
+                    status.current_output_path = None;
                     status.elapsed_ms = status
                         .started_at
                         .map(|started_at| started_at.elapsed().as_millis() as u64);
@@ -610,13 +628,24 @@ pub fn start_batch_viewer_transcode(
                 let status = worker_state.batch_viewer_transcode.lock();
                 status.total
             };
+            let dimensions = probe_video_dimensions(&PathBuf::from(&source_path))
+                .ok()
+                .flatten();
+            let resolution = dimensions
+                .map(|(width, height)| format!("{width}x{height}"))
+                .unwrap_or_else(|| "unknown".to_string());
             {
                 let mut status = worker_state.batch_viewer_transcode.lock();
                 status.current_asset_id = Some(asset_id);
                 status.current_filename = Some(filename.clone());
                 status.current_codec = codec.clone();
+                status.current_width = dimensions.map(|(width, _)| width);
+                status.current_height = dimensions.map(|(_, height)| height);
+                status.current_duration_ms = None;
                 status.current_source_bytes = Some(source_bytes);
                 status.current_output_bytes = None;
+                status.current_started_at = None;
+                status.current_output_path = None;
                 status.message = Some(format!("Transcoding {} of {}", index + 1, total));
             }
 
@@ -629,8 +658,9 @@ pub fn start_batch_viewer_transcode(
                     "info",
                     "batch_viewer_transcode",
                     &format!(
-                        "[skipped-native] filename=\"{filename}\" source_codec={} source_size={}",
+                        "[skipped-native] filename=\"{filename}\" source_codec={} resolution={} source_size={}",
                         codec.clone().unwrap_or_else(|| "unknown".to_string()),
+                        resolution,
                         human_size(source_bytes)
                     ),
                     Some(asset_id),
@@ -643,8 +673,21 @@ pub fn start_batch_viewer_transcode(
                 .flatten()
                 .and_then(|value| u64::try_from(value).ok())
                 .unwrap_or(0);
+            let temp_output_path = viewer_video_cache_path(&PathBuf::from(&source_path), &viewer_cache_dir)
+                .ok()
+                .flatten()
+                .map(|path| path.with_extension("tmp.mp4"));
             let timeout_ms = duration_ms.max(VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT.as_millis() as u64);
             let transcode_started_at = Instant::now();
+            {
+                let mut status = worker_state.batch_viewer_transcode.lock();
+                status.current_duration_ms = Some(duration_ms);
+                status.current_started_at = Some(transcode_started_at);
+                status.current_output_path = temp_output_path.clone();
+                status.current_output_bytes = temp_output_path
+                    .as_deref()
+                    .map(output_bytes_for_path);
+            }
             match generate_viewer_video(
                 &PathBuf::from(&source_path),
                 &viewer_cache_dir,
@@ -659,21 +702,24 @@ pub fn start_batch_viewer_transcode(
                     if cache_hit {
                         status.skipped += 1;
                     }
+                    status.current_duration_ms = Some(duration_ms);
                     status.current_output_bytes = Some(output_bytes);
                     let status_label = if cache_hit { "skipped-present" } else { "success" };
                     let log_message = if cache_hit {
                         format!(
-                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} video_duration={} output_size={}",
+                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} resolution={} video_duration={} output_size={}",
                             codec.clone().unwrap_or_else(|| "unknown".to_string()),
                             encoder,
+                            resolution,
                             video_duration,
                             human_size(output_bytes),
                         )
                     } else {
                         format!(
-                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} video_duration={} transcode_duration={} output_size={}",
+                            "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} resolution={} video_duration={} transcode_duration={} output_size={}",
                             codec.clone().unwrap_or_else(|| "unknown".to_string()),
                             encoder,
+                            resolution,
                             video_duration,
                             transcode_elapsed,
                             human_size(output_bytes),
@@ -689,12 +735,17 @@ pub fn start_batch_viewer_transcode(
                 Ok(None) => {
                     let mut status = worker_state.batch_viewer_transcode.lock();
                     status.failed += 1;
+                    status.current_duration_ms = Some(duration_ms);
+                    status.current_output_bytes = temp_output_path
+                        .as_deref()
+                        .map(output_bytes_for_path);
                     let _ = worker_state.db.insert_log(
                         "warning",
                         "batch_viewer_transcode",
                         &format!(
-                            "[unavailable] filename=\"{filename}\" source_codec={}",
-                            codec.clone().unwrap_or_else(|| "unknown".to_string())
+                            "[unavailable] filename=\"{filename}\" source_codec={} resolution={}",
+                            codec.clone().unwrap_or_else(|| "unknown".to_string()),
+                            resolution
                         ),
                         Some(asset_id),
                     );
@@ -702,12 +753,18 @@ pub fn start_batch_viewer_transcode(
                 Err(error) => {
                     let mut status = worker_state.batch_viewer_transcode.lock();
                     status.failed += 1;
+                    status.current_duration_ms = Some(duration_ms);
+                    status.current_output_bytes = temp_output_path
+                        .as_deref()
+                        .map(output_bytes_for_path);
                     let _ = worker_state.db.insert_log(
                         "error",
                         "batch_viewer_transcode",
                         &format!(
-                            "[failed] filename=\"{filename}\" source_codec={} error={error}",
+                            "[failed] filename=\"{filename}\" source_codec={} resolution={} error={error}",
                             codec.clone().unwrap_or_else(|| "unknown".to_string())
+                            ,
+                            resolution
                         ),
                         Some(asset_id),
                     );
@@ -720,8 +777,13 @@ pub fn start_batch_viewer_transcode(
         status.current_asset_id = None;
         status.current_filename = None;
         status.current_codec = None;
+        status.current_width = None;
+        status.current_height = None;
+        status.current_duration_ms = None;
         status.current_source_bytes = None;
         status.current_output_bytes = None;
+        status.current_started_at = None;
+        status.current_output_path = None;
         status.elapsed_ms = status
             .started_at
             .map(|started_at| started_at.elapsed().as_millis() as u64);

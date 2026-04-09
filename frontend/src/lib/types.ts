@@ -128,8 +128,12 @@ export type BatchViewerTranscodeStatus = {
   current_asset_id?: number | null;
   current_filename?: string | null;
   current_codec?: string | null;
+  current_width?: number | null;
+  current_height?: number | null;
+  current_duration_ms?: number | null;
   current_source_bytes?: number | null;
   current_output_bytes?: number | null;
+  current_elapsed_ms?: number | null;
   elapsed_ms?: number | null;
   message?: string | null;
 };

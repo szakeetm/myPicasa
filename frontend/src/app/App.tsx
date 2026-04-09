@@ -608,11 +608,28 @@ export function App() {
                   Source codec {batchTranscodeStatus.current_codec}
                 </div>
               ) : null}
+              {typeof batchTranscodeStatus?.current_width === "number" &&
+              typeof batchTranscodeStatus?.current_height === "number" ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Resolution {batchTranscodeStatus.current_width}x{batchTranscodeStatus.current_height}
+                </div>
+              ) : null}
+              {typeof batchTranscodeStatus?.current_duration_ms === "number" &&
+              batchTranscodeStatus.current_duration_ms > 0 ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Duration {formatMediaDurationMs(batchTranscodeStatus.current_duration_ms)}
+                </div>
+              ) : null}
+              {typeof batchTranscodeStatus?.current_elapsed_ms === "number" ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Current elapsed {(batchTranscodeStatus.current_elapsed_ms / 1000).toFixed(1)}s
+                </div>
+              ) : null}
               {typeof batchTranscodeStatus?.current_source_bytes === "number" ? (
                 <div className="muted" style={{ marginTop: 8 }}>
                   Source {formatFileSize(batchTranscodeStatus.current_source_bytes)}
                   {typeof batchTranscodeStatus.current_output_bytes === "number"
-                    ? ` • output ${formatFileSize(batchTranscodeStatus.current_output_bytes)}`
+                    ? ` • Written ${formatFileSize(batchTranscodeStatus.current_output_bytes)}`
                     : ""}
                 </div>
               ) : null}
@@ -705,6 +722,17 @@ function formatBatchStatusLine(status?: BatchViewerTranscodeStatus) {
     parts.push(status.message);
   }
   return parts.join(" • ");
+}
+
+function formatMediaDurationMs(durationMs: number) {
+  const totalSeconds = Math.max(0, Math.round(durationMs / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) {
+    return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
 function getViewerPlaybackSupport(): ViewerPlaybackSupport {

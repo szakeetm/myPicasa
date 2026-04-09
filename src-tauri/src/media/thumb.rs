@@ -338,7 +338,7 @@ fn viewer_video_bitrate_profile(dimensions: Option<(u32, u32)>) -> (&'static str
     }
 }
 
-fn probe_video_dimensions(path: &Path) -> Result<Option<(u32, u32)>, AppError> {
+pub fn probe_video_dimensions(path: &Path) -> Result<Option<(u32, u32)>, AppError> {
     let Some(ffprobe) = find_command_binary("ffprobe") else {
         return Ok(None);
     };
