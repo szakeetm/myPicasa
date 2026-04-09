@@ -109,4 +109,7 @@ export type ViewerMediaStatus = {
   src?: string | null;
   source?: string | null;
   message?: string | null;
+  codec?: string | null;
+  elapsed_ms?: number | null;
+  timeout_ms?: number | null;
 };

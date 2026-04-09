@@ -156,4 +156,7 @@ pub struct ViewerMediaStatus {
     pub src: Option<String>,
     pub source: Option<String>,
     pub message: Option<String>,
+    pub codec: Option<String>,
+    pub elapsed_ms: Option<u64>,
+    pub timeout_ms: Option<u64>,
 }

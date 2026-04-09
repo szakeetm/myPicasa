@@ -13,6 +13,7 @@ use crate::util::errors::AppError;
 
 const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
+pub const VIEWER_VIDEO_TRANSCODE_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub fn thumbnail_generator_label(path: &Path) -> &'static str {
     if is_video_path(path) {
@@ -174,7 +175,7 @@ pub fn generate_viewer_video(path: &Path, cache_dir: &Path) -> Result<Option<(Pa
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()?,
-        EXTERNAL_TOOL_TIMEOUT,
+        VIEWER_VIDEO_TRANSCODE_TIMEOUT,
         "ffmpeg viewer transcode",
     )?;
 

@@ -247,6 +247,7 @@ export function MediaGrid({
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
           return (
+            asset.media_kind !== "video" &&
             state?.status === "ready" &&
             !state.previewStatus
           );

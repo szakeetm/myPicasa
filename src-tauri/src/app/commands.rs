@@ -16,6 +16,7 @@ use crate::{
         clear_viewer_render_cache, generate_thumbnail, generate_viewer_image,
         generate_viewer_image_file, generate_viewer_video, probe_primary_video_codec,
         thumbnail_generator_label, viewer_render_cache_stats, viewer_video_cache_path,
+        VIEWER_VIDEO_TRANSCODE_TIMEOUT,
     },
     models::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, CacheStats,
@@ -141,38 +142,56 @@ fn image_requires_backend_orientation(path: &std::path::Path) -> bool {
     )
 }
 
-fn ready_viewer_media_status(src: String, source: String) -> ViewerMediaStatus {
+fn ready_viewer_media_status(src: String, source: String, codec: Option<String>) -> ViewerMediaStatus {
     ViewerMediaStatus {
         status: "ready".to_string(),
         src: Some(src),
         source: Some(source),
         message: None,
+        codec,
+        elapsed_ms: None,
+        timeout_ms: None,
     }
 }
 
-fn pending_viewer_media_status(message: &str) -> ViewerMediaStatus {
+fn pending_viewer_media_status(
+    message: &str,
+    codec: Option<String>,
+    elapsed_ms: Option<u64>,
+    timeout_ms: Option<u64>,
+) -> ViewerMediaStatus {
     ViewerMediaStatus {
         status: "pending".to_string(),
         src: None,
         source: None,
         message: Some(message.to_string()),
+        codec,
+        elapsed_ms,
+        timeout_ms,
     }
 }
 
-fn unavailable_viewer_media_status(message: &str) -> ViewerMediaStatus {
+fn unavailable_viewer_media_status(message: &str, codec: Option<String>) -> ViewerMediaStatus {
     ViewerMediaStatus {
         status: "unavailable".to_string(),
         src: None,
         source: None,
         message: Some(message.to_string()),
+        codec,
+        elapsed_ms: None,
+        timeout_ms: None,
     }
 }
 
-fn load_cached_transcoded_video(path: &std::path::Path) -> Result<ViewerMediaStatus, InvokeError> {
+fn load_cached_transcoded_video(
+    path: &std::path::Path,
+    codec: Option<String>,
+) -> Result<ViewerMediaStatus, InvokeError> {
     let bytes = fs::read(path).map_err(map_error)?;
     Ok(ready_viewer_media_status(
         format!("data:video/mp4;base64,{}", STANDARD.encode(bytes)),
         "transcoded_mp4".to_string(),
+        codec,
     ))
 }
 
@@ -182,14 +201,16 @@ fn queue_viewer_video_transcode(
     state: &AppState,
     log_scope: &'static str,
 ) -> CommandResult<ViewerMediaStatus> {
+    let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
+    let timeout_ms = VIEWER_VIDEO_TRANSCODE_TIMEOUT.as_millis() as u64;
     let Some(output_path) = viewer_video_cache_path(&source_path, &state.app_data_dir.join("viewer-cache"))
         .map_err(map_error)?
     else {
-        return Ok(unavailable_viewer_media_status("Video playback unavailable"));
+        return Ok(unavailable_viewer_media_status("Video playback unavailable", codec));
     };
 
     if output_path.is_file() {
-        return load_cached_transcoded_video(&output_path);
+        return load_cached_transcoded_video(&output_path, codec);
     }
 
     let job_key = source_path.to_string_lossy().to_string();
@@ -197,17 +218,26 @@ fn queue_viewer_video_transcode(
         let jobs = state.viewer_video_jobs.lock();
         if let Some(job) = jobs.get(&job_key) {
             match job {
-                ViewerTranscodeState::Pending => {
-                    return Ok(pending_viewer_media_status("Transcoding video in background..."));
+                ViewerTranscodeState::Pending {
+                    started_at,
+                    codec,
+                    timeout_ms,
+                } => {
+                    return Ok(pending_viewer_media_status(
+                        "Transcoding video in background...",
+                        codec.clone(),
+                        Some(started_at.elapsed().as_millis() as u64),
+                        Some(*timeout_ms),
+                    ));
                 }
-                ViewerTranscodeState::Ready { path } if path.is_file() => {
-                    return load_cached_transcoded_video(path);
+                ViewerTranscodeState::Ready { path, codec } if path.is_file() => {
+                    return load_cached_transcoded_video(path, codec.clone());
                 }
-                ViewerTranscodeState::Unavailable => {
-                    return Ok(unavailable_viewer_media_status("Video transcoding unavailable"));
+                ViewerTranscodeState::Unavailable { codec } => {
+                    return Ok(unavailable_viewer_media_status("Video transcoding unavailable", codec.clone()));
                 }
-                ViewerTranscodeState::Failed { message } => {
-                    return Ok(unavailable_viewer_media_status(message));
+                ViewerTranscodeState::Failed { message, codec } => {
+                    return Ok(unavailable_viewer_media_status(message, codec.clone()));
                 }
                 ViewerTranscodeState::Ready { .. } => {}
             }
@@ -217,9 +247,17 @@ fn queue_viewer_video_transcode(
     state
         .viewer_video_jobs
         .lock()
-        .insert(job_key.clone(), ViewerTranscodeState::Pending);
+        .insert(
+            job_key.clone(),
+            ViewerTranscodeState::Pending {
+                started_at: Instant::now(),
+                codec: codec.clone(),
+                timeout_ms,
+            },
+        );
 
     let state = state.clone();
+    let codec_for_job = codec.clone();
     thread::spawn(move || {
         let (filename, file_size) = media_debug_info(&job_key);
         let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
@@ -229,7 +267,10 @@ fn queue_viewer_video_transcode(
             Ok(Some((path, cache_hit))) => {
                 state.viewer_video_jobs.lock().insert(
                     job_key.clone(),
-                    ViewerTranscodeState::Ready { path: path.clone() },
+                    ViewerTranscodeState::Ready {
+                        path: path.clone(),
+                        codec: codec_for_job.clone(),
+                    },
                 );
                 let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                 let _ = state.db.insert_log(
@@ -247,7 +288,12 @@ fn queue_viewer_video_transcode(
                 state
                     .viewer_video_jobs
                     .lock()
-                    .insert(job_key.clone(), ViewerTranscodeState::Unavailable);
+                    .insert(
+                        job_key.clone(),
+                        ViewerTranscodeState::Unavailable {
+                            codec: codec_for_job.clone(),
+                        },
+                    );
                 let _ = state.db.insert_log(
                     "warning",
                     log_scope,
@@ -261,6 +307,7 @@ fn queue_viewer_video_transcode(
                     job_key.clone(),
                     ViewerTranscodeState::Failed {
                         message: error.to_string(),
+                        codec: codec_for_job.clone(),
                     },
                 );
                 let _ = state
@@ -270,7 +317,12 @@ fn queue_viewer_video_transcode(
         }
     });
 
-    Ok(pending_viewer_media_status("Transcoding video in background..."))
+    Ok(pending_viewer_media_status(
+        "Transcoding video in background...",
+        codec,
+        Some(0),
+        Some(timeout_ms),
+    ))
 }
 
 #[tauri::command]
@@ -661,13 +713,14 @@ pub fn load_viewer_video(
 ) -> CommandResult<ViewerMediaStatus> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(primary_path) = detail.primary_path else {
-        return Ok(unavailable_viewer_media_status("Video playback unavailable"));
+        return Ok(unavailable_viewer_media_status("Video playback unavailable", None));
     };
     let (filename, file_size) = media_debug_info(&primary_path);
     let source_path = PathBuf::from(&primary_path);
     let prefer_original = prefer_original.unwrap_or(false);
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
+        let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
         let bytes = fs::read(&source_path).map_err(map_error)?;
         state
             .db
@@ -691,6 +744,7 @@ pub fn load_viewer_video(
                 "video/webm" => "original_webm".to_string(),
                 _ => "original_mp4".to_string(),
             },
+            codec,
         ));
     }
 
@@ -706,13 +760,14 @@ pub fn load_live_photo_motion(
 ) -> CommandResult<ViewerMediaStatus> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(motion_path) = detail.live_photo_video_path else {
-        return Ok(unavailable_viewer_media_status("Live photo playback unavailable"));
+        return Ok(unavailable_viewer_media_status("Live photo playback unavailable", None));
     };
     let (filename, file_size) = media_debug_info(&motion_path);
     let source_path = PathBuf::from(&motion_path);
     let prefer_original = prefer_original.unwrap_or(false);
 
     if prefer_original && can_stream_original_video_bytes(&source_path) {
+        let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
         let bytes = fs::read(&source_path).map_err(map_error)?;
         state
             .db
@@ -736,6 +791,7 @@ pub fn load_live_photo_motion(
                 "video/webm" => "original_webm".to_string(),
                 _ => "original_mp4".to_string(),
             },
+            codec,
         ));
     }
 

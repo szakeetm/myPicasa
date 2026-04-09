@@ -33,11 +33,21 @@ export function ViewerModal({
   const [videoFallbackAttempted, setVideoFallbackAttempted] = useState(false);
   const [videoFallbackAvailable, setVideoFallbackAvailable] = useState(false);
   const [videoTranscoding, setVideoTranscoding] = useState(false);
+  const [videoTranscodeStatus, setVideoTranscodeStatus] = useState<{
+    codec?: string;
+    elapsedMs?: number;
+    timeoutMs?: number;
+  }>({});
   const [livePhotoMotionSrc, setLivePhotoMotionSrc] = useState<string>();
   const [livePhotoMotionError, setLivePhotoMotionError] = useState<string>();
   const [livePhotoFallbackAttempted, setLivePhotoFallbackAttempted] = useState(false);
   const [livePhotoFallbackAvailable, setLivePhotoFallbackAvailable] = useState(false);
   const [livePhotoTranscoding, setLivePhotoTranscoding] = useState(false);
+  const [livePhotoTranscodeStatus, setLivePhotoTranscodeStatus] = useState<{
+    codec?: string;
+    elapsedMs?: number;
+    timeoutMs?: number;
+  }>({});
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
   const [zoom, setZoom] = useState(1);
@@ -86,6 +96,8 @@ export function ViewerModal({
     setLivePhotoFallbackAttempted(false);
     setLivePhotoTranscoding(false);
     setLivePhotoFallbackAvailable(false);
+    setVideoTranscodeStatus({});
+    setLivePhotoTranscodeStatus({});
     setZoomMode("fit");
     setZoom(1);
     setNaturalSize(undefined);
@@ -191,6 +203,7 @@ export function ViewerModal({
     setVideoFallbackAttempted(false);
     setVideoFallbackAvailable(false);
     setVideoTranscoding(true);
+    setVideoTranscodeStatus({});
     setVideoSourceLabel("transcoding");
     void logClient(
       "viewer.video",
@@ -204,6 +217,7 @@ export function ViewerModal({
           if (cancelled) return;
           if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
             setVideoTranscoding(false);
+            setVideoTranscodeStatus({});
             void logClient(
               "viewer.video",
               `viewer-v2 asset ${assetId} backend video ready source=${backendMedia.source}`,
@@ -224,6 +238,11 @@ export function ViewerModal({
             setVideoTranscoding(true);
             setVideoError(undefined);
             setVideoSourceLabel("transcoding");
+            setVideoTranscodeStatus({
+              codec: backendMedia.codec ?? undefined,
+              elapsedMs: backendMedia.elapsed_ms ?? undefined,
+              timeoutMs: backendMedia.timeout_ms ?? undefined,
+            });
             if (!loggedPending) {
               loggedPending = true;
               void logClient(
@@ -236,6 +255,11 @@ export function ViewerModal({
           }
 
           setVideoTranscoding(false);
+          setVideoTranscodeStatus({
+            codec: backendMedia.codec ?? undefined,
+            elapsedMs: backendMedia.elapsed_ms ?? undefined,
+            timeoutMs: backendMedia.timeout_ms ?? undefined,
+          });
           void logClient(
             "viewer.video",
             `asset ${assetId} backend video unavailable: ${backendMedia.message ?? "unavailable"}`,
@@ -247,6 +271,7 @@ export function ViewerModal({
       } catch (error) {
         if (!cancelled) {
           setVideoTranscoding(false);
+          setVideoTranscodeStatus({});
           void logClient("viewer.video", `asset ${assetId} backend video failed: ${String(error)}`, "error");
           setVideoError(String(error));
         }
@@ -273,6 +298,7 @@ export function ViewerModal({
     setLivePhotoFallbackAttempted(false);
     setLivePhotoFallbackAvailable(false);
     setLivePhotoTranscoding(true);
+    setLivePhotoTranscodeStatus({});
     setLivePhotoSourceLabel("transcoding");
     void logClient(
       "viewer.live_photo",
@@ -286,6 +312,7 @@ export function ViewerModal({
           if (cancelled) return;
           if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
             setLivePhotoTranscoding(false);
+            setLivePhotoTranscodeStatus({});
             void logClient(
               "viewer.live_photo",
               `viewer-v2 asset ${assetId} backend motion ready source=${backendMedia.source}`,
@@ -306,6 +333,11 @@ export function ViewerModal({
             setLivePhotoTranscoding(true);
             setLivePhotoMotionError(undefined);
             setLivePhotoSourceLabel("transcoding");
+            setLivePhotoTranscodeStatus({
+              codec: backendMedia.codec ?? undefined,
+              elapsedMs: backendMedia.elapsed_ms ?? undefined,
+              timeoutMs: backendMedia.timeout_ms ?? undefined,
+            });
             if (!loggedPending) {
               loggedPending = true;
               void logClient(
@@ -318,6 +350,11 @@ export function ViewerModal({
           }
 
           setLivePhotoTranscoding(false);
+          setLivePhotoTranscodeStatus({
+            codec: backendMedia.codec ?? undefined,
+            elapsedMs: backendMedia.elapsed_ms ?? undefined,
+            timeoutMs: backendMedia.timeout_ms ?? undefined,
+          });
           void logClient(
             "viewer.live_photo",
             `asset ${assetId} backend motion unavailable: ${backendMedia.message ?? "unavailable"}`,
@@ -329,6 +366,7 @@ export function ViewerModal({
       } catch (error) {
         if (!cancelled) {
           setLivePhotoTranscoding(false);
+          setLivePhotoTranscodeStatus({});
           void logClient("viewer.live_photo", `asset ${assetId} backend motion failed: ${String(error)}`, "error");
           setLivePhotoMotionError(String(error));
         }
@@ -458,6 +496,7 @@ export function ViewerModal({
     setVideoFallbackAvailable(false);
     setVideoError(undefined);
     setVideoTranscoding(true);
+    setVideoTranscodeStatus({});
     setVideoSourceLabel("transcoding");
     void logClient("viewer.video", `asset ${assetId} switching to transcoded backend playback after backend-original error`);
     try {
@@ -465,22 +504,34 @@ export function ViewerModal({
         const backendMedia = await api.loadViewerVideo(assetId, false);
         if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
           setVideoTranscoding(false);
+          setVideoTranscodeStatus({});
           void logClient("viewer.video", `asset ${assetId} transcoded backend playback ready after backend-original error`);
           setVideoSourceLabel(backendMedia.source);
           setVideoSrc(await materializeVideoSrc(backendMedia.src, videoObjectUrlRef));
           return;
         }
         if (backendMedia.status === "pending") {
+          setVideoTranscodeStatus({
+            codec: backendMedia.codec ?? undefined,
+            elapsedMs: backendMedia.elapsed_ms ?? undefined,
+            timeoutMs: backendMedia.timeout_ms ?? undefined,
+          });
           await new Promise((resolve) => window.setTimeout(resolve, 750));
           continue;
         }
         setVideoTranscoding(false);
+        setVideoTranscodeStatus({
+          codec: backendMedia.codec ?? undefined,
+          elapsedMs: backendMedia.elapsed_ms ?? undefined,
+          timeoutMs: backendMedia.timeout_ms ?? undefined,
+        });
         void logClient("viewer.video", `asset ${assetId} transcoded backend playback unavailable after backend-original error`, "error");
         setVideoError(backendMedia.message ?? "Video playback unavailable");
         return;
       }
     } catch (error) {
       setVideoTranscoding(false);
+      setVideoTranscodeStatus({});
       void logClient("viewer.video", `asset ${assetId} transcoded backend playback failed after backend-original error: ${String(error)}`, "error");
       setVideoError(String(error));
     }
@@ -494,6 +545,7 @@ export function ViewerModal({
     setLivePhotoFallbackAvailable(false);
     setLivePhotoMotionError(undefined);
     setLivePhotoTranscoding(true);
+    setLivePhotoTranscodeStatus({});
     setLivePhotoSourceLabel("transcoding");
     void logClient("viewer.live_photo", `asset ${assetId} switching to transcoded backend motion after backend-original error`);
     try {
@@ -501,22 +553,34 @@ export function ViewerModal({
         const backendMedia = await api.loadLivePhotoMotion(assetId, false);
         if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
           setLivePhotoTranscoding(false);
+          setLivePhotoTranscodeStatus({});
           void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion ready after backend-original error`);
           setLivePhotoSourceLabel(backendMedia.source);
           setLivePhotoMotionSrc(await materializeVideoSrc(backendMedia.src, livePhotoObjectUrlRef));
           return;
         }
         if (backendMedia.status === "pending") {
+          setLivePhotoTranscodeStatus({
+            codec: backendMedia.codec ?? undefined,
+            elapsedMs: backendMedia.elapsed_ms ?? undefined,
+            timeoutMs: backendMedia.timeout_ms ?? undefined,
+          });
           await new Promise((resolve) => window.setTimeout(resolve, 750));
           continue;
         }
         setLivePhotoTranscoding(false);
+        setLivePhotoTranscodeStatus({
+          codec: backendMedia.codec ?? undefined,
+          elapsedMs: backendMedia.elapsed_ms ?? undefined,
+          timeoutMs: backendMedia.timeout_ms ?? undefined,
+        });
         void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion unavailable after backend-original error`, "error");
         setLivePhotoMotionError(backendMedia.message ?? "Live photo playback unavailable");
         return;
       }
     } catch (error) {
       setLivePhotoTranscoding(false);
+      setLivePhotoTranscodeStatus({});
       void logClient("viewer.live_photo", `asset ${assetId} transcoded backend motion failed after backend-original error: ${String(error)}`, "error");
       setLivePhotoMotionError(String(error));
     }
@@ -726,6 +790,9 @@ export function ViewerModal({
             ) : videoError ? (
               <div className="viewer-loading-state">
                 <div className="muted">{videoError}</div>
+                {videoTranscodeStatus.codec ? (
+                  <div className="muted">Source codec: {videoTranscodeStatus.codec}</div>
+                ) : null}
                 {videoFallbackAvailable ? (
                   <button className="button-secondary" onClick={() => void fallbackVideoToBackend()}>
                     Transcode For Playback
@@ -733,7 +800,10 @@ export function ViewerModal({
                 ) : null}
               </div>
             ) : videoTranscoding ? (
-              <div className="viewer-loading-state">Transcoding video...</div>
+              <div className="viewer-loading-state">
+                <div>Transcoding video...</div>
+                <div className="muted">{formatTranscodeProgress(videoTranscodeStatus)}</div>
+              </div>
             ) : (
               <div className="muted">Loading video…</div>
             )
@@ -788,6 +858,9 @@ export function ViewerModal({
             ) : livePhotoMotionError ? (
               <div className="viewer-loading-state">
                 <div className="muted">{livePhotoMotionError}</div>
+                {livePhotoTranscodeStatus.codec ? (
+                  <div className="muted">Source codec: {livePhotoTranscodeStatus.codec}</div>
+                ) : null}
                 {livePhotoFallbackAvailable ? (
                   <button className="button-secondary" onClick={() => void fallbackLivePhotoToBackend()}>
                     Transcode Live Photo
@@ -795,7 +868,10 @@ export function ViewerModal({
                 ) : null}
               </div>
             ) : livePhotoTranscoding ? (
-              <div className="viewer-loading-state">Transcoding live photo...</div>
+              <div className="viewer-loading-state">
+                <div>Transcoding live photo...</div>
+                <div className="muted">{formatTranscodeProgress(livePhotoTranscodeStatus)}</div>
+              </div>
             ) : (
               <div className="muted">Loading live photo…</div>
             )
@@ -984,6 +1060,29 @@ function formatViewerSourceLabel(label: string) {
     default:
       return "Loading Source";
   }
+}
+
+function formatTranscodeProgress(status: {
+  codec?: string;
+  elapsedMs?: number;
+  timeoutMs?: number;
+}) {
+  const parts: string[] = [];
+  if (status.codec) {
+    parts.push(`Source codec: ${status.codec}`);
+  }
+  if (typeof status.elapsedMs === "number" && typeof status.timeoutMs === "number") {
+    parts.push(
+      `Elapsed ${formatDurationSeconds(status.elapsedMs)} / ${formatDurationSeconds(status.timeoutMs)} timeout`,
+    );
+  } else if (typeof status.elapsedMs === "number") {
+    parts.push(`Elapsed ${formatDurationSeconds(status.elapsedMs)}`);
+  }
+  return parts.join(" • ") || "Preparing transcode…";
+}
+
+function formatDurationSeconds(milliseconds: number) {
+  return `${Math.max(0, milliseconds / 1000).toFixed(1)}s`;
 }
 
 function formatFileSize(bytes: number) {

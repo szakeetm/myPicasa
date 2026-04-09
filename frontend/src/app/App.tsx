@@ -21,20 +21,9 @@ export function App() {
   const [timelineLabel, setTimelineLabel] = useState<string>();
   const [nextAssetCursor, setNextAssetCursor] = useState<number>();
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
-  const [thumbnailPreloadActive, setThumbnailPreloadActive] = useState(false);
-  const [thumbnailPreloadRunId, setThumbnailPreloadRunId] = useState(0);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
-  const [thumbnailPreloadProgress, setThumbnailPreloadProgress] = useState<
-    | {
-        thumbsCompleted: number;
-        thumbsTotal: number;
-        previewsCompleted: number;
-        previewsTotal: number;
-      }
-    | undefined
-  >();
   const didInitFilterEffect = useRef(false);
   const assetQueryGenerationRef = useRef(0);
 
@@ -360,8 +349,6 @@ export function App() {
 
   async function handleClearThumbnails() {
     await api.clearThumbnailCache();
-    setThumbnailPreloadActive(false);
-    setThumbnailPreloadProgress(undefined);
     setThumbnailResetKey((value) => value + 1);
     if (thumbLogOpen) {
       setThumbGenerationLogs(await api.getThumbGenerationLogs());
@@ -397,51 +384,6 @@ export function App() {
     state.setCacheStats(cacheStats);
   }
 
-  function handleToggleThumbnailPreload() {
-    if (thumbnailPreloadActive) {
-      setThumbnailPreloadActive(false);
-      setThumbnailPreloadProgress(undefined);
-      return;
-    }
-
-    setThumbnailPreloadRunId((value) => value + 1);
-    setThumbnailPreloadActive(true);
-    setThumbnailPreloadProgress({
-      thumbsCompleted: 0,
-      thumbsTotal: state.assets.length,
-      previewsCompleted: 0,
-      previewsTotal: state.assets.length,
-    });
-  }
-
-  function handleThumbnailPreloadProgress(
-    progress?: {
-      thumbsCompleted: number;
-      thumbsTotal: number;
-      previewsCompleted: number;
-      previewsTotal: number;
-    },
-  ) {
-    setThumbnailPreloadProgress((current) => {
-      if (
-        current?.thumbsCompleted === progress?.thumbsCompleted &&
-        current?.thumbsTotal === progress?.thumbsTotal &&
-        current?.previewsCompleted === progress?.previewsCompleted &&
-        current?.previewsTotal === progress?.previewsTotal
-      ) {
-        return current;
-      }
-      return progress;
-    });
-    if (
-      progress &&
-      progress.thumbsCompleted >= progress.thumbsTotal &&
-      progress.previewsCompleted >= progress.previewsTotal
-    ) {
-      setThumbnailPreloadActive(false);
-    }
-  }
-
   const selectedAssetIndex = state.selectedAsset
     ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id)
     : -1;
@@ -467,11 +409,8 @@ export function App() {
           query={state.query}
           mediaKind={state.mediaKind}
           timelineLabel={state.viewMode === "timeline" ? timelineLabel : undefined}
-          thumbnailPreloadActive={thumbnailPreloadActive}
-          thumbnailPreloadProgress={thumbnailPreloadProgress}
           onQueryChange={state.setQuery}
           onMediaKindChange={state.setMediaKind}
-          onToggleThumbnailPreload={handleToggleThumbnailPreload}
         />
         <div className="grid-frame">
           <MediaGrid
@@ -481,11 +420,6 @@ export function App() {
             hasMore={nextAssetCursor != null}
             isLoadingMore={loadingMoreAssets}
             onLoadMore={loadMoreAssets}
-            thumbnailPreload={{
-              active: thumbnailPreloadActive,
-              runId: thumbnailPreloadRunId,
-            }}
-            onThumbnailPreloadProgress={handleThumbnailPreloadProgress}
             onLeadingDateChange={(value) => {
               if (state.viewMode === "timeline") {
                 setTimelineLabel(formatTimelineLabel(value));

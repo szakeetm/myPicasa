@@ -17,10 +17,22 @@ pub struct ThumbnailJob {
 
 #[derive(Clone)]
 pub enum ViewerTranscodeState {
-    Pending,
-    Ready { path: PathBuf },
-    Unavailable,
-    Failed { message: String },
+    Pending {
+        started_at: std::time::Instant,
+        codec: Option<String>,
+        timeout_ms: u64,
+    },
+    Ready {
+        path: PathBuf,
+        codec: Option<String>,
+    },
+    Unavailable {
+        codec: Option<String>,
+    },
+    Failed {
+        message: String,
+        codec: Option<String>,
+    },
 }
 
 #[derive(Clone)]
