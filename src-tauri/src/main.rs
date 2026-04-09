@@ -353,6 +353,7 @@ fn main() {
             let state = AppState {
                 db: Arc::new(database),
                 app_data_dir: Arc::new(app_data_dir),
+                thumbnail_worker_count: worker_count,
                 import_status: Arc::new(Mutex::new(None)),
                 thumbnail_cache,
                 preview_cache,

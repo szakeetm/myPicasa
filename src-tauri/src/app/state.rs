@@ -135,6 +135,7 @@ impl BatchThumbnailGenerationState {
 pub struct AppState {
     pub db: Arc<Database>,
     pub app_data_dir: Arc<PathBuf>,
+    pub thumbnail_worker_count: usize,
     pub import_status: Arc<Mutex<Option<ImportProgress>>>,
     pub thumbnail_cache: Arc<Mutex<ThumbnailCache>>,
     pub preview_cache: Arc<Mutex<ThumbnailCache>>,

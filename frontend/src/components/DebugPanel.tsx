@@ -4,6 +4,8 @@ type DebugPanelProps = {
   diagnostics: DiagnosticEntry[];
   logs: LogEntry[];
   cacheStats?: CacheStats;
+  thumbBatchRunning?: boolean;
+  videoBatchRunning?: boolean;
   onOpenThumbLog: () => void;
   onOpenBatchTranscode: () => void;
   onClearThumbnails: () => void;
@@ -16,6 +18,8 @@ export function DebugPanel({
   diagnostics,
   logs,
   cacheStats,
+  thumbBatchRunning,
+  videoBatchRunning,
   onOpenThumbLog,
   onOpenBatchTranscode,
   onClearThumbnails,
@@ -36,10 +40,16 @@ export function DebugPanel({
                 {Math.round((cacheStats.thumbnail_bytes / 1024 / 1024) * 10) / 10} MB
               </div>
               <div className="button-row">
-                <button className="button-secondary" onClick={onOpenThumbLog}>
+                <button
+                  className={`button-secondary${thumbBatchRunning ? " button-working" : ""}`}
+                  onClick={onOpenThumbLog}
+                >
                   Thumb gen log
                 </button>
-                <button className="button-secondary" onClick={onOpenBatchTranscode}>
+                <button
+                  className={`button-secondary${videoBatchRunning ? " button-working" : ""}`}
+                  onClick={onOpenBatchTranscode}
+                >
                   Batch transcode
                 </button>
                 <button className="button-secondary" onClick={onClearThumbnails}>

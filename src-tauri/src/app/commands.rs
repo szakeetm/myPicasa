@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
@@ -27,7 +28,7 @@ use crate::{
         AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse,
         BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats, DiagnosticEntry,
         ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem, ViewerMediaStatus,
-        ViewerPlaybackSupport,
+        ViewerPlaybackHint, ViewerPlaybackSupport,
     },
     search::query_service,
 };
@@ -161,88 +162,6 @@ fn enqueue_thumbnail_job(
     Ok(true)
 }
 
-fn generate_thumbnail_into_cache(
-    state: &AppState,
-    asset_id: i64,
-    source_path: &PathBuf,
-    size: u32,
-) -> Result<bool, InvokeError> {
-    let key = format!("{asset_id}:{size}");
-    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
-    let cache = if use_preview_cache {
-        &state.preview_cache
-    } else {
-        &state.thumbnail_cache
-    };
-
-    if cache.lock().get(&key).is_some() {
-        return Ok(false);
-    }
-
-    let (filename, file_size) = media_debug_info(&source_path.to_string_lossy());
-    let started = Instant::now();
-    let kind = thumb_log_kind(size);
-    let generator = thumbnail_generator_label(source_path);
-
-    record_thumb_log(
-        state,
-        "info",
-        asset_id,
-        format!(
-            "kind={kind} generator={generator} status=start mode=batch size={size}px filename=\"{filename}\" file_size={}",
-            human_size(file_size)
-        ),
-    )?;
-
-    let working_dir = state.app_data_dir.join("working");
-    match generate_thumbnail(source_path, size, &working_dir) {
-        Ok(Some(bytes)) => {
-            record_thumb_log(
-                state,
-                "info",
-                asset_id,
-                format!(
-                    "kind={kind} generator={generator} status=success mode=batch size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={}",
-                    human_size(file_size),
-                    human_size(bytes.len() as u64),
-                    human_elapsed_ms(started.elapsed().as_millis())
-                ),
-            )?;
-            cache.lock().insert(key, bytes);
-            state.failed_thumbnails.lock().remove(&format!("{asset_id}:{size}"));
-            Ok(true)
-        }
-        Ok(None) => {
-            record_thumb_log(
-                state,
-                "warning",
-                asset_id,
-                format!(
-                    "kind={kind} generator={generator} status=unavailable mode=batch size={size}px filename=\"{filename}\" file_size={} elapsed={}",
-                    human_size(file_size),
-                    human_elapsed_ms(started.elapsed().as_millis())
-                ),
-            )?;
-            state.failed_thumbnails.lock().insert(format!("{asset_id}:{size}"));
-            Ok(false)
-        }
-        Err(error) => {
-            record_thumb_log(
-                state,
-                "error",
-                asset_id,
-                format!(
-                    "kind={kind} generator={generator} status=failed mode=batch size={size}px filename=\"{filename}\" file_size={} elapsed={} error={error}",
-                    human_size(file_size),
-                    human_elapsed_ms(started.elapsed().as_millis())
-                ),
-            )?;
-            state.failed_thumbnails.lock().insert(format!("{asset_id}:{size}"));
-            Err(map_error(error))
-        }
-    }
-}
-
 fn batch_thumbnail_generation_status_snapshot(
     state: &BatchThumbnailGenerationState,
 ) -> BatchThumbnailGenerationStatus {
@@ -290,12 +209,52 @@ fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
     }
 }
 
-fn collect_all_media_assets(state: &AppState) -> Result<Vec<(i64, String, u64)>, InvokeError> {
+#[derive(Clone)]
+struct BatchThumbnailAsset {
+    asset_id: i64,
+    filename: String,
+    source_bytes: u64,
+    needs_thumb: bool,
+    needs_preview: bool,
+}
+
+enum ThumbnailBatchOutputState {
+    Ready,
+    Failed,
+    Pending,
+    Missing,
+}
+
+fn thumbnail_batch_output_state(
+    state: &AppState,
+    asset_id: i64,
+    size: u32,
+) -> ThumbnailBatchOutputState {
+    let key = format!("{asset_id}:{size}");
+    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let cache = if use_preview_cache {
+        &state.preview_cache
+    } else {
+        &state.thumbnail_cache
+    };
+
+    if cache.lock().get(&key).is_some() {
+        ThumbnailBatchOutputState::Ready
+    } else if state.failed_thumbnails.lock().contains(&key) {
+        ThumbnailBatchOutputState::Failed
+    } else if state.inflight_thumbnails.lock().contains(&key) {
+        ThumbnailBatchOutputState::Pending
+    } else {
+        ThumbnailBatchOutputState::Missing
+    }
+}
+
+fn collect_all_media_assets(state: &AppState) -> Result<Vec<BatchThumbnailAsset>, InvokeError> {
     state
         .db
         .with_connection(|conn| {
             let mut stmt = conn.prepare(
-                "SELECT a.id, f.path, f.file_size
+                "SELECT a.id, a.media_kind, f.path, f.file_size
                  FROM assets a
                  JOIN file_entries f ON f.id = a.primary_file_id
                  WHERE a.is_deleted = 0 AND f.is_deleted = 0
@@ -306,16 +265,74 @@ fn collect_all_media_assets(state: &AppState) -> Result<Vec<(i64, String, u64)>,
                     Ok((
                         row.get::<_, i64>(0)?,
                         row.get::<_, String>(1)?,
-                        row.get::<_, i64>(2)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, i64>(3)?,
                     ))
                 })?
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows
                 .into_iter()
-                .map(|(asset_id, path, file_size)| (asset_id, path, file_size.max(0) as u64))
+                .map(|(asset_id, media_kind, path, file_size)| BatchThumbnailAsset {
+                    asset_id,
+                    filename: PathBuf::from(&path)
+                        .file_name()
+                        .and_then(|value| value.to_str())
+                        .unwrap_or(&path)
+                        .to_string(),
+                    source_bytes: file_size.max(0) as u64,
+                    needs_thumb: true,
+                    needs_preview: media_kind != "video",
+                })
                 .collect())
         })
         .map_err(map_error)
+}
+
+fn finish_batch_thumbnail_generation(
+    state: &AppState,
+    message: String,
+) {
+    let mut status = state.batch_thumbnail_generation.lock();
+    status.running = false;
+    status.current_asset_id = None;
+    status.current_filename = None;
+    status.current_source_bytes = None;
+    status.current_started_at = None;
+    status.elapsed_ms = status
+        .started_at
+        .map(|started_at| started_at.elapsed().as_millis() as u64);
+    status.message = Some(message);
+}
+
+fn open_in_system_browser(target: &str) -> Result<(), InvokeError> {
+    let status = {
+        #[cfg(target_os = "macos")]
+        {
+            Command::new("open").arg(target).status().map_err(map_error)?
+        }
+        #[cfg(target_os = "windows")]
+        {
+            Command::new("cmd")
+                .args(["/C", "start", "", target])
+                .status()
+                .map_err(map_error)?
+        }
+        #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
+        {
+            Command::new("xdg-open")
+                .arg(target)
+                .status()
+                .map_err(map_error)?
+        }
+    };
+
+    if !status.success() {
+        return Err(InvokeError::from(
+            "Failed to open URL in the system browser".to_string(),
+        ));
+    }
+
+    Ok(())
 }
 
 fn video_mime_type(path: &std::path::Path) -> &'static str {
@@ -1388,111 +1405,167 @@ pub fn start_batch_thumbnail_generation(
             status.message = Some(format!("Preparing {} assets", assets.len()));
         }
 
-        for (index, (asset_id, source_path, source_bytes)) in assets.into_iter().enumerate() {
-            {
-                let status = worker_state.batch_thumbnail_generation.lock();
-                if status.stop_requested {
-                    drop(status);
-                    let mut status = worker_state.batch_thumbnail_generation.lock();
-                    status.running = false;
-                    status.current_asset_id = None;
-                    status.current_filename = None;
-                    status.current_source_bytes = None;
-                    status.current_started_at = None;
-                    status.elapsed_ms = status
-                        .started_at
-                        .map(|started_at| started_at.elapsed().as_millis() as u64);
-                    status.message = Some(format!(
-                        "Stopped after {} processed assets",
-                        status.completed + status.failed
-                    ));
-                    return;
-                }
-            }
+        let mut pending = VecDeque::from(assets);
+        let mut active = HashMap::<i64, BatchThumbnailAsset>::new();
 
-            let filename = PathBuf::from(&source_path)
-                .file_name()
-                .and_then(|value| value.to_str())
-                .unwrap_or(&source_path)
-                .to_string();
-            let total = {
-                let status = worker_state.batch_thumbnail_generation.lock();
-                status.total
-            };
-            let source_path_buf = PathBuf::from(&source_path);
-            {
-                let mut status = worker_state.batch_thumbnail_generation.lock();
-                status.current_asset_id = Some(asset_id);
-                status.current_filename = Some(filename.clone());
-                status.current_source_bytes = Some(source_bytes);
-                status.current_started_at = Some(Instant::now());
-                status.message = Some(format!("Generating {} of {}", index + 1, total));
-            }
+        loop {
+            let stop_requested = worker_state.batch_thumbnail_generation.lock().stop_requested;
 
-            let thumb_key = format!("{asset_id}:{THUMB_SIZE}");
-            let preview_key = format!("{asset_id}:{VIEWER_PREVIEW_SIZE}");
-            let thumb_exists = worker_state.thumbnail_cache.lock().get(&thumb_key).is_some();
-            let preview_exists = worker_state.preview_cache.lock().get(&preview_key).is_some();
+            while !stop_requested && active.len() < worker_state.thumbnail_worker_count {
+                let Some(asset) = pending.pop_front() else {
+                    break;
+                };
 
-            if thumb_exists && preview_exists {
-                let mut status = worker_state.batch_thumbnail_generation.lock();
-                status.completed += 1;
-                status.skipped += 1;
-                let _ = worker_state.db.insert_log(
-                    "info",
-                    "thumb_gen",
-                    &format!(
-                        "[skipped] filename=\"{filename}\" source_size={} reason=existing thumb_size={}px preview_size={}px",
-                        human_size(source_bytes),
-                        THUMB_SIZE,
-                        VIEWER_PREVIEW_SIZE
-                    ),
-                    Some(asset_id),
+                let thumb_state = thumbnail_batch_output_state(&worker_state, asset.asset_id, THUMB_SIZE);
+                let preview_state = if asset.needs_preview {
+                    thumbnail_batch_output_state(&worker_state, asset.asset_id, VIEWER_PREVIEW_SIZE)
+                } else {
+                    ThumbnailBatchOutputState::Ready
+                };
+
+                let thumb_terminal = matches!(
+                    thumb_state,
+                    ThumbnailBatchOutputState::Ready | ThumbnailBatchOutputState::Failed
                 );
-                continue;
+                let preview_terminal = matches!(
+                    preview_state,
+                    ThumbnailBatchOutputState::Ready | ThumbnailBatchOutputState::Failed
+                );
+
+                if thumb_terminal && preview_terminal {
+                    let mut status = worker_state.batch_thumbnail_generation.lock();
+                    if matches!(thumb_state, ThumbnailBatchOutputState::Failed)
+                        || matches!(preview_state, ThumbnailBatchOutputState::Failed)
+                    {
+                        status.failed += 1;
+                    } else {
+                        status.completed += 1;
+                        status.skipped += 1;
+                        let preview_suffix = if asset.needs_preview {
+                            format!(" preview_size={}px", VIEWER_PREVIEW_SIZE)
+                        } else {
+                            "".to_string()
+                        };
+                        let _ = worker_state.db.insert_log(
+                            "info",
+                            "thumb_gen",
+                            &format!(
+                                "[skipped] filename=\"{}\" source_size={} reason=existing thumb_size={}px{}",
+                                asset.filename,
+                                human_size(asset.source_bytes),
+                                THUMB_SIZE,
+                                preview_suffix
+                            ),
+                            Some(asset.asset_id),
+                        );
+                    }
+                    continue;
+                }
+
+                if asset.needs_thumb
+                    && matches!(thumb_state, ThumbnailBatchOutputState::Missing)
+                {
+                    let _ = enqueue_thumbnail_job(
+                        &worker_state,
+                        asset.asset_id,
+                        THUMB_SIZE,
+                        worker_state.thumbnail_generation.load(Ordering::SeqCst),
+                    );
+                }
+                if asset.needs_preview
+                    && matches!(preview_state, ThumbnailBatchOutputState::Missing)
+                {
+                    let _ = enqueue_thumbnail_job(
+                        &worker_state,
+                        asset.asset_id,
+                        VIEWER_PREVIEW_SIZE,
+                        worker_state.thumbnail_generation.load(Ordering::SeqCst),
+                    );
+                }
+
+                active.insert(asset.asset_id, asset);
             }
 
-            let thumb_result = if thumb_exists {
-                Ok(false)
-            } else {
-                generate_thumbnail_into_cache(&worker_state, asset_id, &source_path_buf, THUMB_SIZE)
-            };
-            let preview_result = if preview_exists {
-                Ok(false)
-            } else {
-                generate_thumbnail_into_cache(
+            let mut finished_ids = Vec::new();
+            for (asset_id, asset) in &active {
+                let thumb_state = thumbnail_batch_output_state(&worker_state, *asset_id, THUMB_SIZE);
+                let preview_state = if asset.needs_preview {
+                    thumbnail_batch_output_state(&worker_state, *asset_id, VIEWER_PREVIEW_SIZE)
+                } else {
+                    ThumbnailBatchOutputState::Ready
+                };
+
+                let thumb_terminal = matches!(
+                    thumb_state,
+                    ThumbnailBatchOutputState::Ready | ThumbnailBatchOutputState::Failed
+                );
+                let preview_terminal = matches!(
+                    preview_state,
+                    ThumbnailBatchOutputState::Ready | ThumbnailBatchOutputState::Failed
+                );
+
+                if thumb_terminal && preview_terminal {
+                    let mut status = worker_state.batch_thumbnail_generation.lock();
+                    if matches!(thumb_state, ThumbnailBatchOutputState::Failed)
+                        || matches!(preview_state, ThumbnailBatchOutputState::Failed)
+                    {
+                        status.failed += 1;
+                    } else {
+                        status.completed += 1;
+                    }
+                    finished_ids.push(*asset_id);
+                }
+            }
+
+            for asset_id in finished_ids {
+                active.remove(&asset_id);
+            }
+
+            {
+                let mut status = worker_state.batch_thumbnail_generation.lock();
+                let processed = status.completed + status.failed;
+                status.message = Some(if stop_requested {
+                    format!(
+                        "Finishing {} active assets • {processed}/{} processed",
+                        active.len(),
+                        status.total
+                    )
+                } else {
+                    format!(
+                        "{} active • {} queued • {processed}/{} processed",
+                        active.len(),
+                        pending.len(),
+                        status.total
+                    )
+                });
+            }
+
+            if stop_requested && active.is_empty() {
+                let processed = {
+                    let status = worker_state.batch_thumbnail_generation.lock();
+                    status.completed + status.failed
+                };
+                finish_batch_thumbnail_generation(
                     &worker_state,
-                    asset_id,
-                    &source_path_buf,
-                    VIEWER_PREVIEW_SIZE,
-                )
-            };
-
-            let mut status = worker_state.batch_thumbnail_generation.lock();
-            match (thumb_result, preview_result) {
-                (Ok(_), Ok(_)) => {
-                    status.completed += 1;
-                }
-                _ => {
-                    status.failed += 1;
-                }
+                    format!("Stopped after {processed} processed assets"),
+                );
+                return;
             }
-        }
 
-        let mut status = worker_state.batch_thumbnail_generation.lock();
-        status.running = false;
-        status.current_asset_id = None;
-        status.current_filename = None;
-        status.current_source_bytes = None;
-        status.current_started_at = None;
-        status.elapsed_ms = status
-            .started_at
-            .map(|started_at| started_at.elapsed().as_millis() as u64);
-        status.message = Some(format!(
-            "Finished {} assets with {} failures",
-            status.completed,
-            status.failed
-        ));
+            if active.is_empty() && pending.is_empty() {
+                let (completed, failed) = {
+                    let status = worker_state.batch_thumbnail_generation.lock();
+                    (status.completed, status.failed)
+                };
+                finish_batch_thumbnail_generation(
+                    &worker_state,
+                    format!("Finished {completed} assets with {failed} failures"),
+                );
+                return;
+            }
+
+            thread::sleep(Duration::from_millis(40));
+        }
     });
 
     Ok(batch_thumbnail_generation_status_snapshot(
@@ -1510,6 +1583,72 @@ pub fn stop_batch_thumbnail_generation(
         status.message = Some("Will stop after current asset".to_string());
     }
     Ok(batch_thumbnail_generation_status_snapshot(&status))
+}
+
+#[tauri::command]
+pub fn get_viewer_playback_hints(
+    asset_ids: Vec<i64>,
+    support: ViewerPlaybackSupport,
+    state: State<AppState>,
+) -> CommandResult<Vec<ViewerPlaybackHint>> {
+    let mut hints = Vec::with_capacity(asset_ids.len());
+
+    for asset_id in asset_ids {
+        let detail = match query_service::get_asset_detail(&state.db, asset_id) {
+            Ok(detail) => detail,
+            Err(_) => {
+                hints.push(ViewerPlaybackHint {
+                    asset_id,
+                    status: "none".to_string(),
+                });
+                continue;
+            }
+        };
+
+        if detail.media_kind != "video" {
+            hints.push(ViewerPlaybackHint {
+                asset_id,
+                status: "none".to_string(),
+            });
+            continue;
+        }
+
+        let Some(primary_path) = detail.primary_path else {
+            hints.push(ViewerPlaybackHint {
+                asset_id,
+                status: "none".to_string(),
+            });
+            continue;
+        };
+
+        let source_path = PathBuf::from(&primary_path);
+        let transcoded_ready = viewer_video_cache_path(
+            &source_path,
+            &state.app_data_dir.join("viewer-cache"),
+        )
+        .map_err(map_error)?
+        .as_deref()
+        .map(|path| path.is_file())
+        .unwrap_or(false);
+
+        let status = if transcoded_ready {
+            "transcoded"
+        } else {
+            let codec = probe_primary_video_codec(&source_path).map_err(map_error)?;
+            if source_is_natively_playable(&primary_path, codec.as_deref(), &support) {
+                "native"
+            } else {
+                "none"
+            }
+        };
+
+        hints.push(ViewerPlaybackHint {
+            asset_id,
+            status: status.to_string(),
+        });
+    }
+
+    Ok(hints)
 }
 
 #[tauri::command]
@@ -1897,6 +2036,17 @@ pub fn open_asset_with_quicklook(asset_id: i64, state: State<AppState>) -> Comma
     Ok(())
 }
 
+#[tauri::command]
+pub fn open_url_in_browser(url: String) -> CommandResult<()> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("https://") || trimmed.starts_with("http://")) {
+        return Err(InvokeError::from(
+            "Only http(s) URLs can be opened in the browser".to_string(),
+        ));
+    }
+    open_in_system_browser(trimmed)
+}
+
 pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
         refresh_index,
@@ -1913,6 +2063,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_batch_thumbnail_generation_status,
         start_batch_thumbnail_generation,
         stop_batch_thumbnail_generation,
+        get_viewer_playback_hints,
         load_viewer_frame,
         load_viewer_video,
         load_live_photo_motion,
@@ -1932,6 +2083,7 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         show_asset_in_finder,
         open_asset_with_default_app,
         open_asset_with_quicklook,
+        open_url_in_browser,
         reset_local_database,
         clear_diagnostics,
         clear_logs

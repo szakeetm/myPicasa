@@ -37,6 +37,18 @@ export function App() {
   const didInitFilterEffect = useRef(false);
   const assetQueryGenerationRef = useRef(0);
 
+  async function confirmDestructiveAction(title: string, message: string, okLabel: string) {
+    if (tauriRuntime) {
+      return confirm(message, {
+        title,
+        kind: "warning",
+        okLabel,
+        cancelLabel: "Cancel",
+      });
+    }
+    return window.confirm(message);
+  }
+
   async function fetchAssetsPage(
     options: {
       viewMode?: "timeline" | "album";
@@ -142,6 +154,13 @@ export function App() {
     void api.clearThumbGenerationLogs();
     void refreshDebugSurfaces();
     void refreshAllAssets();
+    void Promise.all([
+      api.getBatchThumbnailGenerationStatus(),
+      api.getBatchViewerTranscodeStatus(),
+    ]).then(([thumbnailStatus, transcodeStatus]) => {
+      setBatchThumbnailStatus(thumbnailStatus);
+      setBatchTranscodeStatus(transcodeStatus);
+    });
     // Initial bootstrap is intentionally one-shot.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -158,20 +177,24 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    if (!thumbLogOpen) {
+    const shouldTrackThumbnailBatch = thumbLogOpen || batchThumbnailStatus?.status === "running";
+    if (!shouldTrackThumbnailBatch) {
       return;
     }
 
     let cancelled = false;
     async function refreshThumbLogs() {
       try {
-        const [entries, status] = await Promise.all([
-          api.getThumbGenerationLogs(),
-          api.getBatchThumbnailGenerationStatus(),
-        ]);
+        const status = await api.getBatchThumbnailGenerationStatus();
+        if (!cancelled) {
+          setBatchThumbnailStatus(status);
+        }
+        if (!thumbLogOpen) {
+          return;
+        }
+        const entries = await api.getThumbGenerationLogs();
         if (!cancelled) {
           setThumbGenerationLogs(entries);
-          setBatchThumbnailStatus(status);
         }
       } catch (error) {
         console.error("failed to load thumb generation logs", error);
@@ -187,22 +210,26 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [thumbLogOpen]);
+  }, [batchThumbnailStatus?.status, thumbLogOpen]);
 
   useEffect(() => {
-    if (!batchTranscodeOpen) {
+    const shouldTrackBatchTranscode = batchTranscodeOpen || batchTranscodeStatus?.status === "running";
+    if (!shouldTrackBatchTranscode) {
       return;
     }
 
     let cancelled = false;
     async function refreshBatchStatus() {
       try {
-        const [status, logs] = await Promise.all([
-          api.getBatchViewerTranscodeStatus(),
-          api.getBatchViewerTranscodeLogs(),
-        ]);
+        const status = await api.getBatchViewerTranscodeStatus();
         if (!cancelled) {
           setBatchTranscodeStatus(status);
+        }
+        if (!batchTranscodeOpen) {
+          return;
+        }
+        const logs = await api.getBatchViewerTranscodeLogs();
+        if (!cancelled) {
           setBatchTranscodeLogs(logs);
         }
       } catch (error) {
@@ -219,7 +246,7 @@ export function App() {
       cancelled = true;
       window.clearInterval(timer);
     };
-  }, [batchTranscodeOpen]);
+  }, [batchTranscodeOpen, batchTranscodeStatus?.status]);
 
   useEffect(() => {
     if (!didInitFilterEffect.current) {
@@ -394,6 +421,14 @@ export function App() {
   }
 
   async function handleClearThumbnails() {
+    const accepted = await confirmDestructiveAction(
+      "Clear thumbnails?",
+      "This will clear generated thumbnails and viewer previews from memory. Continue?",
+      "Clear Thumbnails",
+    );
+    if (!accepted) {
+      return;
+    }
     await api.clearThumbnailCache();
     setThumbnailResetKey((value) => value + 1);
     if (thumbLogOpen) {
@@ -443,6 +478,14 @@ export function App() {
   }
 
   async function handleClearViewerRenders() {
+    const accepted = await confirmDestructiveAction(
+      "Clear rendered media?",
+      "This will delete cached rendered viewer media and completed video transcodes. Continue?",
+      "Clear Rendered Media",
+    );
+    if (!accepted) {
+      return;
+    }
     await api.clearViewerRenderCache();
     const cacheStats = await api.getCacheStats();
     state.setCacheStats(cacheStats);
@@ -451,6 +494,19 @@ export function App() {
   async function handleStartBatchTranscode() {
     const status = await api.startBatchViewerTranscode(getViewerPlaybackSupport());
     setBatchTranscodeStatus(status);
+    if (batchTranscodeOpen) {
+      setBatchTranscodeLogs(await api.getBatchViewerTranscodeLogs());
+    }
+  }
+
+  async function handleOpenBatchTranscode() {
+    setBatchTranscodeOpen(true);
+    const [status, logs] = await Promise.all([
+      api.getBatchViewerTranscodeStatus(),
+      api.getBatchViewerTranscodeLogs(),
+    ]);
+    setBatchTranscodeStatus(status);
+    setBatchTranscodeLogs(logs);
   }
 
   async function handleStopBatchTranscode() {
@@ -461,14 +517,6 @@ export function App() {
   async function handleClearBatchTranscodeLog() {
     await api.clearBatchViewerTranscodeLogs();
     setBatchTranscodeLogs([]);
-  }
-
-  async function handleCloseBatchTranscode() {
-    if (batchTranscodeStatus?.status === "running") {
-      const status = await api.stopBatchViewerTranscode();
-      setBatchTranscodeStatus(status);
-    }
-    setBatchTranscodeOpen(false);
   }
 
   async function handleCopyBatchTranscodeLog() {
@@ -530,8 +578,10 @@ export function App() {
         diagnostics={state.diagnostics}
         logs={state.logs}
         cacheStats={state.cacheStats}
+        thumbBatchRunning={batchThumbnailStatus?.status === "running"}
+        videoBatchRunning={batchTranscodeStatus?.status === "running"}
         onOpenThumbLog={() => void handleOpenThumbLog()}
-        onOpenBatchTranscode={() => setBatchTranscodeOpen(true)}
+        onOpenBatchTranscode={() => void handleOpenBatchTranscode()}
         onClearThumbnails={handleClearThumbnails}
         onClearViewerRenders={handleClearViewerRenders}
         onClearDiagnostics={handleClearDiagnostics}
@@ -550,10 +600,11 @@ export function App() {
               </div>
               <div className="button-row">
                 <button
-                  className="button-primary"
+                  className={`button-primary${batchThumbnailStatus?.status === "running" ? " button-working" : ""}`}
                   onClick={() => void handleStartBatchThumbnailGeneration()}
+                  disabled={batchThumbnailStatus?.status === "running"}
                 >
-                  Start
+                  {batchThumbnailStatus?.status === "running" ? "Working" : "Start"}
                 </button>
                 <button
                   className="button-secondary"
@@ -575,22 +626,6 @@ export function App() {
             </div>
             <div className="viewer-meta">
               <div className="status-banner">{formatThumbnailBatchStatusLine(batchThumbnailStatus)}</div>
-              {batchThumbnailStatus?.current_filename ? (
-                <div style={{ marginTop: 16 }}>
-                  <strong>Current file</strong>
-                  <div className="muted">{batchThumbnailStatus.current_filename}</div>
-                </div>
-              ) : null}
-              {typeof batchThumbnailStatus?.current_elapsed_ms === "number" ? (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  Current elapsed {(batchThumbnailStatus.current_elapsed_ms / 1000).toFixed(1)}s
-                </div>
-              ) : null}
-              {typeof batchThumbnailStatus?.current_source_bytes === "number" ? (
-                <div className="muted" style={{ marginTop: 8 }}>
-                  Source {formatFileSize(batchThumbnailStatus.current_source_bytes)}
-                </div>
-              ) : null}
             </div>
             <div className="thumb-log-list">
               {thumbGenerationLogs.length > 0 ? (
@@ -611,7 +646,7 @@ export function App() {
       ) : null}
 
       {batchTranscodeOpen ? (
-        <div className="viewer-backdrop" onClick={() => void handleCloseBatchTranscode()}>
+        <div className="viewer-backdrop" onClick={() => setBatchTranscodeOpen(false)}>
           <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
             <div className="viewer-toolbar">
               <div>
@@ -621,8 +656,12 @@ export function App() {
                 </div>
               </div>
               <div className="button-row">
-                <button className="button-primary" onClick={() => void handleStartBatchTranscode()}>
-                  Start
+                <button
+                  className={`button-primary${batchTranscodeStatus?.status === "running" ? " button-working" : ""}`}
+                  onClick={() => void handleStartBatchTranscode()}
+                  disabled={batchTranscodeStatus?.status === "running"}
+                >
+                  {batchTranscodeStatus?.status === "running" ? "Working" : "Start"}
                 </button>
                 <button
                   className="button-secondary"
@@ -637,7 +676,7 @@ export function App() {
                 <button className="button-secondary" onClick={() => void handleClearBatchTranscodeLog()}>
                   Clear Log
                 </button>
-                <button className="button-danger" onClick={() => void handleCloseBatchTranscode()}>
+                <button className="button-danger" onClick={() => setBatchTranscodeOpen(false)}>
                   Close
                 </button>
               </div>

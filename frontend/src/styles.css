@@ -113,10 +113,11 @@ button {
 .button-primary,
 .button-secondary,
 .button-danger {
-  border: none;
+  border: 2px solid transparent;
   border-radius: 14px;
   padding: 8px 10px;
   transition: transform 140ms ease, opacity 140ms ease;
+  position: relative;
 }
 
 .button-primary:hover,
@@ -138,6 +139,27 @@ button {
 .button-danger {
   background: rgba(161, 55, 26, 0.1);
   color: var(--danger);
+}
+
+button:disabled {
+  opacity: 0.56;
+  cursor: not-allowed;
+}
+
+button:disabled:hover {
+  transform: none;
+}
+
+.button-working::after {
+  content: "";
+  position: absolute;
+  inset: -3px;
+  border-radius: inherit;
+  border: 2px solid transparent;
+  border-top-color: currentColor;
+  border-right-color: currentColor;
+  animation: button-working-spin 850ms linear infinite;
+  pointer-events: none;
 }
 
 .sidebar-section,
@@ -266,6 +288,22 @@ button {
     inset 0 0 0 3px rgba(46, 128, 74, 0.72),
     inset 0 0 0 7px rgba(255, 255, 255, 0.32),
     0 0 0 1px rgba(255, 255, 255, 0.7);
+}
+
+.thumb.video-ready-transcoded {
+  border: 3px solid rgba(28, 132, 74, 0.94);
+  box-shadow:
+    inset 0 0 0 3px rgba(28, 132, 74, 0.76),
+    inset 0 0 0 7px rgba(255, 255, 255, 0.28),
+    0 0 0 1px rgba(255, 255, 255, 0.76);
+}
+
+.thumb.video-ready-native {
+  border: 3px solid rgba(33, 80, 186, 0.92);
+  box-shadow:
+    inset 0 0 0 3px rgba(33, 80, 186, 0.72),
+    inset 0 0 0 7px rgba(255, 255, 255, 0.24),
+    0 0 0 1px rgba(255, 255, 255, 0.72);
 }
 
 .thumb img {
@@ -509,18 +547,20 @@ button {
   cursor: pointer;
 }
 
-.viewer-live-photo-button {
+.viewer-live-photo-label {
   position: absolute;
   right: 16px;
   top: 16px;
   z-index: 1;
-  border: none;
   border-radius: 999px;
   padding: 9px 14px;
   background: rgba(20, 16, 12, 0.82);
   color: white;
   backdrop-filter: blur(10px);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.22);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 0.66rem;
 }
 
 .viewer-media video {
@@ -563,6 +603,12 @@ button {
   padding: 40px;
   text-align: center;
   color: var(--text-soft);
+}
+
+@keyframes button-working-spin {
+  to {
+    transform: rotate(1turn);
+  }
 }
 
 @media (max-width: 1320px) {

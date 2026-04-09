@@ -414,6 +414,14 @@ export function ViewerModal({
     await api.openAssetWithQuickLook(asset.id);
   }
 
+  async function handleOpenOnGooglePhotos() {
+    if (!asset?.google_photos_url) {
+      return;
+    }
+    pauseModalPlayback();
+    await api.openUrlInBrowser(asset.google_photos_url);
+  }
+
   async function fallbackVideoToBackend() {
     if (!assetId || videoFallbackAttempted) {
       return;
@@ -635,6 +643,11 @@ export function ViewerModal({
                 </button>
               </>
             ) : null}
+            {asset.google_photos_url ? (
+              <button className="button-secondary" onClick={() => void handleOpenOnGooglePhotos()}>
+                View On Google Photos
+              </button>
+            ) : null}
             {isPhoto ? (
               <>
                 {livePhotoPath ? (
@@ -797,13 +810,7 @@ export function ViewerModal({
           ) : imageSrc && assetId === asset.id ? (
             <div className="viewer-image-frame">
               {livePhotoPath ? (
-                <button
-                  className="viewer-live-photo-button"
-                  type="button"
-                  onClick={() => setShowLivePhotoMotion(true)}
-                >
-                  Play Live Photo
-                </button>
+                <div className="viewer-live-photo-label">Live photo</div>
               ) : null}
               <img
                 src={imageSrc}

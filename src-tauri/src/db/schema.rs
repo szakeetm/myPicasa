@@ -112,6 +112,7 @@ pub fn apply(conn: &Connection) -> Result<(), AppError> {
           geo_alt REAL NULL,
           people_json TEXT NULL,
           google_photos_origin TEXT NULL,
+          google_photos_url TEXT NULL,
           import_version INTEGER NOT NULL DEFAULT 1,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
@@ -160,5 +161,30 @@ pub fn apply(conn: &Connection) -> Result<(), AppError> {
         ",
     )?;
 
+    ensure_column(conn, "sidecar_metadata", "google_photos_url", "TEXT NULL")?;
+
     Ok(())
 }
+
+  fn ensure_column(
+    conn: &Connection,
+    table_name: &str,
+    column_name: &str,
+    column_sql: &str,
+  ) -> Result<(), AppError> {
+    let pragma_sql = format!("PRAGMA table_info({table_name})");
+    let mut stmt = conn.prepare(&pragma_sql)?;
+    let existing = stmt
+      .query_map([], |row| row.get::<_, String>(1))?
+      .collect::<Result<Vec<_>, _>>()?;
+
+    if existing.iter().any(|item| item == column_name) {
+      return Ok(());
+    }
+
+    conn.execute(
+      &format!("ALTER TABLE {table_name} ADD COLUMN {column_name} {column_sql}"),
+      [],
+    )?;
+    Ok(())
+  }

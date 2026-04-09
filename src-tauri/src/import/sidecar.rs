@@ -41,6 +41,16 @@ pub fn parse_sidecar(scan: &FileScanRecord) -> Result<Option<ParsedSidecar>, App
         .get("googlePhotosOrigin")
         .and_then(Value::as_str)
         .map(ToOwned::to_owned);
+    let google_photos_url = value
+        .get("url")
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned)
+        .or_else(|| {
+            google_photos_origin
+                .as_deref()
+                .filter(|item| item.starts_with("https://"))
+                .map(ToOwned::to_owned)
+        });
     let people_json = value.get("people").map(Value::to_string);
 
     let is_album_metadata_file = scan.filename.eq_ignore_ascii_case("metadata.json");
@@ -62,6 +72,7 @@ pub fn parse_sidecar(scan: &FileScanRecord) -> Result<Option<ParsedSidecar>, App
         geo_alt,
         people_json,
         google_photos_origin,
+        google_photos_url,
         json_kind: json_kind.to_string(),
         guessed_target_stem: sidecar_target_stem(Path::new(&scan.path)),
     }))

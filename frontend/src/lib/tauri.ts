@@ -14,6 +14,7 @@ import type {
   RefreshRequest,
   ThumbnailBatchItem,
   ViewerMediaStatus,
+  ViewerPlaybackHint,
   ViewerPlaybackSupport,
 } from "./types";
 
@@ -48,6 +49,8 @@ export const api = {
     invoke<BatchThumbnailGenerationStatus>("start_batch_thumbnail_generation"),
   stopBatchThumbnailGeneration: () =>
     invoke<BatchThumbnailGenerationStatus>("stop_batch_thumbnail_generation"),
+  getViewerPlaybackHints: (assetIds: number[], support: ViewerPlaybackSupport) =>
+    invoke<ViewerPlaybackHint[]>("get_viewer_playback_hints", { assetIds, support }),
   getDiagnostics: () =>
     invoke<DiagnosticEntry[]>("get_ingress_diagnostics"),
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),
@@ -74,6 +77,7 @@ export const api = {
     invoke<void>("open_asset_with_default_app", { assetId }),
   openAssetWithQuickLook: (assetId: number) =>
     invoke<void>("open_asset_with_quicklook", { assetId }),
+  openUrlInBrowser: (url: string) => invoke<void>("open_url_in_browser", { url }),
   clearDiagnostics: () => invoke<void>("clear_diagnostics"),
   clearLogs: () => invoke<void>("clear_logs"),
   getLivePhotoPair: (assetId: number) =>

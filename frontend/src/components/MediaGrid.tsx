@@ -3,7 +3,7 @@ import dayjs from "dayjs";
 
 import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
-import type { AssetListItem } from "../lib/types";
+import type { AssetListItem, ViewerPlaybackHint } from "../lib/types";
 
 const VIEWER_PREVIEW_SIZE = 2048;
 
@@ -56,6 +56,7 @@ export function MediaGrid({
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
+  const [videoPlaybackHints, setVideoPlaybackHints] = useState<Record<number, ViewerPlaybackHint["status"]>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
   const requestInFlightRef = useRef(false);
@@ -132,7 +133,52 @@ export function MediaGrid({
       previewSignature: "",
       at: 0,
     };
+    setVideoPlaybackHints({});
   }, [thumbnailResetKey, thumbnailSize]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function refreshPlaybackHints() {
+      const videoIds = assets
+        .filter((asset) => asset.media_kind === "video" && effectiveVisibleIdSet.has(asset.id))
+        .map((asset) => asset.id);
+
+      if (videoIds.length === 0) {
+        if (!cancelled) {
+          setVideoPlaybackHints({});
+        }
+        return;
+      }
+
+      try {
+        const hints = await api.getViewerPlaybackHints(videoIds, getViewerPlaybackSupport());
+        if (cancelled) {
+          return;
+        }
+        setVideoPlaybackHints(
+          hints.reduce<Record<number, ViewerPlaybackHint["status"]>>((acc, hint) => {
+            acc[hint.asset_id] = hint.status;
+            return acc;
+          }, {}),
+        );
+      } catch (error) {
+        if (!cancelled) {
+          await logClient("grid", `viewer playback hint refresh failed: ${String(error)}`, "error");
+        }
+      }
+    }
+
+    void refreshPlaybackHints();
+    const timer = window.setInterval(() => {
+      void refreshPlaybackHints();
+    }, 1000);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [assets, effectiveVisibleIdSet]);
 
   useEffect(() => {
     const assetIds = new Set(assets.map((asset) => asset.id));
@@ -625,7 +671,20 @@ export function MediaGrid({
             }}
             onClick={() => onSelect(asset.id)}
           >
-            <div className={`thumb${thumbs[asset.id]?.previewStatus === "ready" ? " has-viewer-preview" : ""}`}>
+            <div
+              className={[
+                "thumb",
+                thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
+                asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
+                  ? "video-ready-transcoded"
+                  : "",
+                asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
+                  ? "video-ready-native"
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" ")}
+            >
               {thumbs[asset.id]?.status === "ready" ? (
                 <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
               ) : thumbs[asset.id]?.status === "unavailable" ? (
@@ -690,6 +749,27 @@ export function MediaGrid({
       ) : null}
     </div>
   );
+}
+
+function getViewerPlaybackSupport() {
+  if (typeof document === "undefined") {
+    return {
+      mp4_h264: false,
+      mp4_hevc: false,
+      mov_h264: false,
+      mov_hevc: false,
+      webm: false,
+    };
+  }
+  const probe = document.createElement("video");
+  const probably = (value: string) => probe.canPlayType(value) === "probably";
+  return {
+    mp4_h264: probably('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+    mp4_hevc: probably('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
+    mov_h264: probably('video/quicktime; codecs="avc1.42E01E, mp4a.40.2"'),
+    mov_hevc: probably('video/quicktime; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
+    webm: probably("video/webm"),
+  };
 }
 
 function formatDuration(durationMs: number) {

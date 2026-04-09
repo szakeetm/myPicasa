@@ -402,8 +402,8 @@ impl DatabaseQueries for super::Database {
             conn.execute(
                 "INSERT INTO sidecar_metadata
                  (asset_id, sidecar_file_id, json_raw, photo_taken_time_utc, geo_lat, geo_lon, geo_alt,
-                  people_json, google_photos_origin, import_version, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 1, ?10, ?10)
+                                    people_json, google_photos_origin, google_photos_url, import_version, created_at, updated_at)
+                                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1, ?11, ?11)
                  ON CONFLICT(asset_id) DO UPDATE SET
                    sidecar_file_id = excluded.sidecar_file_id,
                    json_raw = excluded.json_raw,
@@ -413,7 +413,8 @@ impl DatabaseQueries for super::Database {
                    geo_alt = excluded.geo_alt,
                    people_json = excluded.people_json,
                    google_photos_origin = excluded.google_photos_origin,
-                   updated_at = excluded.updated_at",
+                                     google_photos_url = excluded.google_photos_url,
+                                     updated_at = excluded.updated_at",
                 params![
                     asset_id,
                     sidecar_file_id,
@@ -424,6 +425,7 @@ impl DatabaseQueries for super::Database {
                     sidecar.geo_alt,
                     sidecar.people_json,
                     sidecar.google_photos_origin,
+                    sidecar.google_photos_url,
                     utc_now()
                 ],
             )?;
@@ -690,14 +692,15 @@ impl DatabaseQueries for super::Database {
         self.with_connection(|conn| {
             let detail = conn.query_row(
                 "SELECT a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, f.file_size, a.width, a.height, a.duration_ms,
-                        a.gps_lat, a.gps_lon, f.path, COALESCE(group_concat(DISTINCT al.name), '')
+                        a.gps_lat, a.gps_lon, f.path, COALESCE(group_concat(DISTINCT al.name), ''), sm.google_photos_url
                  FROM assets a
                  JOIN file_entries f ON f.id = a.primary_file_id
+                 LEFT JOIN sidecar_metadata sm ON sm.asset_id = a.id
                  LEFT JOIN album_assets aa ON aa.asset_id = a.id
                  LEFT JOIN albums al ON al.id = aa.album_id
                  WHERE a.id = ?1
                  GROUP BY a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, f.file_size, a.width, a.height, a.duration_ms,
-                          a.gps_lat, a.gps_lon, f.path",
+                          a.gps_lat, a.gps_lon, f.path, sm.google_photos_url",
                 params![asset_id],
                 |row| {
                     Ok(AssetDetail {
@@ -715,6 +718,7 @@ impl DatabaseQueries for super::Database {
                         primary_path: row.get(11)?,
                         albums: split_csv(row.get::<_, String>(12)?),
                         live_photo_video_path: None,
+                        google_photos_url: row.get(13)?,
                     })
                 },
             )?;

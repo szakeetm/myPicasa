@@ -50,6 +50,7 @@ pub struct ParsedSidecar {
     pub geo_alt: Option<f64>,
     pub people_json: Option<String>,
     pub google_photos_origin: Option<String>,
+    pub google_photos_url: Option<String>,
     pub json_kind: String,
     pub guessed_target_stem: Option<String>,
 }
@@ -108,6 +109,13 @@ pub struct AssetDetail {
     pub primary_path: Option<String>,
     pub albums: Vec<String>,
     pub live_photo_video_path: Option<String>,
+    pub google_photos_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ViewerPlaybackHint {
+    pub asset_id: i64,
+    pub status: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

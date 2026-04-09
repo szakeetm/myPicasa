@@ -66,6 +66,12 @@ export type AssetDetail = {
   primary_path?: string | null;
   albums: string[];
   live_photo_video_path?: string | null;
+  google_photos_url?: string | null;
+};
+
+export type ViewerPlaybackHint = {
+  asset_id: number;
+  status: "none" | "native" | "transcoded";
 };
 
 export type DiagnosticEntry = {
