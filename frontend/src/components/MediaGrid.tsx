@@ -55,11 +55,9 @@ export function MediaGrid({
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
-  const [scrollIdle, setScrollIdle] = useState(true);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
   const requestInFlightRef = useRef(false);
   const previewRequestInFlightRef = useRef(false);
-  const scrollIdleTimeoutRef = useRef<number | null>(null);
   const lastBatchLogRef = useRef<{
     signature: string;
     at: number;
@@ -103,7 +101,7 @@ export function MediaGrid({
     const devicePixelRatio =
       typeof window === "undefined" ? 1 : Math.max(window.devicePixelRatio || 1, 1);
     const estimatedTileWidth = Math.max(width / columns, 160);
-    return Math.min(512, Math.max(256, Math.ceil(estimatedTileWidth * devicePixelRatio * 0.75)));
+    return Math.min(256, Math.max(256, Math.ceil(estimatedTileWidth * devicePixelRatio * 0.75)));
   }, [columns, width]);
 
   useEffect(() => {
@@ -116,39 +114,8 @@ export function MediaGrid({
   }, []);
 
   useEffect(() => {
-    const root = parentRef.current;
-    if (!root) {
-      return;
-    }
-
-    const settleDelayMs = 180;
-    const markScrollActive = () => {
-      setScrollIdle((current) => (current ? false : current));
-      if (scrollIdleTimeoutRef.current !== null) {
-        window.clearTimeout(scrollIdleTimeoutRef.current);
-      }
-      scrollIdleTimeoutRef.current = window.setTimeout(() => {
-        scrollIdleTimeoutRef.current = null;
-        setScrollIdle(true);
-      }, settleDelayMs);
-    };
-
-    setScrollIdle(true);
-    root.addEventListener("scroll", markScrollActive, { passive: true });
-
-    return () => {
-      root.removeEventListener("scroll", markScrollActive);
-      if (scrollIdleTimeoutRef.current !== null) {
-        window.clearTimeout(scrollIdleTimeoutRef.current);
-        scrollIdleTimeoutRef.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
     setThumbs({});
     setVisibleIds([]);
-    setScrollIdle(true);
     requestInFlightRef.current = false;
     previewRequestInFlightRef.current = false;
     lastBatchLogRef.current = { signature: "", at: 0 };
@@ -271,11 +238,6 @@ export function MediaGrid({
     let disposed = false;
 
     async function processPreviewPass() {
-      if (thumbnailPreload?.active && !scrollIdle) {
-        logIdleSnapshot("preview", "scroll_active");
-        return;
-      }
-
       if (previewRequestInFlightRef.current) {
         logIdleSnapshot("preview", "request_in_flight");
         return;
@@ -285,7 +247,6 @@ export function MediaGrid({
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
           return (
-            effectiveVisibleIdSet.has(asset.id) &&
             state?.status === "ready" &&
             !state.previewStatus
           );
@@ -293,25 +254,16 @@ export function MediaGrid({
         .slice(0, 4)
         .map((asset) => asset.id);
 
-      const preloadPreviewIds = thumbnailPreload?.active
-        ? assets
-            .filter((asset) => {
-              const state = thumbsRef.current[asset.id];
-              return (
-                !effectiveVisibleIdSet.has(asset.id) &&
-                state?.status === "ready" &&
-                !state.previewStatus
-              );
-            })
-            .slice(0, Math.max(0, 8 - visiblePreviewIds.length))
-            .map((asset) => asset.id)
-        : [];
-
-      const targetIds = [...visiblePreviewIds, ...preloadPreviewIds];
+      const targetIds = visiblePreviewIds;
       if (targetIds.length === 0) {
         logIdleSnapshot("preview", "no_preview_targets");
         return;
       }
+
+      void logClient(
+        "grid",
+        `preview request visible=${visiblePreviewIds.join(",") || "none"} preload=none requested=${targetIds.join(",")}`,
+      );
 
       startTransition(() => {
         setThumbs((current) => {
@@ -356,7 +308,7 @@ export function MediaGrid({
         const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
         void logClient(
           "grid",
-          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=1024 mode=${visiblePreviewIds.length > 0 ? "visible" : "idle-preload"}`,
+          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=1024 mode=auto`,
         );
       } catch (error) {
         if (disposed) {
@@ -388,7 +340,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, effectiveVisibleIdSet, scrollIdle, thumbnailPreload?.active]);
+  }, [assets, thumbnailPreload?.active]);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -464,11 +416,6 @@ export function MediaGrid({
     let disposed = false;
 
     async function processBatch() {
-      if (thumbnailPreload?.active && !scrollIdle) {
-        logIdleSnapshot("thumb", "scroll_active");
-        return;
-      }
-
       if (requestInFlightRef.current) {
         logIdleSnapshot("thumb", "request_in_flight");
         return;
@@ -477,26 +424,22 @@ export function MediaGrid({
       const visiblePendingIds = assets
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
-          return effectiveVisibleIdSet.has(asset.id) && (!state || state.status === "pending");
+          return !state || state.status === "pending";
         })
         .slice(0, 12)
         .map((asset) => asset.id);
 
-      const preloadPendingIds = thumbnailPreload?.active
-        ? assets
-            .filter((asset) => {
-              const state = thumbsRef.current[asset.id];
-              return !effectiveVisibleIdSet.has(asset.id) && (!state || state.status === "pending");
-            })
-            .slice(0, Math.max(0, 12 - visiblePendingIds.length))
-            .map((asset) => asset.id)
-        : [];
-
-      const requestIds = [...visiblePendingIds, ...preloadPendingIds];
+      const preloadPendingIds: number[] = [];
+      const requestIds = visiblePendingIds;
       if (requestIds.length === 0) {
         logIdleSnapshot("thumb", "no_thumb_targets");
         return;
       }
+
+      void logClient(
+        "grid",
+        `thumb request visible=${visiblePendingIds.join(",") || "none"} preload=none requested=${requestIds.join(",")}`,
+      );
 
       startTransition(() => {
         setThumbs((current) => {
@@ -581,7 +524,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, effectiveVisibleIdSet, scrollIdle, thumbnailPreload?.active, thumbnailSize]);
+  }, [assets, thumbnailPreload?.active, thumbnailSize]);
 
   useEffect(() => {
     const firstVisibleAsset =

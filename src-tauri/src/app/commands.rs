@@ -519,12 +519,23 @@ pub fn request_thumbnails_batch(
                     "thumbnail_batch_item asset_id={} size={} status=pending enqueue=start",
                     asset_id, size
                 ));
-                if let Err(error) = state.thumbnail_job_sender.send(ThumbnailJob {
+                let sender = if use_preview_cache {
+                    &state.preview_job_sender
+                } else {
+                    &state.thumbnail_job_sender
+                };
+                if !use_preview_cache {
+                    state.thumb_backlog.fetch_add(1, Ordering::SeqCst);
+                }
+                if let Err(error) = sender.send(ThumbnailJob {
                     asset_id,
                     size,
                     key: key.clone(),
                     generation,
                 }) {
+                    if !use_preview_cache {
+                        state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
+                    }
                     state.inflight_thumbnails.lock().remove(&key);
                     state.failed_thumbnails.lock().insert(key.clone());
                     let _ = state.db.insert_log(

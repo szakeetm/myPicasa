@@ -140,6 +140,7 @@ export function App() {
 
   useEffect(() => {
     void logClient("ui.bootstrap", "frontend booted");
+    void api.clearThumbGenerationLogs();
     void refreshDebugSurfaces();
     void refreshAllAssets();
     // Initial bootstrap is intentionally one-shot.

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::AtomicU64;
+use std::sync::atomic::{AtomicU64, AtomicUsize};
 use std::sync::{Arc, mpsc::Sender};
 
 use parking_lot::Mutex;
@@ -33,6 +33,8 @@ pub struct AppState {
     pub inflight_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub failed_thumbnails: Arc<Mutex<HashSet<String>>>,
     pub thumbnail_generation: Arc<AtomicU64>,
+    pub thumb_backlog: Arc<AtomicUsize>,
     pub thumbnail_job_sender: Sender<ThumbnailJob>,
+    pub preview_job_sender: Sender<ThumbnailJob>,
     pub viewer_video_jobs: Arc<Mutex<HashMap<String, ViewerTranscodeState>>>,
 }
