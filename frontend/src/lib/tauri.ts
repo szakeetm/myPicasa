@@ -5,6 +5,7 @@ import type {
   AssetDetail,
   AssetListRequest,
   AssetListResponse,
+  BatchThumbnailGenerationStatus,
   BatchViewerTranscodeStatus,
   CacheStats,
   DiagnosticEntry,
@@ -41,6 +42,12 @@ export const api = {
     invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size }),
   requestThumbnail: (assetId: number, size: number) =>
     invoke<string | null>("request_thumbnail", { assetId, size }),
+  getBatchThumbnailGenerationStatus: () =>
+    invoke<BatchThumbnailGenerationStatus>("get_batch_thumbnail_generation_status"),
+  startBatchThumbnailGeneration: () =>
+    invoke<BatchThumbnailGenerationStatus>("start_batch_thumbnail_generation"),
+  stopBatchThumbnailGeneration: () =>
+    invoke<BatchThumbnailGenerationStatus>("stop_batch_thumbnail_generation"),
   getDiagnostics: () =>
     invoke<DiagnosticEntry[]>("get_ingress_diagnostics"),
   getCacheStats: () => invoke<CacheStats>("get_cache_stats"),
@@ -62,6 +69,11 @@ export const api = {
   clearBatchViewerTranscodeLogs: () => invoke<void>("clear_batch_viewer_transcode_logs"),
   recordClientLog: (level: string, scope: string, message: string) =>
     invoke<void>("record_client_log", { level, scope, message }),
+  showAssetInFinder: (assetId: number) => invoke<void>("show_asset_in_finder", { assetId }),
+  openAssetWithDefaultApp: (assetId: number) =>
+    invoke<void>("open_asset_with_default_app", { assetId }),
+  openAssetWithQuickLook: (assetId: number) =>
+    invoke<void>("open_asset_with_quicklook", { assetId }),
   clearDiagnostics: () => invoke<void>("clear_diagnostics"),
   clearLogs: () => invoke<void>("clear_logs"),
   getLivePhotoPair: (assetId: number) =>

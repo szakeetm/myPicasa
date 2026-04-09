@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::Cursor,
+    io::{BufRead, Cursor, Seek},
     path::{Path, PathBuf},
     process::{Child, Command, Output, Stdio},
     thread,
@@ -520,7 +520,9 @@ fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::
     }
 }
 
-fn decode_with_orientation(reader: ImageReader<std::io::BufReader<std::fs::File>>) -> Result<DynamicImage, image::ImageError> {
+fn decode_with_orientation<R: BufRead + Seek>(
+    reader: ImageReader<R>,
+) -> Result<DynamicImage, image::ImageError> {
     let mut decoder = reader.into_decoder()?;
     let orientation = decoder.orientation()?;
     let mut image = DynamicImage::from_decoder(decoder)?;
@@ -746,7 +748,8 @@ fn temp_render_dir(path: &Path, working_dir: &Path) -> PathBuf {
 }
 
 fn normalize_image_bytes_to_jpeg(bytes: &[u8], quality: u8) -> Result<Vec<u8>, AppError> {
-    let image = image::load_from_memory(bytes)?;
+    let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
+    let image = decode_with_orientation(reader)?;
     let mut buffer = Vec::new();
     let mut cursor = Cursor::new(&mut buffer);
     let mut encoder = JpegEncoder::new_with_quality(&mut cursor, quality);

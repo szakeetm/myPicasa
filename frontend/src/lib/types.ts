@@ -138,6 +138,21 @@ export type BatchViewerTranscodeStatus = {
   message?: string | null;
 };
 
+export type BatchThumbnailGenerationStatus = {
+  status: "idle" | "running" | "completed";
+  total: number;
+  completed: number;
+  failed: number;
+  skipped: number;
+  stop_requested: boolean;
+  current_asset_id?: number | null;
+  current_filename?: string | null;
+  current_source_bytes?: number | null;
+  current_elapsed_ms?: number | null;
+  elapsed_ms?: number | null;
+  message?: string | null;
+};
+
 export type ViewerPlaybackSupport = {
   mp4_h264: boolean;
   mp4_hevc: boolean;

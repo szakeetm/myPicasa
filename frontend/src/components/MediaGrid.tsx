@@ -5,6 +5,8 @@ import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
 import type { AssetListItem } from "../lib/types";
 
+const VIEWER_PREVIEW_SIZE = 2048;
+
 type MediaGridProps = {
   assets: AssetListItem[];
   onSelect: (assetId: number) => void;
@@ -281,7 +283,7 @@ export function MediaGrid({
 
       previewRequestInFlightRef.current = true;
       try {
-        const batch = await api.requestThumbnailsBatch(targetIds, 1024);
+        const batch = await api.requestThumbnailsBatch(targetIds, VIEWER_PREVIEW_SIZE);
         if (disposed) {
           return;
         }
@@ -309,7 +311,7 @@ export function MediaGrid({
         const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
         void logClient(
           "grid",
-          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=1024 mode=auto`,
+          `viewer preview batch ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount} requested=${targetIds.length} size=${VIEWER_PREVIEW_SIZE} mode=auto`,
         );
       } catch (error) {
         if (disposed) {

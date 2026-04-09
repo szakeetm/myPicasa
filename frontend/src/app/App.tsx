@@ -13,6 +13,7 @@ import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
 import type {
   AssetListRequest,
+  BatchThumbnailGenerationStatus,
   BatchViewerTranscodeStatus,
   LogEntry,
   ViewerPlaybackSupport,
@@ -29,6 +30,7 @@ export function App() {
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
+  const [batchThumbnailStatus, setBatchThumbnailStatus] = useState<BatchThumbnailGenerationStatus>();
   const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
   const [batchTranscodeStatus, setBatchTranscodeStatus] = useState<BatchViewerTranscodeStatus>();
   const [batchTranscodeLogs, setBatchTranscodeLogs] = useState<LogEntry[]>([]);
@@ -163,9 +165,13 @@ export function App() {
     let cancelled = false;
     async function refreshThumbLogs() {
       try {
-        const entries = await api.getThumbGenerationLogs();
+        const [entries, status] = await Promise.all([
+          api.getThumbGenerationLogs(),
+          api.getBatchThumbnailGenerationStatus(),
+        ]);
         if (!cancelled) {
           setThumbGenerationLogs(entries);
+          setBatchThumbnailStatus(status);
         }
       } catch (error) {
         console.error("failed to load thumb generation logs", error);
@@ -399,13 +405,31 @@ export function App() {
 
   async function handleOpenThumbLog() {
     setThumbLogOpen(true);
-    setThumbGenerationLogs(await api.getThumbGenerationLogs());
+    const [logs, status] = await Promise.all([
+      api.getThumbGenerationLogs(),
+      api.getBatchThumbnailGenerationStatus(),
+    ]);
+    setThumbGenerationLogs(logs);
+    setBatchThumbnailStatus(status);
   }
 
   async function handleClearThumbLog() {
     await api.clearThumbGenerationLogs();
     setThumbGenerationLogs([]);
     await refreshDebugSurfaces();
+  }
+
+  async function handleStartBatchThumbnailGeneration() {
+    const status = await api.startBatchThumbnailGeneration();
+    setBatchThumbnailStatus(status);
+    if (thumbLogOpen) {
+      setThumbGenerationLogs(await api.getThumbGenerationLogs());
+    }
+  }
+
+  async function handleStopBatchThumbnailGeneration() {
+    const status = await api.stopBatchThumbnailGeneration();
+    setBatchThumbnailStatus(status);
   }
 
   async function handleCopyThumbLog() {
@@ -525,8 +549,18 @@ export function App() {
                 </div>
               </div>
               <div className="button-row">
-                <button className="button-secondary" onClick={() => void handleOpenThumbLog()}>
-                  Refresh
+                <button
+                  className="button-primary"
+                  onClick={() => void handleStartBatchThumbnailGeneration()}
+                >
+                  Start
+                </button>
+                <button
+                  className="button-secondary"
+                  onClick={() => void handleStopBatchThumbnailGeneration()}
+                  disabled={!batchThumbnailStatus?.status || batchThumbnailStatus.status !== "running"}
+                >
+                  Stop After Current
                 </button>
                 <button className="button-secondary" onClick={() => void handleCopyThumbLog()}>
                   Copy
@@ -538,6 +572,25 @@ export function App() {
                   Close
                 </button>
               </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">{formatThumbnailBatchStatusLine(batchThumbnailStatus)}</div>
+              {batchThumbnailStatus?.current_filename ? (
+                <div style={{ marginTop: 16 }}>
+                  <strong>Current file</strong>
+                  <div className="muted">{batchThumbnailStatus.current_filename}</div>
+                </div>
+              ) : null}
+              {typeof batchThumbnailStatus?.current_elapsed_ms === "number" ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Current elapsed {(batchThumbnailStatus.current_elapsed_ms / 1000).toFixed(1)}s
+                </div>
+              ) : null}
+              {typeof batchThumbnailStatus?.current_source_bytes === "number" ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Source {formatFileSize(batchThumbnailStatus.current_source_bytes)}
+                </div>
+              ) : null}
             </div>
             <div className="thumb-log-list">
               {thumbGenerationLogs.length > 0 ? (
@@ -577,12 +630,6 @@ export function App() {
                   disabled={!batchTranscodeStatus?.status || batchTranscodeStatus.status !== "running"}
                 >
                   Stop After Current
-                </button>
-                <button
-                  className="button-secondary"
-                  onClick={() => void api.getBatchViewerTranscodeStatus().then(setBatchTranscodeStatus)}
-                >
-                  Refresh
                 </button>
                 <button className="button-secondary" onClick={() => void handleCopyBatchTranscodeLog()}>
                   Copy Log
@@ -706,6 +753,30 @@ function formatBatchStatusLine(status?: BatchViewerTranscodeStatus) {
     `${processed}/${status.total} processed`,
     `${status.succeeded} succeeded`,
   ];
+  if (status.skipped > 0) {
+    parts.push(`${status.skipped} skipped`);
+  }
+  if (status.failed > 0) {
+    parts.push(`${status.failed} failed`);
+  }
+  if (status.stop_requested) {
+    parts.push("stop requested");
+  }
+  if (typeof status.elapsed_ms === "number") {
+    parts.push(`${(status.elapsed_ms / 1000).toFixed(1)}s elapsed`);
+  }
+  if (status.message) {
+    parts.push(status.message);
+  }
+  return parts.join(" • ");
+}
+
+function formatThumbnailBatchStatusLine(status?: BatchThumbnailGenerationStatus) {
+  if (!status) {
+    return "No thumbnail generation job has started yet.";
+  }
+  const processed = status.completed + status.failed;
+  const parts = [status.status, `${processed}/${status.total} processed`];
   if (status.skipped > 0) {
     parts.push(`${status.skipped} skipped`);
   }

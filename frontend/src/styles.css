@@ -482,23 +482,10 @@ button {
   min-height: 0;
 }
 
-.viewer-transform-wrapper {
-  width: 100%;
-  height: 100%;
-}
-
-.viewer-transform-content {
-  width: 100%;
-  height: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
-
 .viewer-image-frame {
   position: relative;
-  width: max-content;
-  min-width: min(100%, max-content);
+  width: 100%;
+  min-width: 100%;
   min-height: calc(68vh - 24px);
   display: flex;
   align-items: center;
@@ -511,9 +498,11 @@ button {
 
 .viewer-image-frame img {
   display: block;
-  max-width: none;
-  max-height: none;
+  max-width: 100%;
+  max-height: calc(100vh - 180px);
+  width: auto;
   height: auto;
+  object-fit: contain;
 }
 
 .viewer-live-photo-still {

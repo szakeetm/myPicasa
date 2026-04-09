@@ -1,18 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import dayjs from "dayjs";
 import { convertFileSrc } from "@tauri-apps/api/core";
-import {
-  TransformComponent,
-  TransformWrapper,
-  type ReactZoomPanPinchRef,
-} from "react-zoom-pan-pinch";
 
 import { logClient } from "../lib/logger";
 import { api } from "../lib/tauri";
 import type { AssetDetail } from "../lib/types";
 
-const VIEWER_PREVIEW_SIZE = 1024;
+const VIEWER_PREVIEW_SIZE = 2048;
 
 type ViewerModalProps = {
   asset?: AssetDetail;
@@ -60,14 +55,8 @@ export function ViewerModal({
     outputBytes?: number;
   }>({});
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
-  const [forceRenderedFrame, setForceRenderedFrame] = useState(false);
-  const [zoom, setZoom] = useState(1);
-  const [zoomMode, setZoomMode] = useState<"fit" | "custom">("fit");
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number }>();
-  const [viewportSize, setViewportSize] = useState<{ width: number; height: number }>();
   const [displaySourceLabel, setDisplaySourceLabel] = useState<string>("Loading");
-  const viewerMediaRef = useRef<HTMLDivElement | null>(null);
-  const imageTransformRef = useRef<ReactZoomPanPinchRef | null>(null);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const livePhotoVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const videoObjectUrlRef = useRef<string | undefined>(undefined);
@@ -91,7 +80,6 @@ export function ViewerModal({
       : naturalSize;
 
   useEffect(() => {
-    setForceRenderedFrame(false);
     setVideoFallbackAttempted(false);
     setShowLivePhotoMotion(false);
     setVideoSrc(undefined);
@@ -105,8 +93,6 @@ export function ViewerModal({
     setLivePhotoFallbackAvailable(false);
     setVideoTranscodeStatus({});
     setLivePhotoTranscodeStatus({});
-    setZoomMode("fit");
-    setZoom(1);
     setNaturalSize(undefined);
     setDisplaySourceLabel("Loading");
     setImageError(undefined);
@@ -120,59 +106,6 @@ export function ViewerModal({
       livePhotoObjectUrlRef.current = undefined;
     }
   }, [assetId]);
-
-  useEffect(() => {
-    const element = viewerMediaRef.current;
-    if (!element) return;
-    const publishSize = () => {
-      setViewportSize({
-        width: Math.max(0, element.clientWidth - 24),
-        height: Math.max(0, element.clientHeight - 24),
-      });
-    };
-    publishSize();
-    const observer = new ResizeObserver(publishSize);
-    observer.observe(element);
-    return () => observer.disconnect();
-  }, [assetId, imageSrc]);
-
-  const fitZoom = useMemo(() => {
-    if (!canonicalImageSize || !viewportSize?.width || !viewportSize?.height) {
-      return 1;
-    }
-    return Math.min(
-      viewportSize.width / canonicalImageSize.width,
-      viewportSize.height / canonicalImageSize.height,
-    );
-  }, [canonicalImageSize, viewportSize]);
-
-  const effectiveZoom = isPhoto
-    ? zoomMode === "fit"
-      ? fitZoom
-      : zoom
-    : 1;
-
-  function setActualSize() {
-    setZoomMode("custom");
-    setZoom(1);
-    imageTransformRef.current?.setTransform(0, 0, 1, 150, "easeOut");
-  }
-
-  function setFitMode() {
-    setZoomMode("fit");
-    if (fitZoom > 0) {
-      imageTransformRef.current?.setTransform(0, 0, fitZoom, 150, "easeOut");
-      setZoom(fitZoom);
-    }
-  }
-
-  function adjustZoom(delta: number) {
-    const base = imageTransformRef.current?.state.scale ?? effectiveZoom;
-    const nextZoom = Math.min(Math.max(base + delta, 0.1), 8);
-    setZoomMode("custom");
-    setZoom(nextZoom);
-    imageTransformRef.current?.zoomToElement("viewer-photo-image", nextZoom);
-  }
 
   function setImageSourceLabel(label: string) {
     imageSourceLabelRef.current = label;
@@ -406,106 +339,80 @@ export function ViewerModal({
       return;
     }
     setImageError(undefined);
-    const useViewerPreview = zoomMode === "fit";
-    const preferOriginal = !forceRenderedFrame;
     setDisplaySourceLabel("Loading");
     void logClient(
       "viewer.image",
-      `asset ${assetId} loading backend image source=${useViewerPreview ? "preview" : preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
+      `asset ${assetId} loading backend image source=preview path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
     );
 
-    if (useViewerPreview) {
-      void api
-        .requestThumbnail(assetId, VIEWER_PREVIEW_SIZE)
-        .then((src) => {
-          if (cancelled) return;
-          if (src) {
-            setImageSourceLabel("preview");
-            void logClient(
-              "viewer.image",
-              `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
-            );
-            setImageSrc(src);
-            setImageError(undefined);
-            return;
-          }
-
+    void api
+      .requestThumbnail(assetId, VIEWER_PREVIEW_SIZE)
+      .then((src) => {
+        if (cancelled) return;
+        if (src) {
+          setImageSourceLabel("preview");
           void logClient(
             "viewer.image",
-            `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail unavailable, falling back to original image path=${asset?.primary_path ?? "unknown"}`,
+            `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
           );
-          return api.loadViewerFrame(assetId, true).then((fullSrc) => {
-            if (cancelled) return;
-            if (fullSrc) {
-              setImageSourceLabel("original");
-              void logClient(
-                "viewer.image",
-                `asset ${assetId} original image fallback ready after missing ${VIEWER_PREVIEW_SIZE}px preview path=${asset?.primary_path ?? "unknown"}`,
-              );
-              setImageSrc(fullSrc);
-              setImageError(undefined);
-            } else {
-              void logClient(
-                "viewer.image",
-                `asset ${assetId} original image fallback unavailable after missing ${VIEWER_PREVIEW_SIZE}px preview path=${asset?.primary_path ?? "unknown"}`,
-                "error",
-              );
-              setImageSrc(undefined);
-              setImageError("Image preview unavailable");
-            }
-          });
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            void logClient(
-              "viewer.image",
-              `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview load failed: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
-              "error",
-            );
-            setImageSrc(undefined);
-            setImageError(String(error));
-          }
-        });
-    } else {
-      void api
-        .loadViewerFrame(assetId, preferOriginal)
-        .then((src) => {
-          if (cancelled) return;
-          if (src) {
-            setImageSourceLabel(preferOriginal ? "original" : "rendered");
-            void logClient(
-              "viewer.image",
-              `asset ${assetId} full image source ready source=${preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"}`,
-            );
-            setImageSrc(src);
-            setImageError(undefined);
-          } else {
-            void logClient(
-              "viewer.image",
-              `asset ${assetId} full image source unavailable source=${preferOriginal ? "original" : "rendered"} path=${asset?.primary_path ?? "unknown"}`,
-              "error",
-            );
-            setImageSrc(undefined);
-            setImageError("Image preview unavailable");
-          }
-        })
-        .catch((error) => {
-          if (!cancelled) {
-            void logClient(
-              "viewer.image",
-              `asset ${assetId} full image load failed source=${preferOriginal ? "original" : "rendered"}: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
-              "error",
-            );
-            setImageSrc(undefined);
-            setImageError(String(error));
-          }
-        });
-    }
+          setImageSrc(src);
+          setImageError(undefined);
+          return;
+        }
+
+        void logClient(
+          "viewer.image",
+          `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail unavailable path=${asset?.primary_path ?? "unknown"}`,
+          "error",
+        );
+        setImageSrc(undefined);
+        setImageError("Image preview unavailable");
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          void logClient(
+            "viewer.image",
+            `asset ${assetId} ${VIEWER_PREVIEW_SIZE}px viewer preview load failed: ${String(error)} path=${asset?.primary_path ?? "unknown"}`,
+            "error",
+          );
+          setImageSrc(undefined);
+          setImageError(String(error));
+        }
+      });
 
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.primary_path, forceRenderedFrame, isPhoto, zoomMode]);
+  }, [assetId, asset?.primary_path, isPhoto]);
+
+  function pauseModalPlayback() {
+    videoElementRef.current?.pause();
+    livePhotoVideoElementRef.current?.pause();
+  }
+
+  async function handleShowInFinder() {
+    if (!asset?.primary_path) {
+      return;
+    }
+    pauseModalPlayback();
+    await api.showAssetInFinder(asset.id);
+  }
+
+  async function handleOpenInDefaultApp() {
+    if (!asset?.primary_path) {
+      return;
+    }
+    pauseModalPlayback();
+    await api.openAssetWithDefaultApp(asset.id);
+  }
+
+  async function handleOpenWithQuickLookOrQuickTime() {
+    if (!asset?.primary_path) {
+      return;
+    }
+    pauseModalPlayback();
+    await api.openAssetWithQuickLook(asset.id);
+  }
 
   async function fallbackVideoToBackend() {
     if (!assetId || videoFallbackAttempted) {
@@ -644,6 +551,14 @@ export function ViewerModal({
   useEffect(() => {
     if (!asset) return;
     function onKeyDown(event: KeyboardEvent) {
+      const target = event.target as HTMLElement | null;
+      const tagName = target?.tagName?.toLowerCase();
+      const isEditable =
+        tagName === "input" ||
+        tagName === "textarea" ||
+        tagName === "select" ||
+        target?.isContentEditable;
+
       if (event.key === "ArrowLeft" && hasPrevious) {
         event.preventDefault();
         onPrevious();
@@ -653,31 +568,23 @@ export function ViewerModal({
       } else if (event.key === "Escape") {
         event.preventDefault();
         onClose();
-      } else if ((event.key === "+" || event.key === "=") && isPhoto) {
+      } else if ((event.key === "f" || event.key === "F") && asset?.primary_path && !isEditable) {
         event.preventDefault();
-        adjustZoom(0.25);
-      } else if (event.key === "-" && isPhoto) {
+        void handleShowInFinder();
+      } else if ((event.key === "o" || event.key === "O") && asset?.primary_path && !isEditable) {
         event.preventDefault();
-        adjustZoom(-0.25);
-      } else if (event.key === "0" && isPhoto) {
+        void handleOpenInDefaultApp();
+      } else if (event.key === " " && asset?.primary_path) {
+        if (isEditable) {
+          return;
+        }
         event.preventDefault();
-        setActualSize();
-      } else if ((event.key === "f" || event.key === "F") && isPhoto) {
-        event.preventDefault();
-        setFitMode();
+        void handleOpenWithQuickLookOrQuickTime();
       }
     }
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [asset, fitZoom, hasNext, hasPrevious, isPhoto, onClose, onNext, onPrevious, zoomMode]);
-
-  useEffect(() => {
-    if (!isPhoto || zoomMode !== "fit" || fitZoom <= 0) {
-      return;
-    }
-    imageTransformRef.current?.setTransform(0, 0, fitZoom, 150, "easeOut");
-    setZoom(fitZoom);
-  }, [fitZoom, isPhoto, zoomMode]);
+  }, [asset, hasNext, hasPrevious, isPhoto, onClose, onNext, onPrevious]);
 
   useEffect(() => {
     if (showLivePhotoMotion) {
@@ -700,9 +607,34 @@ export function ViewerModal({
         onClick={(event) => event.stopPropagation()}
       >
         <div className="viewer-toolbar">
-          <strong>{asset.title ?? "Untitled asset"}</strong>
+          <strong>
+            {asset.title ?? "Untitled asset"}
+            {typeof asset.id === "number" ? ` • #${asset.id}` : ""}
+          </strong>
           <div className="button-row">
             <span className="viewer-source-badge">{formatViewerSourceLabel(displaySourceLabel)}</span>
+            {asset?.primary_path ? (
+              <>
+                <button
+                  className="button-secondary"
+                  onClick={() => void handleShowInFinder()}
+                >
+                  Show In Finder
+                </button>
+                <button
+                  className="button-secondary"
+                  onClick={() => void handleOpenInDefaultApp()}
+                >
+                  Open In Default App
+                </button>
+                <button
+                  className="button-secondary"
+                  onClick={() => void handleOpenWithQuickLookOrQuickTime()}
+                >
+                  {isVideo ? "Open With QuickTime" : "Open With Quick Look"}
+                </button>
+              </>
+            ) : null}
             {isPhoto ? (
               <>
                 {livePhotoPath ? (
@@ -710,18 +642,6 @@ export function ViewerModal({
                     {showLivePhotoMotion ? "Show Photo" : "Play Live Photo"}
                   </button>
                 ) : null}
-                <button className="button-secondary" onClick={() => adjustZoom(-0.25)}>
-                  Zoom -
-                </button>
-                <button className="button-secondary" onClick={setActualSize}>
-                  100%
-                </button>
-                <button className="button-secondary" onClick={setFitMode}>
-                  Fit
-                </button>
-                <button className="button-secondary" onClick={() => adjustZoom(0.25)}>
-                  Zoom +
-                </button>
               </>
             ) : null}
             <button className="button-secondary" onClick={onPrevious} disabled={!hasPrevious}>
@@ -735,7 +655,7 @@ export function ViewerModal({
             </button>
           </div>
         </div>
-        <div className="viewer-media viewer-media-immersive" ref={viewerMediaRef}>
+        <div className="viewer-media viewer-media-immersive">
           {asset.media_kind === "video" ? (
             videoSrc ? (
               <video
@@ -875,97 +795,54 @@ export function ViewerModal({
               <div className="muted">Loading live photo…</div>
             )
           ) : imageSrc && assetId === asset.id ? (
-            <TransformWrapper
-              centerOnInit
-              doubleClick={{ disabled: true }}
-              initialScale={Math.max(fitZoom, 0.1)}
-              maxScale={8}
-              minScale={Math.min(Math.max(fitZoom, 0.1), 1)}
-              pinch={{ step: 5 }}
-              wheel={{ step: 0.12 }}
-              panning={{ velocityDisabled: true }}
-              onInit={(ref) => {
-                imageTransformRef.current = ref;
-                if (zoomMode === "fit" && fitZoom > 0) {
-                  ref.setTransform(0, 0, fitZoom, 0, "easeOut");
-                  setZoom(fitZoom);
-                } else {
-                  setZoom(ref.state.scale);
-                }
-              }}
-              onTransform={(_, state) => {
-                const scale = state.scale;
-                setZoom(scale);
-                if (zoomMode === "fit" && Math.abs(scale - fitZoom) > 0.01) {
-                  setZoomMode("custom");
-                }
-              }}
-            >
-              <TransformComponent
-                contentClass="viewer-transform-content"
-                wrapperClass="viewer-transform-wrapper"
-                wrapperStyle={{ width: "100%", height: "100%" }}
-              >
-                <div className="viewer-image-frame">
-                  {livePhotoPath ? (
-                    <button
-                      className="viewer-live-photo-button"
-                      type="button"
-                      onClick={() => setShowLivePhotoMotion(true)}
-                    >
-                      Play Live Photo
-                    </button>
-                  ) : null}
-                  <img
-                    id="viewer-photo-image"
-                    src={imageSrc}
-                    alt={asset.title ?? "asset"}
-                    className={livePhotoPath ? "viewer-live-photo-still" : undefined}
-                    style={
-                      canonicalImageSize
-                        ? {
-                            width: `${Math.max(1, Math.round(canonicalImageSize.width))}px`,
-                            height: `${Math.max(1, Math.round(canonicalImageSize.height))}px`,
-                          }
-                        : undefined
-                    }
-                    onLoad={(event) => {
-                      void logClient(
-                        "viewer.image",
-                        `asset ${assetId} image loaded source=${imageSourceLabelRef.current} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
-                      );
-                      setNaturalSize({
-                        width: event.currentTarget.naturalWidth,
-                        height: event.currentTarget.naturalHeight,
-                      });
-                    }}
-                    onClick={() => {
-                      if (livePhotoPath) {
-                        setShowLivePhotoMotion(true);
+            <div className="viewer-image-frame">
+              {livePhotoPath ? (
+                <button
+                  className="viewer-live-photo-button"
+                  type="button"
+                  onClick={() => setShowLivePhotoMotion(true)}
+                >
+                  Play Live Photo
+                </button>
+              ) : null}
+              <img
+                src={imageSrc}
+                alt={asset.title ?? "asset"}
+                className={livePhotoPath ? "viewer-live-photo-still" : undefined}
+                style={
+                  canonicalImageSize
+                    ? {
+                        width: `${Math.max(1, Math.round(canonicalImageSize.width))}px`,
+                        height: `${Math.max(1, Math.round(canonicalImageSize.height))}px`,
                       }
-                    }}
-                    onError={() => {
-                      if (!forceRenderedFrame) {
-                        void logClient(
-                          "viewer.image",
-                          `asset ${assetId} backend original image failed, switching to rendered fallback path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
-                          "error",
-                        );
-                        setForceRenderedFrame(true);
-                        return;
-                      }
-                      void logClient(
-                        "viewer.image",
-                        `asset ${assetId} image unavailable after fallback path=${asset?.primary_path ?? "unknown"}`,
-                        "error",
-                      );
-                      setImageSrc(undefined);
-                      setImageError("Image preview unavailable");
-                    }}
-                  />
-                </div>
-              </TransformComponent>
-            </TransformWrapper>
+                    : undefined
+                }
+                onLoad={(event) => {
+                  void logClient(
+                    "viewer.image",
+                    `asset ${assetId} image loaded source=${imageSourceLabelRef.current} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
+                  );
+                  setNaturalSize({
+                    width: event.currentTarget.naturalWidth,
+                    height: event.currentTarget.naturalHeight,
+                  });
+                }}
+                onClick={() => {
+                  if (livePhotoPath) {
+                    setShowLivePhotoMotion(true);
+                  }
+                }}
+                onError={() => {
+                  void logClient(
+                    "viewer.image",
+                    `asset ${assetId} image unavailable source=preview path=${asset?.primary_path ?? "unknown"}`,
+                    "error",
+                  );
+                  setImageSrc(undefined);
+                  setImageError("Image preview unavailable");
+                }}
+              />
+            </div>
           ) : imageError ? (
             <div className="muted">{imageError}</div>
           ) : (
@@ -975,7 +852,6 @@ export function ViewerModal({
         <div className="viewer-meta">
           <p className="muted">
             {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm:ss") : "Unknown capture time"}
-            {isPhoto ? ` • zoom ${Math.round(effectiveZoom * 100)}%` : ""}
             {canonicalImageSize ? ` • ${canonicalImageSize.width}x${canonicalImageSize.height}` : ""}
             {asset.file_size ? ` • ${formatFileSize(asset.file_size)}` : ""}
           </p>

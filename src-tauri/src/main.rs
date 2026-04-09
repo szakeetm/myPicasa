@@ -18,7 +18,7 @@ use std::time::Duration;
 
 use app::{
     commands::command_handlers,
-    state::{AppState, BatchViewerTranscodeState, ThumbnailJob},
+    state::{AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob},
 };
 use cache::thumb_cache::ThumbnailCache;
 use db::{Database, DatabaseQueries};
@@ -29,7 +29,7 @@ use tauri::Manager;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 const PREVIEW_DEBUG_LOGS: bool = false;
-const VIEWER_PREVIEW_SIZE: u32 = 1024;
+const VIEWER_PREVIEW_SIZE: u32 = 2048;
 fn preview_debug_log(message: String) {
     if PREVIEW_DEBUG_LOGS {
         println!("{message}");
@@ -364,6 +364,7 @@ fn main() {
                 preview_job_sender,
                 viewer_video_jobs: Arc::new(Mutex::new(HashMap::new())),
                 batch_viewer_transcode: Arc::new(Mutex::new(BatchViewerTranscodeState::idle())),
+                batch_thumbnail_generation: Arc::new(Mutex::new(BatchThumbnailGenerationState::idle())),
             };
 
             state

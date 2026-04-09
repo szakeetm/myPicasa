@@ -95,6 +95,43 @@ impl BatchViewerTranscodeState {
 }
 
 #[derive(Clone)]
+pub struct BatchThumbnailGenerationState {
+    pub running: bool,
+    pub total: u32,
+    pub completed: u32,
+    pub failed: u32,
+    pub skipped: u32,
+    pub stop_requested: bool,
+    pub current_asset_id: Option<i64>,
+    pub current_filename: Option<String>,
+    pub current_source_bytes: Option<u64>,
+    pub current_started_at: Option<std::time::Instant>,
+    pub started_at: Option<std::time::Instant>,
+    pub elapsed_ms: Option<u64>,
+    pub message: Option<String>,
+}
+
+impl BatchThumbnailGenerationState {
+    pub fn idle() -> Self {
+        Self {
+            running: false,
+            total: 0,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            stop_requested: false,
+            current_asset_id: None,
+            current_filename: None,
+            current_source_bytes: None,
+            current_started_at: None,
+            started_at: None,
+            elapsed_ms: None,
+            message: None,
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct AppState {
     pub db: Arc<Database>,
     pub app_data_dir: Arc<PathBuf>,
@@ -109,4 +146,5 @@ pub struct AppState {
     pub preview_job_sender: Sender<ThumbnailJob>,
     pub viewer_video_jobs: Arc<Mutex<HashMap<String, ViewerTranscodeState>>>,
     pub batch_viewer_transcode: Arc<Mutex<BatchViewerTranscodeState>>,
+    pub batch_thumbnail_generation: Arc<Mutex<BatchThumbnailGenerationState>>,
 }

@@ -1,5 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
+use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -9,7 +10,10 @@ use tauri::{State, generate_handler, ipc::InvokeError};
 use tracing::{error, info};
 
 use crate::{
-    app::state::{AppState, BatchViewerTranscodeState, ThumbnailJob, ViewerTranscodeState},
+    app::state::{
+        AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
+        ViewerTranscodeState,
+    },
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
     media::thumb::{
@@ -20,16 +24,17 @@ use crate::{
         VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT,
     },
     models::{
-        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse, BatchViewerTranscodeStatus,
-        CacheStats, DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest,
-        ThumbnailBatchItem, ViewerMediaStatus, ViewerPlaybackSupport,
+        AlbumSummary, AssetDetail, AssetListRequest, AssetListResponse,
+        BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats, DiagnosticEntry,
+        ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem, ViewerMediaStatus,
+        ViewerPlaybackSupport,
     },
     search::query_service,
 };
 
 type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
-const VIEWER_PREVIEW_SIZE: u32 = 1024;
+const VIEWER_PREVIEW_SIZE: u32 = 2048;
 
 fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
@@ -100,6 +105,175 @@ fn record_thumb_log(
         .map_err(map_error)
 }
 
+fn enqueue_thumbnail_job(
+    state: &AppState,
+    asset_id: i64,
+    size: u32,
+    generation: u64,
+) -> Result<bool, InvokeError> {
+    let key = format!("{asset_id}:{size}");
+    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let cache = if use_preview_cache {
+        &state.preview_cache
+    } else {
+        &state.thumbnail_cache
+    };
+
+    if cache.lock().get(&key).is_some() {
+        return Ok(false);
+    }
+
+    if state.failed_thumbnails.lock().contains(&key) {
+        return Ok(false);
+    }
+
+    let mut inflight = state.inflight_thumbnails.lock();
+    if !inflight.insert(key.clone()) {
+        return Ok(false);
+    }
+    drop(inflight);
+
+    let sender = if use_preview_cache {
+        &state.preview_job_sender
+    } else {
+        &state.thumbnail_job_sender
+    };
+    if !use_preview_cache {
+        state.thumb_backlog.fetch_add(1, Ordering::SeqCst);
+    }
+
+    if let Err(error) = sender.send(ThumbnailJob {
+        asset_id,
+        size,
+        key: key.clone(),
+        generation,
+    }) {
+        if !use_preview_cache {
+            state.thumb_backlog.fetch_sub(1, Ordering::SeqCst);
+        }
+        state.inflight_thumbnails.lock().remove(&key);
+        state.failed_thumbnails.lock().insert(key);
+        return Err(InvokeError::from(format!(
+            "Failed to enqueue thumbnail job for asset {asset_id}: {error}"
+        )));
+    }
+
+    Ok(true)
+}
+
+fn generate_thumbnail_into_cache(
+    state: &AppState,
+    asset_id: i64,
+    source_path: &PathBuf,
+    size: u32,
+) -> Result<bool, InvokeError> {
+    let key = format!("{asset_id}:{size}");
+    let use_preview_cache = size >= VIEWER_PREVIEW_SIZE;
+    let cache = if use_preview_cache {
+        &state.preview_cache
+    } else {
+        &state.thumbnail_cache
+    };
+
+    if cache.lock().get(&key).is_some() {
+        return Ok(false);
+    }
+
+    let (filename, file_size) = media_debug_info(&source_path.to_string_lossy());
+    let started = Instant::now();
+    let kind = thumb_log_kind(size);
+    let generator = thumbnail_generator_label(source_path);
+
+    record_thumb_log(
+        state,
+        "info",
+        asset_id,
+        format!(
+            "kind={kind} generator={generator} status=start mode=batch size={size}px filename=\"{filename}\" file_size={}",
+            human_size(file_size)
+        ),
+    )?;
+
+    let working_dir = state.app_data_dir.join("working");
+    match generate_thumbnail(source_path, size, &working_dir) {
+        Ok(Some(bytes)) => {
+            record_thumb_log(
+                state,
+                "info",
+                asset_id,
+                format!(
+                    "kind={kind} generator={generator} status=success mode=batch size={size}px filename=\"{filename}\" file_size={} generated_size={} elapsed={}",
+                    human_size(file_size),
+                    human_size(bytes.len() as u64),
+                    human_elapsed_ms(started.elapsed().as_millis())
+                ),
+            )?;
+            cache.lock().insert(key, bytes);
+            state.failed_thumbnails.lock().remove(&format!("{asset_id}:{size}"));
+            Ok(true)
+        }
+        Ok(None) => {
+            record_thumb_log(
+                state,
+                "warning",
+                asset_id,
+                format!(
+                    "kind={kind} generator={generator} status=unavailable mode=batch size={size}px filename=\"{filename}\" file_size={} elapsed={}",
+                    human_size(file_size),
+                    human_elapsed_ms(started.elapsed().as_millis())
+                ),
+            )?;
+            state.failed_thumbnails.lock().insert(format!("{asset_id}:{size}"));
+            Ok(false)
+        }
+        Err(error) => {
+            record_thumb_log(
+                state,
+                "error",
+                asset_id,
+                format!(
+                    "kind={kind} generator={generator} status=failed mode=batch size={size}px filename=\"{filename}\" file_size={} elapsed={} error={error}",
+                    human_size(file_size),
+                    human_elapsed_ms(started.elapsed().as_millis())
+                ),
+            )?;
+            state.failed_thumbnails.lock().insert(format!("{asset_id}:{size}"));
+            Err(map_error(error))
+        }
+    }
+}
+
+fn batch_thumbnail_generation_status_snapshot(
+    state: &BatchThumbnailGenerationState,
+) -> BatchThumbnailGenerationStatus {
+    BatchThumbnailGenerationStatus {
+        status: if state.running {
+            "running".to_string()
+        } else if state.total > 0 {
+            "completed".to_string()
+        } else {
+            "idle".to_string()
+        },
+        total: state.total,
+        completed: state.completed,
+        failed: state.failed,
+        skipped: state.skipped,
+        stop_requested: state.stop_requested,
+        current_asset_id: state.current_asset_id,
+        current_filename: state.current_filename.clone(),
+        current_source_bytes: state.current_source_bytes,
+        current_elapsed_ms: state
+            .current_started_at
+            .map(|started_at| started_at.elapsed().as_millis() as u64),
+        elapsed_ms: state.elapsed_ms.or_else(|| {
+            state
+                .started_at
+                .map(|started_at| started_at.elapsed().as_millis() as u64)
+        }),
+        message: state.message.clone(),
+    }
+}
+
 fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
     let extension = path
         .extension()
@@ -116,6 +290,34 @@ fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
     }
 }
 
+fn collect_all_media_assets(state: &AppState) -> Result<Vec<(i64, String, u64)>, InvokeError> {
+    state
+        .db
+        .with_connection(|conn| {
+            let mut stmt = conn.prepare(
+                "SELECT a.id, f.path, f.file_size
+                 FROM assets a
+                 JOIN file_entries f ON f.id = a.primary_file_id
+                 WHERE a.is_deleted = 0 AND f.is_deleted = 0
+                 ORDER BY a.taken_at_utc, a.id",
+            )?;
+            let rows = stmt
+                .query_map([], |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, i64>(2)?,
+                    ))
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok(rows
+                .into_iter()
+                .map(|(asset_id, path, file_size)| (asset_id, path, file_size.max(0) as u64))
+                .collect())
+        })
+        .map_err(map_error)
+}
+
 fn video_mime_type(path: &std::path::Path) -> &'static str {
     match path
         .extension()
@@ -127,6 +329,14 @@ fn video_mime_type(path: &std::path::Path) -> &'static str {
         Some("webm") => "video/webm",
         _ => "video/mp4",
     }
+}
+
+fn primary_asset_path(state: &AppState, asset_id: i64) -> Result<PathBuf, InvokeError> {
+    let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
+    let Some(primary_path) = detail.primary_path else {
+        return Err(InvokeError::from("Asset file path unavailable".to_string()));
+    };
+    Ok(PathBuf::from(primary_path))
 }
 
 fn image_mime_type(path: &std::path::Path) -> &'static str {
@@ -1112,6 +1322,197 @@ pub fn request_thumbnails_batch(
 }
 
 #[tauri::command]
+pub fn get_batch_thumbnail_generation_status(
+    state: State<AppState>,
+) -> CommandResult<BatchThumbnailGenerationStatus> {
+    Ok(batch_thumbnail_generation_status_snapshot(
+        &state.batch_thumbnail_generation.lock(),
+    ))
+}
+
+#[tauri::command]
+pub fn start_batch_thumbnail_generation(
+    state: State<AppState>,
+) -> CommandResult<BatchThumbnailGenerationStatus> {
+    {
+        let status = state.batch_thumbnail_generation.lock();
+        if status.running {
+            return Ok(batch_thumbnail_generation_status_snapshot(&status));
+        }
+    }
+
+    {
+        let mut status = state.batch_thumbnail_generation.lock();
+        *status = BatchThumbnailGenerationState {
+            running: true,
+            total: 0,
+            completed: 0,
+            failed: 0,
+            skipped: 0,
+            stop_requested: false,
+            current_asset_id: None,
+            current_filename: None,
+            current_source_bytes: None,
+            current_started_at: None,
+            started_at: Some(Instant::now()),
+            elapsed_ms: None,
+            message: Some("Discovering media...".to_string()),
+        };
+    }
+
+    state.db.clear_logs_by_scope(&["thumb_gen"]).map_err(map_error)?;
+
+    let worker_state = state.inner().clone();
+    thread::spawn(move || {
+        const THUMB_SIZE: u32 = 256;
+        let assets = match collect_all_media_assets(&worker_state) {
+            Ok(assets) => assets,
+            Err(error) => {
+                let error_message = format!("{error:?}");
+                let mut status = worker_state.batch_thumbnail_generation.lock();
+                status.running = false;
+                status.message = Some(format!("Failed to discover media: {error_message}"));
+                let _ = worker_state.db.insert_log(
+                    "error",
+                    "thumb_gen",
+                    &format!("kind=batch status=failed error={error_message}"),
+                    None,
+                );
+                return;
+            }
+        };
+
+        {
+            let mut status = worker_state.batch_thumbnail_generation.lock();
+            status.total = assets.len() as u32;
+            status.message = Some(format!("Preparing {} assets", assets.len()));
+        }
+
+        for (index, (asset_id, source_path, source_bytes)) in assets.into_iter().enumerate() {
+            {
+                let status = worker_state.batch_thumbnail_generation.lock();
+                if status.stop_requested {
+                    drop(status);
+                    let mut status = worker_state.batch_thumbnail_generation.lock();
+                    status.running = false;
+                    status.current_asset_id = None;
+                    status.current_filename = None;
+                    status.current_source_bytes = None;
+                    status.current_started_at = None;
+                    status.elapsed_ms = status
+                        .started_at
+                        .map(|started_at| started_at.elapsed().as_millis() as u64);
+                    status.message = Some(format!(
+                        "Stopped after {} processed assets",
+                        status.completed + status.failed
+                    ));
+                    return;
+                }
+            }
+
+            let filename = PathBuf::from(&source_path)
+                .file_name()
+                .and_then(|value| value.to_str())
+                .unwrap_or(&source_path)
+                .to_string();
+            let total = {
+                let status = worker_state.batch_thumbnail_generation.lock();
+                status.total
+            };
+            let source_path_buf = PathBuf::from(&source_path);
+            {
+                let mut status = worker_state.batch_thumbnail_generation.lock();
+                status.current_asset_id = Some(asset_id);
+                status.current_filename = Some(filename.clone());
+                status.current_source_bytes = Some(source_bytes);
+                status.current_started_at = Some(Instant::now());
+                status.message = Some(format!("Generating {} of {}", index + 1, total));
+            }
+
+            let thumb_key = format!("{asset_id}:{THUMB_SIZE}");
+            let preview_key = format!("{asset_id}:{VIEWER_PREVIEW_SIZE}");
+            let thumb_exists = worker_state.thumbnail_cache.lock().get(&thumb_key).is_some();
+            let preview_exists = worker_state.preview_cache.lock().get(&preview_key).is_some();
+
+            if thumb_exists && preview_exists {
+                let mut status = worker_state.batch_thumbnail_generation.lock();
+                status.completed += 1;
+                status.skipped += 1;
+                let _ = worker_state.db.insert_log(
+                    "info",
+                    "thumb_gen",
+                    &format!(
+                        "[skipped] filename=\"{filename}\" source_size={} reason=existing thumb_size={}px preview_size={}px",
+                        human_size(source_bytes),
+                        THUMB_SIZE,
+                        VIEWER_PREVIEW_SIZE
+                    ),
+                    Some(asset_id),
+                );
+                continue;
+            }
+
+            let thumb_result = if thumb_exists {
+                Ok(false)
+            } else {
+                generate_thumbnail_into_cache(&worker_state, asset_id, &source_path_buf, THUMB_SIZE)
+            };
+            let preview_result = if preview_exists {
+                Ok(false)
+            } else {
+                generate_thumbnail_into_cache(
+                    &worker_state,
+                    asset_id,
+                    &source_path_buf,
+                    VIEWER_PREVIEW_SIZE,
+                )
+            };
+
+            let mut status = worker_state.batch_thumbnail_generation.lock();
+            match (thumb_result, preview_result) {
+                (Ok(_), Ok(_)) => {
+                    status.completed += 1;
+                }
+                _ => {
+                    status.failed += 1;
+                }
+            }
+        }
+
+        let mut status = worker_state.batch_thumbnail_generation.lock();
+        status.running = false;
+        status.current_asset_id = None;
+        status.current_filename = None;
+        status.current_source_bytes = None;
+        status.current_started_at = None;
+        status.elapsed_ms = status
+            .started_at
+            .map(|started_at| started_at.elapsed().as_millis() as u64);
+        status.message = Some(format!(
+            "Finished {} assets with {} failures",
+            status.completed,
+            status.failed
+        ));
+    });
+
+    Ok(batch_thumbnail_generation_status_snapshot(
+        &state.batch_thumbnail_generation.lock(),
+    ))
+}
+
+#[tauri::command]
+pub fn stop_batch_thumbnail_generation(
+    state: State<AppState>,
+) -> CommandResult<BatchThumbnailGenerationStatus> {
+    let mut status = state.batch_thumbnail_generation.lock();
+    status.stop_requested = true;
+    if status.running {
+        status.message = Some("Will stop after current asset".to_string());
+    }
+    Ok(batch_thumbnail_generation_status_snapshot(&status))
+}
+
+#[tauri::command]
 pub fn load_viewer_frame(
     asset_id: i64,
     prefer_original: Option<bool>,
@@ -1314,6 +1715,7 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
     state.viewer_video_jobs.lock().clear();
+    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
     state
         .db
         .insert_log("info", "thumbnail", "cleared thumbnail and preview caches", None)
@@ -1393,6 +1795,7 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.failed_thumbnails.lock().clear();
     state.viewer_video_jobs.lock().clear();
     *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
+    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
     clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
     state
         .db
@@ -1422,6 +1825,78 @@ pub fn clear_logs(state: State<AppState>) -> CommandResult<()> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn show_asset_in_finder(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
+    let path = primary_asset_path(state.inner(), asset_id)?;
+    let status = Command::new("open")
+        .arg("-R")
+        .arg(&path)
+        .status()
+        .map_err(map_error)?;
+    if !status.success() {
+        return Err(InvokeError::from("Failed to reveal asset in Finder".to_string()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_asset_with_default_app(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
+    let path = primary_asset_path(state.inner(), asset_id)?;
+    let status = Command::new("open")
+        .arg(&path)
+        .status()
+        .map_err(map_error)?;
+    if !status.success() {
+        return Err(InvokeError::from("Failed to open asset with default app".to_string()));
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn open_asset_with_quicklook(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
+    let path = primary_asset_path(state.inner(), asset_id)?;
+    let extension = path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase());
+    let is_video = matches!(
+        extension.as_deref(),
+        Some("mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm" | "mts" | "m2ts" | "3gp")
+    );
+    let status = if is_video {
+        Command::new("osascript")
+            .arg("-e")
+            .arg("on run argv")
+            .arg("-e")
+            .arg("set mediaPath to POSIX file (item 1 of argv)")
+            .arg("-e")
+            .arg("tell application \"QuickTime Player\"")
+            .arg("-e")
+            .arg("activate")
+            .arg("-e")
+            .arg("set openedDocument to open mediaPath")
+            .arg("-e")
+            .arg("play openedDocument")
+            .arg("-e")
+            .arg("end tell")
+            .arg("-e")
+            .arg("end run")
+            .arg(&path)
+            .status()
+            .map_err(map_error)?
+    } else {
+        Command::new("qlmanage")
+            .arg("-p")
+            .arg(&path)
+            .status()
+            .map_err(map_error)?
+    };
+    if !status.success() {
+        return Err(InvokeError::from("Failed to open asset with Quick Look".to_string()));
+    }
+    Ok(())
+}
+
 pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
         refresh_index,
@@ -1435,6 +1910,9 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         get_ingress_diagnostics,
         request_thumbnail,
         request_thumbnails_batch,
+        get_batch_thumbnail_generation_status,
+        start_batch_thumbnail_generation,
+        stop_batch_thumbnail_generation,
         load_viewer_frame,
         load_viewer_video,
         load_live_photo_motion,
@@ -1451,6 +1929,9 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         clear_thumb_generation_logs,
         clear_batch_viewer_transcode_logs,
         record_client_log,
+        show_asset_in_finder,
+        open_asset_with_default_app,
+        open_asset_with_quicklook,
         reset_local_database,
         clear_diagnostics,
         clear_logs
