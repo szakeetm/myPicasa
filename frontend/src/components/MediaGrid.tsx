@@ -60,6 +60,19 @@ function columnCount(width: number) {
   return Math.max(1, Math.floor((usableWidth + GRID_GAP) / (GRID_TILE_WIDTH + GRID_GAP)));
 }
 
+function thumbStatusLabel(asset: AssetListItem, state?: ThumbnailState) {
+  if (state?.status === "unavailable") {
+    return asset.media_kind === "video" ? "Video thumb unavailable" : "Thumb unavailable";
+  }
+  if (state?.status === "pending") {
+    return asset.media_kind === "video" ? "Requested video thumb" : "Requested thumb";
+  }
+  if (state?.status === undefined) {
+    return asset.media_kind === "video" ? "Loading video thumb" : "Loading thumb";
+  }
+  return asset.media_kind === "video" ? "Loading video thumb" : "Loading thumb";
+}
+
 export function MediaGrid({
   assets,
   entries,
@@ -148,6 +161,11 @@ export function MediaGrid({
   }, []);
 
   useEffect(() => {
+    const root = parentRef.current;
+    if (root) {
+      root.scrollTop = 0;
+    }
+    prependAnchorRef.current = null;
     setThumbs({});
     setVisibleIds([]);
     requestInFlightRef.current = false;
@@ -902,10 +920,8 @@ export function MediaGrid({
               >
                 {thumbs[asset.id]?.status === "ready" ? (
                   <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
-                ) : thumbs[asset.id]?.status === "unavailable" ? (
-                  <div>Preview unavailable</div>
                 ) : (
-                  <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
+                  <div>{thumbStatusLabel(asset, thumbs[asset.id])}</div>
                 )}
                 {asset.media_kind === "video" ? (
                   <>
