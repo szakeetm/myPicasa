@@ -150,6 +150,39 @@ final class NativeAppModel: ObservableObject {
         }
     }
 
+    func browseForTakeoutRoots() {
+        let panel = NSOpenPanel()
+        panel.title = "Choose Google Photos Takeout folders"
+        panel.message = "Select one or more folders that contain your Takeout exports."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = true
+        panel.canCreateDirectories = false
+
+        guard panel.runModal() == .OK else {
+            return
+        }
+
+        let selectedPaths = panel.urls.map(\ .path)
+        guard !selectedPaths.isEmpty else {
+            return
+        }
+
+        let existingPaths = rootsInput
+            .split(separator: ";")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+
+        var mergedPaths: [String] = []
+        for path in existingPaths + selectedPaths {
+            if !mergedPaths.contains(path) {
+                mergedPaths.append(path)
+            }
+        }
+
+        rootsInput = mergedPaths.joined(separator: "; ")
+    }
+
     func startImportPolling() {
         importPollingTask?.cancel()
         importPollingTask = Task { [weak self] in
@@ -174,7 +207,7 @@ final class NativeAppModel: ObservableObject {
     func openAsset(_ asset: NativeAssetListItem) {
         Task {
             do {
-                selectedAsset = try decode(NativeAssetDetail.self, from: try bridge.getAssetDetailJson(assetId: asset.id))
+                selectedAsset = try await loadAssetDetail(assetId: asset.id)
             } catch {
                 errorMessage = error.localizedDescription
             }
@@ -191,6 +224,14 @@ final class NativeAppModel: ObservableObject {
             return
         }
         openAsset(assets[nextIndex])
+    }
+
+    private func loadAssetDetail(assetId: Int64) async throws -> NativeAssetDetail {
+        let bridge = self.bridge
+        let json = try await Task.detached(priority: .userInitiated) {
+            try bridge.getAssetDetailJson(assetId: assetId)
+        }.value
+        return try decode(NativeAssetDetail.self, from: json)
     }
 
     func clearThumbnails() {

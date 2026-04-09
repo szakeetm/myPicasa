@@ -8,19 +8,29 @@ struct NativeThumbnailView: View {
     @State private var thumbnail: NSImage?
 
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: 14)
-                .fill(Color(nsColor: .windowBackgroundColor))
-            if let thumbnail {
-                Image(nsImage: thumbnail)
-                    .resizable()
-                    .scaledToFill()
-            } else {
-                ProgressView()
-                    .controlSize(.small)
+        GeometryReader { proxy in
+            let side = min(proxy.size.width, proxy.size.height)
+
+            ZStack {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color(nsColor: .windowBackgroundColor))
+
+                if let thumbnail {
+                    Image(nsImage: thumbnail)
+                        .resizable()
+                        .scaledToFill()
+                        .frame(width: side, height: side)
+                        .clipped()
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: side, height: side)
+                }
             }
+            .frame(width: side, height: side)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .center)
+            .clipShape(RoundedRectangle(cornerRadius: 14))
         }
-        .clipShape(RoundedRectangle(cornerRadius: 14))
         .task(id: path) {
             await loadThumbnail()
         }

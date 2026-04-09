@@ -2,21 +2,24 @@ import SwiftUI
 
 struct ContentView: View {
     @EnvironmentObject private var model: NativeAppModel
-    @State private var selectedAlbum: NativeAlbumSummary?
 
     private let columns = [GridItem(.adaptive(minimum: 180, maximum: 240), spacing: 12)]
 
     var body: some View {
-        NavigationSplitView {
-            sidebar
-        } content: {
-            contentPanel
-        } detail: {
-            debugPanel
-        }
-        .sheet(item: $model.selectedAsset) { asset in
-            ViewerSheet(asset: asset)
-                .environmentObject(model)
+        ZStack {
+            NavigationSplitView {
+                sidebar
+            } content: {
+                contentPanel
+            } detail: {
+                debugPanel
+            }
+
+            if let asset = model.selectedAsset {
+                viewerOverlay(asset: asset)
+                    .transition(.opacity)
+                    .zIndex(1)
+            }
         }
         .alert("Native UI Error", isPresented: Binding(
             get: { model.errorMessage != nil },
@@ -30,53 +33,79 @@ struct ContentView: View {
         }
     }
 
+    private func viewerOverlay(asset: NativeAssetDetail) -> some View {
+        ZStack {
+            Color.black.opacity(0.5)
+                .ignoresSafeArea()
+                .onTapGesture {
+                    model.selectedAsset = nil
+                }
+
+            ViewerSheet(asset: asset)
+                .environmentObject(model)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(12)
+        }
+    }
+
     private var sidebar: some View {
-        List(selection: Binding(
-            get: { model.selectedAlbumId },
-            set: { newValue in model.selectAlbum(newValue) }
-        )) {
-            Section("Library") {
-                VStack(alignment: .leading, spacing: 10) {
-                    TextField("/path/to/Takeout/Google Photos", text: $model.rootsInput, axis: .vertical)
-                        .textFieldStyle(.roundedBorder)
-                    if let importStatus = model.importStatus {
-                        VStack(alignment: .leading, spacing: 4) {
-                            Text(importStatus.status.capitalized)
-                                .font(.subheadline.weight(.semibold))
-                            Text(importStatus.message ?? importStatus.phase)
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                        }
-                        .padding(10)
-                        .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
-                    }
-                    HStack {
-                        Button("Refresh Index") {
-                            model.refreshIndex()
-                        }
-                        Button("Reset DB", role: .destructive) {
-                            model.resetDatabase()
-                        }
-                    }
-                }
-                .listRowInsets(EdgeInsets(top: 10, leading: 12, bottom: 10, trailing: 12))
-            }
+        VStack(alignment: .leading, spacing: 0) {
+            libraryPanel
 
-            Section("Navigation") {
-                Button("Timeline") {
-                    model.selectAlbum(nil)
-                }
-                .foregroundStyle(model.selectedAlbumId == nil ? Color.accentColor : Color.primary)
-
-                ForEach(model.albums) { album in
-                    Button(album.name) {
-                        model.selectAlbum(album.id)
+            List {
+                Section("Navigation") {
+                    Button("Timeline") {
+                        model.selectAlbum(nil)
                     }
-                    .foregroundStyle(model.selectedAlbumId == album.id ? Color.accentColor : Color.primary)
+                    .foregroundStyle(model.selectedAlbumId == nil ? Color.accentColor : Color.primary)
+
+                    ForEach(model.albums) { album in
+                        Button(album.name) {
+                            model.selectAlbum(album.id)
+                        }
+                        .foregroundStyle(model.selectedAlbumId == album.id ? Color.accentColor : Color.primary)
+                    }
                 }
             }
         }
         .navigationSplitViewColumnWidth(min: 280, ideal: 320)
+    }
+
+    private var libraryPanel: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Library")
+                .font(.headline)
+
+            TextField("/path/to/Takeout/Google Photos", text: $model.rootsInput, axis: .vertical)
+                .textFieldStyle(.roundedBorder)
+
+            HStack(spacing: 10) {
+                Button("Browse…") {
+                    model.browseForTakeoutRoots()
+                }
+
+                Button("Refresh Index") {
+                    model.refreshIndex()
+                }
+
+                Button("Reset DB", role: .destructive) {
+                    model.resetDatabase()
+                }
+            }
+
+            if let importStatus = model.importStatus {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(importStatus.status.capitalized)
+                        .font(.subheadline.weight(.semibold))
+                    Text(importStatus.message ?? importStatus.phase)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(10)
+                .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
+            }
+        }
+        .padding(16)
     }
 
     private var contentPanel: some View {
@@ -124,7 +153,6 @@ struct ContentView: View {
                             VStack(alignment: .leading, spacing: 8) {
                                 ZStack(alignment: .topTrailing) {
                                     NativeThumbnailView(path: asset.primary_path)
-                                        .frame(height: 180)
                                     if asset.has_live_photo {
                                         Text("Live")
                                             .font(.caption2.weight(.bold))
@@ -141,6 +169,8 @@ struct ContentView: View {
                                             .padding(10)
                                     }
                                 }
+                                .frame(maxWidth: .infinity, alignment: .center)
+                                .aspectRatio(1, contentMode: .fit)
 
                                 Text(asset.title ?? "Untitled asset")
                                     .font(.headline)
