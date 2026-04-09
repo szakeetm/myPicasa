@@ -12,6 +12,7 @@ import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
 import type {
+  AssetListItem,
   AssetListRequest,
   BatchThumbnailGenerationStatus,
   BatchViewerTranscodeStatus,
@@ -20,16 +21,55 @@ import type {
 } from "../lib/types";
 
 const ASSET_PAGE_SIZE = 200;
-const MAX_GRID_ASSETS = 1000;
+
+type GridPage = {
+  startCursor: number;
+  count: number;
+  nextCursor: number | null;
+  items: AssetListItem[] | null;
+};
+
+type GridEntry =
+  | {
+      kind: "asset";
+      asset: AssetListItem;
+    }
+  | {
+      kind: "placeholder";
+      key: string;
+      pageStartCursor: number;
+      observeHydration: boolean;
+    };
+
+function sortGridPages(pages: GridPage[]) {
+  return [...pages].sort((left, right) => left.startCursor - right.startCursor);
+}
+
+function loadedAssetsFromPages(pages: GridPage[]) {
+  return sortGridPages(pages).flatMap((page) => page.items ?? []);
+}
+
+function gridEntriesFromPages(pages: GridPage[]): GridEntry[] {
+  return sortGridPages(pages).flatMap((page) => {
+    if (page.items) {
+      return page.items.map((asset) => ({ kind: "asset" as const, asset }));
+    }
+
+    return Array.from({ length: page.count }, (_, index): GridEntry => ({
+      kind: "placeholder" as const,
+      key: `placeholder-${page.startCursor + index}`,
+      pageStartCursor: page.startCursor,
+      observeHydration: index === 0,
+    }));
+  });
+}
 
 export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
   const viewerPlaybackSupport = useMemo(() => getViewerPlaybackSupport(), []);
+  const [gridPages, setGridPages] = useState<GridPage[]>([]);
   const [timelineLabel, setTimelineLabel] = useState<string>();
-  const [assetWindowStartCursor, setAssetWindowStartCursor] = useState(0);
-  const [hasPreviousAssetPage, setHasPreviousAssetPage] = useState(false);
-  const [hasNextAssetPage, setHasNextAssetPage] = useState(false);
   const [loadingPreviousAssets, setLoadingPreviousAssets] = useState(false);
   const [debugPanelCollapsed, setDebugPanelCollapsed] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
@@ -43,6 +83,59 @@ export function App() {
   const [batchTranscodeLogs, setBatchTranscodeLogs] = useState<LogEntry[]>([]);
   const didInitFilterEffect = useRef(false);
   const assetQueryGenerationRef = useRef(0);
+  const gridPagesRef = useRef<GridPage[]>([]);
+  const hydratingPageStartsRef = useRef(new Set<number>());
+
+  const loadedGridPages = useMemo(
+    () => sortGridPages(gridPages).filter((page) => page.items !== null),
+    [gridPages],
+  );
+  const hasPreviousAssetPage = loadedGridPages.length > 0 && loadedGridPages[0].startCursor > 0;
+  const hasNextAssetPage =
+    loadedGridPages.length > 0 && loadedGridPages[loadedGridPages.length - 1].nextCursor != null;
+  const gridEntries = useMemo(() => gridEntriesFromPages(gridPages), [gridPages]);
+
+  function commitGridPages(nextPages: GridPage[]) {
+    const sortedPages = sortGridPages(nextPages);
+    gridPagesRef.current = sortedPages;
+    setGridPages(sortedPages);
+    state.setAssets(loadedAssetsFromPages(sortedPages));
+  }
+
+  function commitHydratedPage(pageStart: number, items: AssetListItem[], nextCursor: number | null) {
+    const pageMap = new Map(gridPagesRef.current.map((page) => [page.startCursor, page]));
+    pageMap.set(pageStart, {
+      startCursor: pageStart,
+      count: items.length,
+      nextCursor,
+      items,
+    });
+
+    const hydratedPages = sortGridPages(Array.from(pageMap.values())).filter((page) => page.items !== null);
+    const keepStarts = new Set<number>([pageStart]);
+    const nearestNeighbor = hydratedPages
+      .filter((page) => page.startCursor !== pageStart)
+      .sort(
+        (left, right) =>
+          Math.abs(left.startCursor - pageStart) - Math.abs(right.startCursor - pageStart),
+      )[0];
+
+    if (nearestNeighbor) {
+      keepStarts.add(nearestNeighbor.startCursor);
+    }
+
+    for (const [startCursor, page] of pageMap.entries()) {
+      if (page.items !== null && !keepStarts.has(startCursor)) {
+        pageMap.set(startCursor, {
+          ...page,
+          count: page.items.length,
+          items: null,
+        });
+      }
+    }
+
+    commitGridPages(Array.from(pageMap.values()));
+  }
 
   async function confirmDestructiveAction(title: string, message: string, okLabel: string) {
     if (tauriRuntime) {
@@ -103,10 +196,14 @@ export function App() {
     if (generation !== assetQueryGenerationRef.current) {
       return;
     }
-    state.setAssets(response.items);
-    setAssetWindowStartCursor(0);
-    setHasPreviousAssetPage(false);
-    setHasNextAssetPage(response.next_cursor != null);
+    commitGridPages([
+      {
+        startCursor: 0,
+        count: response.items.length,
+        nextCursor: response.next_cursor ?? null,
+        items: response.items,
+      },
+    ]);
     setThumbnailResetKey((value) => value + 1);
     setViewerPreviewReadyAssetIds([]);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
@@ -124,26 +221,22 @@ export function App() {
     const generation = assetQueryGenerationRef.current;
     setLoadingMoreAssets(true);
     try {
-      const currentAssets = useAppState.getState().assets;
-      const nextCursor = assetWindowStartCursor + currentAssets.length;
+      const loadedPages = sortGridPages(gridPagesRef.current).filter((page) => page.items !== null);
+      const lastLoadedPage = loadedPages[loadedPages.length - 1];
+      const nextCursor = lastLoadedPage?.nextCursor;
+      if (nextCursor == null) {
+        return;
+      }
       const { response, viewMode } = await fetchAssetsPage({}, nextCursor);
       if (generation !== assetQueryGenerationRef.current) {
         return;
       }
 
-      const seen = new Set(currentAssets.map((asset) => asset.id));
-      const appendedItems = response.items.filter((asset) => !seen.has(asset.id));
-      const mergedAssets = [...currentAssets, ...appendedItems];
-      const overflow = Math.max(0, mergedAssets.length - MAX_GRID_ASSETS);
-      const nextAssets = overflow > 0 ? mergedAssets.slice(overflow) : mergedAssets;
-      const nextStartCursor = assetWindowStartCursor + overflow;
-      state.setAssets(nextAssets);
-      setAssetWindowStartCursor(nextStartCursor);
-      setHasPreviousAssetPage(nextStartCursor > 0);
-      setHasNextAssetPage(response.next_cursor != null);
+      const pageStart = nextCursor;
+      commitHydratedPage(pageStart, response.items, response.next_cursor ?? null);
       await logClient(
         "ui.refresh",
-        `appended ${appendedItems.length} assets in ${viewMode} mode total=${nextAssets.length} start_cursor=${nextStartCursor} next_cursor=${response.next_cursor ?? "end"}`,
+        `loaded page start=${pageStart} count=${response.items.length} in ${viewMode} mode next_cursor=${response.next_cursor ?? "end"}`,
       );
     } finally {
       if (generation === assetQueryGenerationRef.current) {
@@ -153,32 +246,28 @@ export function App() {
   }
 
   async function loadPreviousAssets() {
-    if (loadingPreviousAssets || assetWindowStartCursor <= 0) {
+    if (loadingPreviousAssets || !hasPreviousAssetPage) {
       return;
     }
 
     const generation = assetQueryGenerationRef.current;
     setLoadingPreviousAssets(true);
     try {
-      const currentAssets = useAppState.getState().assets;
-      const previousCursor = Math.max(0, assetWindowStartCursor - ASSET_PAGE_SIZE);
+      const loadedPages = sortGridPages(gridPagesRef.current).filter((page) => page.items !== null);
+      const firstLoadedPage = loadedPages[0];
+      if (!firstLoadedPage) {
+        return;
+      }
+      const previousCursor = Math.max(0, firstLoadedPage.startCursor - ASSET_PAGE_SIZE);
       const { response, viewMode } = await fetchAssetsPage({}, previousCursor);
       if (generation !== assetQueryGenerationRef.current) {
         return;
       }
 
-      const seen = new Set(currentAssets.map((asset) => asset.id));
-      const prependedItems = response.items.filter((asset) => !seen.has(asset.id));
-      const mergedAssets = [...prependedItems, ...currentAssets];
-      const overflow = Math.max(0, mergedAssets.length - MAX_GRID_ASSETS);
-      const nextAssets = overflow > 0 ? mergedAssets.slice(0, MAX_GRID_ASSETS) : mergedAssets;
-      state.setAssets(nextAssets);
-      setAssetWindowStartCursor(previousCursor);
-      setHasPreviousAssetPage(previousCursor > 0);
-      setHasNextAssetPage(hasNextAssetPage || overflow > 0);
+      commitHydratedPage(previousCursor, response.items, response.next_cursor ?? null);
       await logClient(
         "ui.refresh",
-        `prepended ${prependedItems.length} assets in ${viewMode} mode total=${nextAssets.length} start_cursor=${previousCursor} trimmed_bottom=${overflow}`,
+        `loaded page start=${previousCursor} count=${response.items.length} in ${viewMode} mode direction=up`,
       );
     } finally {
       if (generation === assetQueryGenerationRef.current) {
@@ -430,6 +519,32 @@ export function App() {
     await handleSelectAsset(nextAsset.id);
   }
 
+  async function hydratePlaceholderPage(pageStartCursor: number) {
+    const existingPage = gridPagesRef.current.find((page) => page.startCursor === pageStartCursor);
+    if (!existingPage || existingPage.items !== null) {
+      return;
+    }
+    if (hydratingPageStartsRef.current.has(pageStartCursor)) {
+      return;
+    }
+
+    hydratingPageStartsRef.current.add(pageStartCursor);
+    const generation = assetQueryGenerationRef.current;
+    try {
+      const { response, viewMode } = await fetchAssetsPage({}, pageStartCursor);
+      if (generation !== assetQueryGenerationRef.current) {
+        return;
+      }
+      commitHydratedPage(pageStartCursor, response.items, response.next_cursor ?? null);
+      await logClient(
+        "ui.refresh",
+        `hydrated placeholder page start=${pageStartCursor} count=${response.items.length} in ${viewMode} mode`,
+      );
+    } finally {
+      hydratingPageStartsRef.current.delete(pageStartCursor);
+    }
+  }
+
   async function handleResetDatabase() {
     const accepted = await confirm(
       "This will permanently delete the local index, logs, diagnostics, and cached app data, then reload the app. Your original Takeout files will not be modified. Continue?",
@@ -455,9 +570,7 @@ export function App() {
     state.setImportStatus(undefined);
     state.setSelectedAlbumId(undefined);
     state.setViewMode("timeline");
-    setAssetWindowStartCursor(0);
-    setHasPreviousAssetPage(false);
-    setHasNextAssetPage(false);
+    commitGridPages([]);
     setLoadingPreviousAssets(false);
     setLoadingMoreAssets(false);
     setViewerPreviewReadyAssetIds([]);
@@ -624,7 +737,9 @@ export function App() {
         <div className="grid-frame">
           <MediaGrid
             assets={state.assets}
+            entries={gridEntries}
             onSelect={handleSelectAsset}
+            onHydratePlaceholderPage={hydratePlaceholderPage}
             viewerPlaybackSupport={viewerPlaybackSupport}
             viewerPreviewReadyAssetIds={viewerPreviewReadyAssetIds}
             thumbnailResetKey={thumbnailResetKey}

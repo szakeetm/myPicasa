@@ -13,7 +13,20 @@ const GRID_PADDING = 6;
 
 type MediaGridProps = {
   assets: AssetListItem[];
+  entries: Array<
+    | {
+        kind: "asset";
+        asset: AssetListItem;
+      }
+    | {
+        kind: "placeholder";
+        key: string;
+        pageStartCursor: number;
+        observeHydration: boolean;
+      }
+  >;
   onSelect: (assetId: number) => void;
+  onHydratePlaceholderPage?: (pageStartCursor: number) => void;
   viewerPreviewReadyAssetIds?: number[];
   onLeadingDateChange?: (value?: string) => void;
   thumbnailResetKey?: number;
@@ -49,7 +62,9 @@ function columnCount(width: number) {
 
 export function MediaGrid({
   assets,
+  entries,
   onSelect,
+  onHydratePlaceholderPage,
   viewerPreviewReadyAssetIds = [],
   onLeadingDateChange,
   thumbnailResetKey,
@@ -67,6 +82,7 @@ export function MediaGrid({
   const loadPreviousRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
   const tileRefs = useRef(new Map<number, HTMLButtonElement>());
+  const placeholderRefs = useRef(new Map<number, HTMLDivElement>());
   const prependAnchorRef = useRef<{ assetId: number; top: number } | null>(null);
   const [width, setWidth] = useState(1200);
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
@@ -580,6 +596,43 @@ export function MediaGrid({
   }, [hasMoreAfter, isLoadingMore, onLoadMore, assets.length]);
 
   useEffect(() => {
+    const root = parentRef.current;
+    if (!root || !onHydratePlaceholderPage) {
+      return;
+    }
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const pendingPageStarts = new Set<number>();
+        for (const entry of entries) {
+          if (!entry.isIntersecting) {
+            continue;
+          }
+          const pageStartCursor = Number((entry.target as HTMLElement).dataset.pageStartCursor);
+          if (Number.isFinite(pageStartCursor)) {
+            pendingPageStarts.add(pageStartCursor);
+          }
+        }
+
+        for (const pageStartCursor of pendingPageStarts) {
+          onHydratePlaceholderPage(pageStartCursor);
+        }
+      },
+      {
+        root,
+        rootMargin: "500px 0px",
+        threshold: 0.01,
+      },
+    );
+
+    for (const element of placeholderRefs.current.values()) {
+      observer.observe(element);
+    }
+
+    return () => observer.disconnect();
+  }, [entries, onHydratePlaceholderPage]);
+
+  useEffect(() => {
     let disposed = false;
 
     async function processBatch() {
@@ -763,7 +816,7 @@ export function MediaGrid({
     });
   }, [assets, onThumbnailPreloadProgress, thumbnailPreload?.active, thumbs]);
 
-  if (assets.length === 0) {
+  if (entries.length === 0) {
     return <div className="empty-state">No indexed assets match the current view.</div>;
   }
 
@@ -780,34 +833,41 @@ export function MediaGrid({
           gridTemplateColumns: `repeat(auto-fit, ${GRID_TILE_WIDTH}px)`,
         }}
       >
-        {assets.map((asset) => (
-          <button
-            key={asset.id}
-            className={[
-              "tile",
-              thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
-              asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
-                ? "video-ready-native"
-                : "",
-              asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
-                ? "video-ready-transcoded"
-                : "",
-            ]
-              .filter(Boolean)
-              .join(" ")}
-            data-asset-id={asset.id}
-            ref={(element) => {
-              if (element) {
-                tileRefs.current.set(asset.id, element);
-              } else {
-                tileRefs.current.delete(asset.id);
-              }
-            }}
-            onClick={() => onSelect(asset.id)}
-          >
-            <div
+        {entries.map((entry) => {
+          if (entry.kind === "placeholder") {
+            return (
+              <div
+                key={entry.key}
+                className="tile tile-placeholder"
+                aria-hidden="true"
+                data-page-start-cursor={entry.observeHydration ? entry.pageStartCursor : undefined}
+                ref={(element) => {
+                  if (!entry.observeHydration) {
+                    return;
+                  }
+                  if (element) {
+                    placeholderRefs.current.set(entry.pageStartCursor, element);
+                  } else {
+                    placeholderRefs.current.delete(entry.pageStartCursor);
+                  }
+                }}
+              >
+                <div className="thumb thumb-placeholder" />
+                <div className="tile-body tile-body-placeholder">
+                  <div className="placeholder-line placeholder-line-title" />
+                  <div className="placeholder-line placeholder-line-meta" />
+                </div>
+              </div>
+            );
+          }
+
+          const asset = entry.asset;
+          return (
+            <button
+              key={asset.id}
               className={[
-                "thumb",
+                "tile",
+                thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
                 asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
                   ? "video-ready-native"
                   : "",
@@ -817,63 +877,86 @@ export function MediaGrid({
               ]
                 .filter(Boolean)
                 .join(" ")}
+              data-asset-id={asset.id}
+              ref={(element) => {
+                if (element) {
+                  tileRefs.current.set(asset.id, element);
+                } else {
+                  tileRefs.current.delete(asset.id);
+                }
+              }}
+              onClick={() => onSelect(asset.id)}
             >
-              {thumbs[asset.id]?.status === "ready" ? (
-                <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
-              ) : thumbs[asset.id]?.status === "unavailable" ? (
-                <div>Preview unavailable</div>
-              ) : (
-                <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
-              )}
-              {asset.media_kind === "video" ? (
-                <>
-                  <div className="thumb-play-badge" aria-hidden="true">
-                    <span className="thumb-play-icon">▶</span>
-                    <span>Video</span>
+              <div
+                className={[
+                  "thumb",
+                  asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
+                    ? "video-ready-native"
+                    : "",
+                  asset.media_kind === "video" && videoPlaybackHints[asset.id] === "transcoded"
+                    ? "video-ready-transcoded"
+                    : "",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+              >
+                {thumbs[asset.id]?.status === "ready" ? (
+                  <img src={thumbs[asset.id]?.src ?? ""} alt={asset.title ?? "asset"} />
+                ) : thumbs[asset.id]?.status === "unavailable" ? (
+                  <div>Preview unavailable</div>
+                ) : (
+                  <div>{asset.media_kind === "video" ? "Video preview pending" : "Loading preview"}</div>
+                )}
+                {asset.media_kind === "video" ? (
+                  <>
+                    <div className="thumb-play-badge" aria-hidden="true">
+                      <span className="thumb-play-icon">▶</span>
+                      <span>Video</span>
+                    </div>
+                    {asset.duration_ms ? (
+                      <div className="thumb-duration-badge">{formatDuration(asset.duration_ms)}</div>
+                    ) : null}
+                  </>
+                ) : null}
+                {asset.has_live_photo ? (
+                  <div className="thumb-live-badge" aria-hidden="true" title="Live Photo">
+                    ◎
                   </div>
-                  {asset.duration_ms ? (
-                    <div className="thumb-duration-badge">{formatDuration(asset.duration_ms)}</div>
-                  ) : null}
-                </>
-              ) : null}
-              {asset.has_live_photo ? (
-                <div className="thumb-live-badge" aria-hidden="true" title="Live Photo">
-                  ◎
+                ) : null}
+                {asset.media_kind === "video" ? (
+                  <button
+                    className="thumb-player-button"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      onSelect(asset.id);
+                    }}
+                    aria-label="Play video"
+                    title="Play video"
+                  >
+                    <span className="thumb-player-icon" aria-hidden="true">
+                      ▶
+                    </span>
+                  </button>
+                ) : null}
+              </div>
+              <div className="tile-body">
+                <strong>{asset.title ?? "Untitled asset"}</strong>
+                <div className="muted">
+                  {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm") : "Unknown date"}
                 </div>
-              ) : null}
-              {asset.media_kind === "video" ? (
-                <button
-                  className="thumb-player-button"
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    onSelect(asset.id);
-                  }}
-                  aria-label="Play video"
-                  title="Play video"
-                >
-                  <span className="thumb-player-icon" aria-hidden="true">
-                    ▶
-                  </span>
-                </button>
-              ) : null}
-            </div>
-            <div className="tile-body">
-              <strong>{asset.title ?? "Untitled asset"}</strong>
-              <div className="muted">
-                {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm") : "Unknown date"}
+                <div className="chips">
+                  <span className="chip">{asset.media_kind}</span>
+                  {asset.albums.slice(0, 2).map((album) => (
+                    <span className="chip" key={album}>
+                      {album}
+                    </span>
+                  ))}
+                </div>
               </div>
-              <div className="chips">
-                <span className="chip">{asset.media_kind}</span>
-                {asset.albums.slice(0, 2).map((album) => (
-                  <span className="chip" key={album}>
-                    {album}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </button>
-        ))}
+            </button>
+          );
+        })}
       </div>
       {hasMoreAfter || isLoadingMore ? (
         <div className="grid-load-more" ref={loadMoreRef} aria-live="polite">

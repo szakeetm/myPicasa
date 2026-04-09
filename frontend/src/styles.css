@@ -330,6 +330,12 @@ button:disabled:hover {
   min-height: 0;
 }
 
+.tile-placeholder {
+  pointer-events: none;
+  background: rgba(252, 249, 244, 0.6);
+  border-color: rgba(111, 96, 78, 0.08);
+}
+
 .tile.has-viewer-preview {
   background: rgba(220, 238, 226, 0.96);
   border-color: rgba(46, 128, 74, 0.32);
@@ -367,6 +373,10 @@ button:disabled:hover {
   display: grid;
   place-items: center;
   color: var(--text-soft);
+}
+
+.thumb-placeholder {
+  background: rgba(115, 96, 73, 0.045);
 }
 
 .thumb.has-viewer-preview {
@@ -474,6 +484,25 @@ button:disabled:hover {
   line-height: 1.1;
   min-height: 56px;
   align-content: start;
+}
+
+.tile-body-placeholder {
+  gap: 6px;
+}
+
+.placeholder-line {
+  border-radius: 999px;
+  background: rgba(126, 108, 86, 0.08);
+}
+
+.placeholder-line-title {
+  width: 72%;
+  height: 10px;
+}
+
+.placeholder-line-meta {
+  width: 54%;
+  height: 9px;
 }
 
 .tile-body strong {
