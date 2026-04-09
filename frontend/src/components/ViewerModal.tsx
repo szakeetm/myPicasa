@@ -358,7 +358,7 @@ export function ViewerModal({
             `asset ${assetId} loaded ${VIEWER_PREVIEW_SIZE}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
           );
           onViewerPreviewReady?.(assetId);
-          setImageSrc(src);
+          setImageSrc(materializeImageSrc(src));
           setImageError(undefined);
           return;
         }
@@ -885,6 +885,13 @@ function summarizeMediaSrc(src?: string) {
   if (src.startsWith("data:video/")) {
     const format = src.slice("data:".length).split(";")[0] ?? "video";
     return `${format} data-url`;
+  }
+  return src;
+}
+
+function materializeImageSrc(src: string) {
+  if (src.startsWith("/")) {
+    return convertFileSrc(src);
   }
   return src;
 }

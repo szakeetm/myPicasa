@@ -46,6 +46,11 @@ impl ThumbnailCache {
         self.insert_memory_only(key, value);
     }
 
+    pub fn cached_path(&self, key: &str) -> Option<PathBuf> {
+        let path = self.path_for_key(key);
+        path.is_file().then_some(path)
+    }
+
     fn touch(&mut self, key: &str) {
         self.order.retain(|existing| existing != key);
         self.order.push_back(key.to_string());

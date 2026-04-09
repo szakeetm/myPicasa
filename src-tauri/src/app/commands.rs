@@ -1164,11 +1164,8 @@ pub fn request_thumbnail(
     } else {
         &state.thumbnail_cache
     };
-    if let Some(bytes) = cache.lock().get(&key) {
-        return Ok(Some(format!(
-            "data:image/jpeg;base64,{}",
-            STANDARD.encode(bytes)
-        )));
+    if let Some(path) = cache.lock().cached_path(&key) {
+        return Ok(Some(path.to_string_lossy().to_string()));
     }
 
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
@@ -1203,11 +1200,11 @@ pub fn request_thumbnail(
                     human_elapsed_ms(started.elapsed().as_millis())
                 ),
             )?;
-            cache.lock().insert(key, bytes.clone());
-            Ok(Some(format!(
-                "data:image/jpeg;base64,{}",
-                STANDARD.encode(bytes)
-            )))
+            let mut cache = cache.lock();
+            cache.insert(key.clone(), bytes);
+            Ok(cache
+                .cached_path(&key)
+                .map(|path| path.to_string_lossy().to_string()))
         }
         Ok(None) => {
             record_thumb_log(
@@ -1262,17 +1259,23 @@ pub fn request_thumbnails_batch(
         .map(|asset_id| {
             let key = format!("{asset_id}:{size}");
 
-            if let Some(bytes) = cache.lock().get(&key) {
+            let cached_path = {
+                let mut cache_guard = cache.lock();
+                cache_guard
+                    .get(&key)
+                    .map(|bytes| (bytes.len(), cache_guard.cached_path(&key)))
+            };
+            if let Some((bytes_len, cached_path)) = cached_path {
                 preview_debug_log(format!(
                     "thumbnail_batch_item asset_id={} size={} status=ready source=cache bytes={}",
                     asset_id,
                     size,
-                    bytes.len()
+                    bytes_len
                 ));
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "ready".to_string(),
-                    data_url: Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(bytes))),
+                    data_url: cached_path.map(|path| path.to_string_lossy().to_string()),
                 };
             }
 
@@ -1664,17 +1667,13 @@ pub fn load_viewer_frame(
     ) {
         Ok(Some(path)) => {
             let elapsed = started.elapsed().as_millis();
-            let bytes = fs::read(&path).map_err(map_error)?;
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={} elapsed_ms={elapsed}",
                 file_size,
                 generated_bytes
             ));
-            Ok(Some(format!(
-                "data:image/jpeg;base64,{}",
-                STANDARD.encode(bytes)
-            )))
+            Ok(Some(path.to_string_lossy().to_string()))
         }
         Ok(None) => {
             let elapsed = started.elapsed().as_millis();

@@ -1,12 +1,13 @@
 import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
+import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
 import type { AssetListItem, ViewerPlaybackHint } from "../lib/types";
 
 const VIEWER_PREVIEW_SIZE = 2048;
-const GRID_TILE_WIDTH = 250;
+const GRID_TILE_WIDTH = 210;
 
 type MediaGridProps = {
   assets: AssetListItem[];
@@ -653,7 +654,7 @@ export function MediaGrid({
                 next[item.asset_id] = {
                   ...next[item.asset_id],
                   status: "ready",
-                  src: item.data_url ?? null,
+                  src: materializeImageSrc(item.data_url) ?? null,
                 };
               } else if (item.status === "unavailable") {
                 next[item.asset_id] = {
@@ -865,6 +866,16 @@ export function MediaGrid({
       ) : null}
     </div>
   );
+}
+
+function materializeImageSrc(src?: string | null) {
+  if (!src) {
+    return src;
+  }
+  if (src.startsWith("/")) {
+    return convertFileSrc(src);
+  }
+  return src;
 }
 
 function formatDuration(durationMs: number) {
