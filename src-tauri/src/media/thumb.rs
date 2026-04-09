@@ -557,7 +557,8 @@ fn probe_video_seek_seconds(path: &Path) -> Option<f64> {
 }
 
 fn thumbnail_render_size(size: u32) -> u32 {
-    size.saturating_mul(2).clamp(size.max(1), 512)
+    let requested_size = size.max(1);
+    size.saturating_mul(2).clamp(requested_size, requested_size.max(512))
 }
 
 fn find_command_binary(name: &str) -> Option<PathBuf> {
