@@ -4,8 +4,10 @@ type DebugPanelProps = {
   diagnostics: DiagnosticEntry[];
   logs: LogEntry[];
   cacheStats?: CacheStats;
+  collapsed?: boolean;
   thumbBatchRunning?: boolean;
   videoBatchRunning?: boolean;
+  onToggleCollapsed: () => void;
   onOpenThumbLog: () => void;
   onOpenBatchTranscode: () => void;
   onClearThumbnails: () => void;
@@ -18,8 +20,10 @@ export function DebugPanel({
   diagnostics,
   logs,
   cacheStats,
+  collapsed = false,
   thumbBatchRunning,
   videoBatchRunning,
+  onToggleCollapsed,
   onOpenThumbLog,
   onOpenBatchTranscode,
   onClearThumbnails,
@@ -27,11 +31,43 @@ export function DebugPanel({
   onClearDiagnostics,
   onClearLogs,
 }: DebugPanelProps) {
+  if (collapsed) {
+    return (
+      <aside className="panel debug-panel debug-panel-collapsed">
+        <button
+          className="debug-rail-toggle"
+          type="button"
+          onClick={onToggleCollapsed}
+          aria-label="Expand diagnostics and logs panel"
+          title="Expand diagnostics and logs panel"
+        >
+          <span className="debug-rail-chevron" aria-hidden="true">
+            <<
+          </span>
+          <span className="debug-rail-label">Debug</span>
+        </button>
+      </aside>
+    );
+  }
+
   return (
     <aside className="panel debug-panel">
       <div className="header-block">
-        <div className="eyebrow">Debug</div>
-        <div className="title">Diagnostics and logs</div>
+        <div className="debug-panel-heading">
+          <div>
+            <div className="eyebrow">Debug</div>
+            <div className="title">Diagnostics and logs</div>
+          </div>
+          <button
+            className="button-secondary debug-panel-toggle"
+            type="button"
+            onClick={onToggleCollapsed}
+            aria-label="Collapse diagnostics and logs panel"
+            title="Collapse diagnostics and logs panel"
+          >
+            Hide
+          </button>
+        </div>
         {cacheStats ? (
           <div className="debug-cache-group">
             <div className="debug-cache-summary">

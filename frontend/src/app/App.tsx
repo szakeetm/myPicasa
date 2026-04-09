@@ -26,6 +26,7 @@ export function App() {
   const tauriRuntime = isTauriRuntime();
   const [timelineLabel, setTimelineLabel] = useState<string>();
   const [nextAssetCursor, setNextAssetCursor] = useState<number>();
+  const [debugPanelCollapsed, setDebugPanelCollapsed] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [viewerPreviewReadyAssetIds, setViewerPreviewReadyAssetIds] = useState<number[]>([]);
@@ -544,7 +545,7 @@ export function App() {
     : -1;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${debugPanelCollapsed ? " debug-collapsed" : ""}`}>
       <Sidebar
         rootsInput={state.rootsInput}
         importStatus={state.importStatus}
@@ -589,8 +590,10 @@ export function App() {
         diagnostics={state.diagnostics}
         logs={state.logs}
         cacheStats={state.cacheStats}
+        collapsed={debugPanelCollapsed}
         thumbBatchRunning={batchThumbnailStatus?.status === "running"}
         videoBatchRunning={batchTranscodeStatus?.status === "running"}
+        onToggleCollapsed={() => setDebugPanelCollapsed((current) => !current)}
         onOpenThumbLog={() => void handleOpenThumbLog()}
         onOpenBatchTranscode={() => void handleOpenBatchTranscode()}
         onClearThumbnails={handleClearThumbnails}
