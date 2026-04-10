@@ -15,6 +15,7 @@ use crate::{
 };
 
 pub const DEFAULT_VIEWER_PREVIEW_SIZE: u32 = 1000;
+const VIEWER_PREVIEW_SIZE_OPTIONS: [u32; 4] = [1000, 1280, 1600, 2048];
 
 #[derive(Clone)]
 pub struct ThumbnailJob {
@@ -193,6 +194,14 @@ pub fn load_app_settings(settings_path: &Path) -> Result<AppSettings, AppError> 
 pub fn persist_app_settings(settings_path: &Path, settings: &AppSettings) -> Result<(), AppError> {
     fs::write(settings_path, serde_json::to_vec_pretty(settings)?)?;
     Ok(())
+}
+
+pub fn preview_cache_replacement_keys(asset_id: i64, keep_size: u32) -> Vec<String> {
+    VIEWER_PREVIEW_SIZE_OPTIONS
+        .into_iter()
+        .filter(|size| *size != keep_size)
+        .map(|size| format!("pv2:{asset_id}:{size}"))
+        .collect()
 }
 
 impl AppState {

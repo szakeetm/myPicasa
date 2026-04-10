@@ -13,7 +13,7 @@ use tracing::{error, info};
 use crate::{
     app::state::{
         AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
-        ViewerTranscodeState,
+        ViewerTranscodeState, preview_cache_replacement_keys,
     },
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
@@ -1270,6 +1270,11 @@ pub fn request_thumbnail(
                 ),
             )?;
             let mut cache = cache.lock();
+            if use_preview_cache {
+                for replacement_key in preview_cache_replacement_keys(asset_id, size) {
+                    cache.remove(&replacement_key);
+                }
+            }
             cache.insert(key.clone(), bytes);
             Ok(cache
                 .cached_path(&key)

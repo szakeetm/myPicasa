@@ -51,6 +51,22 @@ impl ThumbnailCache {
         path.is_file().then_some(path)
     }
 
+    pub fn remove(&mut self, key: &str) {
+        if let Some(previous) = self.values.remove(key) {
+            self.current_bytes = self.current_bytes.saturating_sub(previous.len());
+        }
+        self.order.retain(|existing| existing != key);
+
+        let path = self.path_for_key(key);
+        if let Ok(metadata) = fs::metadata(&path) {
+            let previous_len = metadata.len() as usize;
+            if fs::remove_file(&path).is_ok() {
+                self.persisted_items = self.persisted_items.saturating_sub(1);
+                self.persisted_bytes = self.persisted_bytes.saturating_sub(previous_len);
+            }
+        }
+    }
+
     fn touch(&mut self, key: &str) {
         self.order.retain(|existing| existing != key);
         self.order.push_back(key.to_string());

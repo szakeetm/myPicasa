@@ -515,8 +515,21 @@ export function App() {
   }
 
   async function handleViewerPreviewSizeChange(value: number) {
-    state.setViewerPreviewSize(value);
+    if (value === state.viewerPreviewSize) {
+      return;
+    }
+
+    const accepted = await confirmDestructiveAction(
+      "Change viewer preview size?",
+      "Changing viewer preview size will regenerate viewer previews as they are requested. When a new preview is generated, any other preview-size variant for that asset will be removed. Continue?",
+      "Change Size",
+    );
+    if (!accepted) {
+      return;
+    }
+
     if (!tauriRuntime) {
+      state.setViewerPreviewSize(value);
       return;
     }
 
@@ -524,9 +537,7 @@ export function App() {
       const settings = await api.updateAppSettings({
         viewer_preview_size: value,
       });
-      if (settings.viewer_preview_size !== value) {
-        state.setViewerPreviewSize(settings.viewer_preview_size);
-      }
+      state.setViewerPreviewSize(settings.viewer_preview_size);
     } catch (error) {
       await logClient("ui.settings", `failed to update viewer preview size: ${String(error)}`, "error");
     }

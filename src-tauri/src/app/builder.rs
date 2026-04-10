@@ -12,7 +12,7 @@ use parking_lot::Mutex;
 
 use crate::app::state::{
     AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
-    app_settings_path, load_app_settings, persist_app_settings,
+    app_settings_path, load_app_settings, persist_app_settings, preview_cache_replacement_keys,
 };
 use crate::cache::thumb_cache::ThumbnailCache;
 use crate::db::{Database, DatabaseQueries};
@@ -233,7 +233,13 @@ fn process_thumbnail_job(
                 } else {
                     thumbnail_cache
                 };
-                cache.lock().insert(job.key.clone(), bytes);
+                let mut cache = cache.lock();
+                if job.use_preview_cache {
+                    for replacement_key in preview_cache_replacement_keys(job.asset_id, job.size) {
+                        cache.remove(&replacement_key);
+                    }
+                }
+                cache.insert(job.key.clone(), bytes);
                 failed.lock().remove(&job.key);
             }
         }
