@@ -765,12 +765,14 @@ export function App() {
       <Sidebar
         rootsInput={state.rootsInput}
         viewerPreviewSize={state.viewerPreviewSize}
+        settingsCollapsed={state.settingsCollapsed}
         importStatus={state.importStatus}
         browseEnabled={tauriRuntime}
         albums={state.albums}
         selectedAlbumId={state.selectedAlbumId}
         onRootsInputChange={state.setRootsInput}
         onViewerPreviewSizeChange={(value) => void handleViewerPreviewSizeChange(value)}
+        onToggleSettingsCollapsed={() => state.setSettingsCollapsed(!state.settingsCollapsed)}
         onBrowseRoot={handleBrowseRoot}
         onRefresh={handleRefreshIndex}
         onResetDatabase={handleResetDatabase}

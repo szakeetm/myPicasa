@@ -17,6 +17,7 @@ const DEFAULT_VIEWER_PREVIEW_SIZE = 1000;
 type AppState = {
   rootsInput: string;
   viewerPreviewSize: number;
+  settingsCollapsed: boolean;
   query: string;
   mediaKind: string;
   dateFrom: string;
@@ -32,6 +33,7 @@ type AppState = {
   importStatus?: ImportProgress | null;
   setRootsInput: (value: string) => void;
   setViewerPreviewSize: (value: number) => void;
+  setSettingsCollapsed: (value: boolean) => void;
   setQuery: (value: string) => void;
   setMediaKind: (value: string) => void;
   setDateFrom: (value: string) => void;
@@ -52,6 +54,7 @@ export const useAppState = create<AppState>()(
     (set) => ({
       rootsInput: "",
       viewerPreviewSize: DEFAULT_VIEWER_PREVIEW_SIZE,
+      settingsCollapsed: false,
       query: "",
       mediaKind: "",
       dateFrom: "",
@@ -63,6 +66,7 @@ export const useAppState = create<AppState>()(
       logs: [],
       setRootsInput: (rootsInput) => set({ rootsInput }),
       setViewerPreviewSize: (viewerPreviewSize) => set({ viewerPreviewSize }),
+      setSettingsCollapsed: (settingsCollapsed) => set({ settingsCollapsed }),
       setQuery: (query) => set({ query }),
       setMediaKind: (mediaKind) => set({ mediaKind }),
       setDateFrom: (dateFrom) => set({ dateFrom }),
@@ -83,6 +87,7 @@ export const useAppState = create<AppState>()(
       partialize: (state) => ({
         rootsInput: state.rootsInput,
         viewerPreviewSize: state.viewerPreviewSize,
+        settingsCollapsed: state.settingsCollapsed,
       }),
     },
   ),

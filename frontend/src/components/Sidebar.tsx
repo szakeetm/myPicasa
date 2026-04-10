@@ -4,12 +4,14 @@ import dayjs from "dayjs";
 type SidebarProps = {
   rootsInput: string;
   viewerPreviewSize: number;
+  settingsCollapsed: boolean;
   importStatus?: ImportProgress | null;
   browseEnabled?: boolean;
   albums: AlbumSummary[];
   selectedAlbumId?: number;
   onRootsInputChange: (value: string) => void;
   onViewerPreviewSizeChange: (value: number) => void;
+  onToggleSettingsCollapsed: () => void;
   onBrowseRoot: () => void;
   onRefresh: () => void;
   onResetDatabase: () => void;
@@ -20,12 +22,14 @@ type SidebarProps = {
 export function Sidebar({
   rootsInput,
   viewerPreviewSize,
+  settingsCollapsed,
   importStatus,
   browseEnabled = true,
   albums,
   selectedAlbumId,
   onRootsInputChange,
   onViewerPreviewSizeChange,
+  onToggleSettingsCollapsed,
   onBrowseRoot,
   onRefresh,
   onResetDatabase,
@@ -56,67 +60,84 @@ export function Sidebar({
         ) : null}
       </div>
 
-      <div className="controls">
-        <div className="button-row">
-          <input
-            value={rootsInput}
-            onChange={(event) => onRootsInputChange(event.target.value)}
-            placeholder="/path/to/Takeout/Google Photos;/another/root"
-          />
-          <button
-            className="button-secondary"
-            onClick={onBrowseRoot}
-            disabled={!browseEnabled}
-            title={
-              browseEnabled
-                ? "Choose the Google Photos Takeout folder"
-                : "Folder browsing requires the desktop Tauri app"
-            }
-          >
-            Browse
-          </button>
-        </div>
-        <div className="muted">
-          Pick the extracted Google Photos media root.
-          <br />
-          Usually this is the <strong>`Takeout/Google Photos`</strong> folder, or the specific
-          subfolder that directly contains your album/media folders and sidecar JSON files.
-        </div>
-        {!browseEnabled ? (
-          <div className="muted">
-            Browser mode is for UI debugging only. Native folder browsing works in the desktop app.
+      <div className="controls controls-shell">
+        <button
+          className="section-toggle"
+          type="button"
+          onClick={onToggleSettingsCollapsed}
+          aria-expanded={!settingsCollapsed}
+          aria-controls="sidebar-settings-panel"
+        >
+          <span className="eyebrow section-toggle-label">Settings</span>
+          <span className="section-toggle-icon" aria-hidden="true">
+            {settingsCollapsed ? "▾" : "▴"}
+          </span>
+        </button>
+
+        {!settingsCollapsed ? (
+          <div id="sidebar-settings-panel" className="controls settings-panel">
+            <div className="button-row">
+              <input
+                value={rootsInput}
+                onChange={(event) => onRootsInputChange(event.target.value)}
+                placeholder="/path/to/Takeout/Google Photos;/another/root"
+              />
+              <button
+                className="button-secondary"
+                onClick={onBrowseRoot}
+                disabled={!browseEnabled}
+                title={
+                  browseEnabled
+                    ? "Choose the Google Photos Takeout folder"
+                    : "Folder browsing requires the desktop Tauri app"
+                }
+              >
+                Browse
+              </button>
+            </div>
+            <div className="muted">
+              Pick the extracted Google Photos media root.
+              <br />
+              Usually this is the <strong>`Takeout/Google Photos`</strong> folder, or the specific
+              subfolder that directly contains your album/media folders and sidecar JSON files.
+            </div>
+            {!browseEnabled ? (
+              <div className="muted">
+                Browser mode is for UI debugging only. Native folder browsing works in the desktop app.
+              </div>
+            ) : null}
+            <div className="button-row">
+              <button className="button-primary" onClick={onRefresh}>
+                Refresh Index
+              </button>
+              <button className="button-danger" onClick={onResetDatabase}>
+                Clear Local Database
+              </button>
+            </div>
+            <div className="muted">
+              Removes the local SQLite index, logs, albums, diagnostics, and cached app state.
+              Source Takeout files are not touched.
+            </div>
+            <div className="setting-row">
+              <label className="setting-label" htmlFor="viewer-preview-size">
+                Viewer preview size
+              </label>
+              <select
+                id="viewer-preview-size"
+                value={String(viewerPreviewSize)}
+                onChange={(event) => onViewerPreviewSizeChange(Number(event.target.value))}
+              >
+                <option value="1000">1000 px</option>
+                <option value="1280">1280 px</option>
+                <option value="1600">1600 px</option>
+                <option value="2048">2048 px</option>
+              </select>
+            </div>
+            <div className="muted">
+              Controls the generated still-image size used for the viewer and grid preview warming.
+            </div>
           </div>
         ) : null}
-        <div className="button-row">
-          <button className="button-primary" onClick={onRefresh}>
-            Refresh Index
-          </button>
-          <button className="button-danger" onClick={onResetDatabase}>
-            Clear Local Database
-          </button>
-        </div>
-        <div className="muted">
-          Removes the local SQLite index, logs, albums, diagnostics, and cached app state.
-          Source Takeout files are not touched.
-        </div>
-        <div className="setting-row">
-          <label className="setting-label" htmlFor="viewer-preview-size">
-            Viewer preview size
-          </label>
-          <select
-            id="viewer-preview-size"
-            value={String(viewerPreviewSize)}
-            onChange={(event) => onViewerPreviewSizeChange(Number(event.target.value))}
-          >
-            <option value="1000">1000 px</option>
-            <option value="1280">1280 px</option>
-            <option value="1600">1600 px</option>
-            <option value="2048">2048 px</option>
-          </select>
-        </div>
-        <div className="muted">
-          Controls the generated still-image size used for the viewer and grid preview warming.
-        </div>
       </div>
 
       <div className="sidebar-section">

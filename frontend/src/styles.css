@@ -156,6 +156,14 @@ button {
   padding: 16px 20px 20px;
 }
 
+.controls-shell {
+  padding-bottom: 12px;
+}
+
+.settings-panel {
+  padding: 0;
+}
+
 .controls input,
 .controls select {
   width: 100%;
@@ -181,6 +189,35 @@ button {
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-soft);
+}
+
+.section-toggle {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+}
+
+.section-toggle-label {
+  margin-bottom: 0;
+}
+
+.section-toggle-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 999px;
+  background: rgba(33, 80, 186, 0.08);
+  color: var(--accent);
+  font-size: 0.9rem;
+  font-weight: 700;
 }
 
 .button-primary,
