@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::sync::Arc;
 use std::thread;
@@ -99,6 +99,7 @@ pub fn build_app_state(
         app_settings: Arc::new(Mutex::new(app_settings)),
         thumbnail_worker_count: worker_count,
         import_status: Arc::new(Mutex::new(None)),
+        refresh_cancel: Arc::new(AtomicBool::new(false)),
         thumbnail_cache,
         preview_cache,
         inflight_thumbnails,

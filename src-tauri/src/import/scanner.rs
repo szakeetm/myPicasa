@@ -1,4 +1,12 @@
-use std::{fs, path::Path, time::UNIX_EPOCH};
+use std::{
+    fs,
+    path::Path,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    time::UNIX_EPOCH,
+};
 
 use mime_guess::MimeGuess;
 use rayon::prelude::*;
@@ -10,16 +18,31 @@ use crate::{
     util::{errors::AppError, path::normalize_path, time::epoch_to_utc},
 };
 
-pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
+pub fn scan_roots_with_cancel(
+    roots: &[String],
+    cancel_flag: Option<&AtomicBool>,
+) -> Result<Vec<FileScanRecord>, AppError> {
     let mut file_paths = Vec::new();
 
     for root in roots {
+        if cancel_flag
+            .map(|flag| flag.load(Ordering::SeqCst))
+            .unwrap_or(false)
+        {
+            return Err(AppError::Message("refresh cancelled".to_string()));
+        }
         let normalized_root = normalize_path(Path::new(root));
         for entry in WalkDir::new(root)
             .follow_links(false)
             .into_iter()
             .filter_map(Result::ok)
         {
+            if cancel_flag
+                .map(|flag| flag.load(Ordering::SeqCst))
+                .unwrap_or(false)
+            {
+                return Err(AppError::Message("refresh cancelled".to_string()));
+            }
             let path = entry.path();
             if !path.is_file() {
                 continue;
@@ -28,10 +51,18 @@ pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
         }
     }
 
+    let cancel_flag = cancel_flag.map(Arc::new);
     let records = file_paths
         .into_par_iter()
         .map(
             |(normalized_root, path)| -> Result<FileScanRecord, AppError> {
+                if cancel_flag
+                    .as_ref()
+                    .map(|flag| flag.load(Ordering::SeqCst))
+                    .unwrap_or(false)
+                {
+                    return Err(AppError::Message("refresh cancelled".to_string()));
+                }
                 let metadata = fs::metadata(&path)?;
                 let file_size = metadata.len();
                 let extension = path
@@ -59,6 +90,13 @@ pub fn scan_roots(roots: &[String]) -> Result<Vec<FileScanRecord>, AppError> {
                     .or_else(|| detected_format.clone());
 
                 let quick_hash = if candidate_type != "other" {
+                    if cancel_flag
+                        .as_ref()
+                        .map(|flag| flag.load(Ordering::SeqCst))
+                        .unwrap_or(false)
+                    {
+                        return Err(AppError::Message("refresh cancelled".to_string()));
+                    }
                     Some(quick_hash(&path, file_size)?)
                 } else {
                     None

@@ -151,6 +151,7 @@ pub struct AppState {
     pub app_settings: Arc<Mutex<AppSettings>>,
     pub thumbnail_worker_count: usize,
     pub import_status: Arc<Mutex<Option<ImportProgress>>>,
+    pub refresh_cancel: Arc<AtomicBool>,
     pub thumbnail_cache: Arc<Mutex<ThumbnailCache>>,
     pub preview_cache: Arc<Mutex<ThumbnailCache>>,
     pub inflight_thumbnails: Arc<Mutex<HashSet<String>>>,

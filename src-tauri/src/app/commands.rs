@@ -56,6 +56,34 @@ fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
 }
 
+fn is_refresh_running(state: &AppState) -> bool {
+    matches!(
+        state
+            .import_status
+            .lock()
+            .as_ref()
+            .map(|item| item.status.as_str()),
+        Some("running")
+    )
+}
+
+fn is_refresh_cancelled_message(message: &str) -> bool {
+    message.to_ascii_lowercase().contains("refresh cancelled")
+}
+
+fn wait_for_refresh_shutdown(state: &AppState, timeout: Duration) -> CommandResult<()> {
+    let started = Instant::now();
+    while is_refresh_running(state) {
+        if started.elapsed() >= timeout {
+            return Err(InvokeError::from(
+                "Timed out waiting for refresh to stop".to_string(),
+            ));
+        }
+        thread::sleep(Duration::from_millis(50));
+    }
+    Ok(())
+}
+
 fn preview_debug_log(message: String) {
     if PREVIEW_DEBUG_LOGS {
         println!("{message}");
@@ -1685,27 +1713,25 @@ pub fn refresh_index(
     state: State<AppState>,
 ) -> CommandResult<ImportProgress> {
     info!(roots = ?request.roots, "refresh_index");
+    state.refresh_cancel.store(false, Ordering::SeqCst);
     let progress = refresh_takeout_index(&state, request).map_err(map_error)?;
     Ok(progress)
 }
 
 #[tauri::command]
 pub fn start_refresh_index(request: RefreshRequest, state: State<AppState>) -> CommandResult<()> {
-    if matches!(
-        state
-            .import_status
-            .lock()
-            .as_ref()
-            .map(|item| item.status.as_str()),
-        Some("running")
-    ) {
+    if is_refresh_running(state.inner()) {
         return Err(map_error("an import is already running"));
     }
 
     let state = state.inner().clone();
+    state.refresh_cancel.store(false, Ordering::SeqCst);
     thread::spawn(move || {
         if let Err(error) = refresh_takeout_index(&state, request) {
             let message = error.to_string();
+            if is_refresh_cancelled_message(&message) {
+                return;
+            }
             error!(%message, "background refresh failed");
             println!("refresh_takeout_index: failed: {message}");
             *state.import_status.lock() = Some(ImportProgress {
@@ -2548,7 +2574,19 @@ pub fn record_client_log(
 
 #[tauri::command]
 pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
+    if is_refresh_running(state.inner()) {
+        state.refresh_cancel.store(true, Ordering::SeqCst);
+        {
+            let mut status = state.import_status.lock();
+            if let Some(progress) = status.as_mut() {
+                progress.message = Some("stopping refresh before clearing database".to_string());
+            }
+        }
+        wait_for_refresh_shutdown(state.inner(), Duration::from_secs(30))?;
+    }
+
     state.db.reset().map_err(map_error)?;
+    state.refresh_cancel.store(false, Ordering::SeqCst);
     *state.import_status.lock() = None;
     clear_app_derived_storage(state.inner())?;
     state

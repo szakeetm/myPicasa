@@ -9,7 +9,7 @@ use crate::{
     app::state::AppState,
     db::DatabaseQueries,
     import::{
-        scanner::scan_roots,
+        scanner::scan_roots_with_cancel,
         sidecar::{parse_sidecar, takeout_match_score},
         validator::validate_import_with_progress,
     },
@@ -22,6 +22,7 @@ pub fn refresh_takeout_index(
     state: &AppState,
     request: RefreshRequest,
 ) -> Result<ImportProgress, AppError> {
+    state.refresh_cancel.store(false, Ordering::SeqCst);
     let started = Instant::now();
     let roots = request
         .roots
@@ -63,7 +64,7 @@ pub fn refresh_takeout_index(
     *state.import_status.lock() = Some(progress.clone());
 
     let scan_started = Instant::now();
-    let scans = scan_roots(&roots)?;
+    let scans = scan_roots_with_cancel(&roots, Some(&state.refresh_cancel))?;
     info!(
         "refresh_takeout_index: scanned {} files in {} ms",
         scans.len(),
@@ -97,6 +98,7 @@ pub fn refresh_takeout_index(
     *state.import_status.lock() = Some(progress.clone());
 
     for (index, scan) in scans.iter().enumerate() {
+        cancel_if_requested(state, &mut progress)?;
         let file_id = state.db.upsert_file_entry(import_id, scan)?;
         let album_id = state.db.upsert_album(&scan.parent_path)?;
         if scan.candidate_type == "json" || scan.candidate_type == "other" {
@@ -130,6 +132,7 @@ pub fn refresh_takeout_index(
     progress.message = Some("ingress cleanup 1/4: removing missing files".to_string());
     *state.import_status.lock() = Some(progress.clone());
 
+    cancel_if_requested(state, &mut progress)?;
     progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
     let (deleted_asset_ids, reindexed_asset_ids) =
         state.db.reconcile_assets_after_file_deletions()?;
@@ -154,11 +157,29 @@ pub fn refresh_takeout_index(
 
     progress.message = Some("ingress cleanup 2/4: pairing live photos".to_string());
     *state.import_status.lock() = Some(progress.clone());
+    cancel_if_requested(state, &mut progress)?;
     attach_live_photo_pairs(state, &scans)?;
 
     progress.message = Some("ingress cleanup 3/4: merging duplicate assets".to_string());
     *state.import_status.lock() = Some(progress.clone());
-    merge_duplicate_assets_by_hash(state, &scans)?;
+    cancel_if_requested(state, &mut progress)?;
+    let duplicate_group_count = scans
+        .iter()
+        .filter(|scan| scan.candidate_type != "json" && scan.candidate_type != "other")
+        .filter(|scan| scan.quick_hash.is_some())
+        .map(|scan| {
+            (
+                scan.quick_hash.clone().unwrap_or_default(),
+                scan.candidate_type.clone(),
+            )
+        })
+        .collect::<HashSet<_>>()
+        .len();
+    progress.message = Some(format!(
+        "ingress cleanup 3/4: checked 0 / {duplicate_group_count} duplicate groups, merged 0 assets"
+    ));
+    *state.import_status.lock() = Some(progress.clone());
+    progress.assets_updated += merge_duplicate_assets_by_hash(state, &scans, &mut progress)?;
 
     progress.message = Some(format!(
         "ingress validation 4/4: checked 0 / {} scans",
@@ -166,11 +187,15 @@ pub fn refresh_takeout_index(
     ));
     *state.import_status.lock() = Some(progress.clone());
     validate_import_with_progress(&state.db, import_id, &scans, |processed, total| {
+        if state.refresh_cancel.load(Ordering::SeqCst) {
+            return;
+        }
         progress.message = Some(format!(
             "ingress validation 4/4: checked {processed} / {total} scans"
         ));
         *state.import_status.lock() = Some(progress.clone());
     })?;
+    cancel_if_requested(state, &mut progress)?;
 
     progress.status = "completed".to_string();
     progress.phase = "completed".to_string();
@@ -200,6 +225,27 @@ pub fn refresh_takeout_index(
 
     *state.import_status.lock() = Some(progress.clone());
     Ok(progress)
+}
+
+fn cancel_if_requested(
+    state: &AppState,
+    progress: &mut ImportProgress,
+) -> Result<(), AppError> {
+    if state.refresh_cancel.load(Ordering::SeqCst) {
+        progress.status = "cancelled".to_string();
+        progress.phase = "cancelled".to_string();
+        progress.message = Some("refresh cancelled".to_string());
+        *state.import_status.lock() = Some(progress.clone());
+        state.db.insert_log(
+            "warning",
+            "import",
+            &format!("refresh {} cancelled", progress.import_id),
+            None,
+        )?;
+        return Err(AppError::Message("refresh cancelled".to_string()));
+    }
+
+    Ok(())
 }
 
 fn should_publish_progress(index: usize, total: usize) -> bool {
@@ -390,7 +436,8 @@ fn attach_live_photo_pairs(
 fn merge_duplicate_assets_by_hash(
     state: &AppState,
     scans: &[crate::models::FileScanRecord],
-) -> Result<(), AppError> {
+    progress: &mut ImportProgress,
+) -> Result<u32, AppError> {
     let mut groups = HashSet::<(Vec<u8>, String)>::new();
     for scan in scans {
         if scan.candidate_type == "json" || scan.candidate_type == "other" {
@@ -401,18 +448,33 @@ fn merge_duplicate_assets_by_hash(
         }
     }
 
+    let total_groups = groups.len();
+    let mut processed_groups = 0_usize;
+    let mut merged_assets = 0_u32;
+
     for (hash, media_kind) in groups {
-        merge_asset_group_for_hash(state, &hash, &media_kind)?;
+        cancel_if_requested(state, progress)?;
+        merged_assets += merge_asset_group_for_hash(state, &hash, &media_kind)? as u32;
+        processed_groups += 1;
+        if processed_groups == 1
+            || processed_groups == total_groups
+            || processed_groups % 100 == 0
+        {
+            progress.message = Some(format!(
+                "ingress cleanup 3/4: checked {processed_groups} / {total_groups} duplicate groups, merged {merged_assets} assets"
+            ));
+            *state.import_status.lock() = Some(progress.clone());
+        }
     }
 
-    Ok(())
+    Ok(merged_assets)
 }
 
 fn merge_asset_group_for_hash(
     state: &AppState,
     hash: &[u8],
     media_kind: &str,
-) -> Result<(), AppError> {
+) -> Result<usize, AppError> {
     let merged_assets = state.db.with_connection(|conn| {
         use rusqlite::{OptionalExtension, params};
 
@@ -541,7 +603,7 @@ fn merge_asset_group_for_hash(
         )?;
     }
 
-    Ok(())
+    Ok(merged_assets.len().saturating_sub(1))
 }
 
 fn still_pair_stems(filename: &str) -> Vec<String> {

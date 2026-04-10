@@ -118,6 +118,7 @@ export function App() {
   const hasNextAssetPage =
     loadedGridPages.length > 0 && loadedGridPages[loadedGridPages.length - 1].nextCursor != null;
   const gridEntries = useMemo(() => gridEntriesFromPages(gridPages), [gridPages]);
+  const refreshRunning = state.importStatus?.status === "running";
 
   function commitGridPages(nextPages: GridPage[]) {
     const sortedPages = sortGridPages(nextPages);
@@ -588,7 +589,11 @@ export function App() {
         const status = await api.getImportStatus();
         if (status) {
           state.setImportStatus(status);
-          if (status.status === "completed" || status.status === "failed") {
+          if (
+            status.status === "completed" ||
+            status.status === "failed" ||
+            status.status === "cancelled"
+          ) {
             window.clearInterval(poll);
             await refreshDebugSurfaces();
             await refreshAllAssets();
@@ -677,7 +682,7 @@ export function App() {
   }
 
   async function handleExportBackup() {
-    if (!tauriRuntime || backupTransferWorking) {
+    if (!tauriRuntime || backupTransferWorking || refreshRunning) {
       return;
     }
 
@@ -714,7 +719,7 @@ export function App() {
   }
 
   async function handleOpenImportBackup() {
-    if (!tauriRuntime || backupTransferWorking) {
+    if (!tauriRuntime || backupTransferWorking || refreshRunning) {
       return;
     }
 
@@ -1171,6 +1176,7 @@ export function App() {
         settingsCollapsed={state.settingsCollapsed}
         cacheStorageBusy={cacheStorageMigrationStatus?.running}
         importStatus={state.importStatus}
+        refreshRunning={refreshRunning}
         browseEnabled={tauriRuntime}
         albums={state.albums}
         selectedAlbumId={state.selectedAlbumId}

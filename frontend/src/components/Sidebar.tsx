@@ -9,6 +9,7 @@ type SidebarProps = {
   settingsCollapsed: boolean;
   cacheStorageBusy?: boolean;
   importStatus?: ImportProgress | null;
+  refreshRunning?: boolean;
   browseEnabled?: boolean;
   albums: AlbumSummary[];
   selectedAlbumId?: number;
@@ -35,6 +36,7 @@ export function Sidebar({
   settingsCollapsed,
   cacheStorageBusy = false,
   importStatus,
+  refreshRunning = false,
   browseEnabled = true,
   albums,
   selectedAlbumId,
@@ -138,7 +140,7 @@ export function Sidebar({
               </div>
             ) : null}
             <div className="button-row">
-              <button className="button-primary" onClick={onRefresh}>
+              <button className="button-primary" onClick={onRefresh} disabled={refreshRunning}>
                 Refresh Index
               </button>
               <button className="button-danger" onClick={onResetDatabase}>
@@ -146,10 +148,10 @@ export function Sidebar({
               </button>
             </div>
             <div className="button-row">
-              <button className="button-secondary" onClick={onExportBackup}>
+              <button className="button-secondary" onClick={onExportBackup} disabled={refreshRunning}>
                 Export Backup
               </button>
-              <button className="button-secondary" onClick={onImportBackup}>
+              <button className="button-secondary" onClick={onImportBackup} disabled={refreshRunning}>
                 Import Backup
               </button>
             </div>
