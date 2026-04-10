@@ -188,7 +188,8 @@ fn process_thumbnail_job(
             job.size
         ));
         let generated =
-            generate_thumbnail(&primary_path_buf, job.size, working_dir).map_err(|error| error.to_string())?;
+            generate_thumbnail(&primary_path_buf, job.size, !job.use_preview_cache, working_dir)
+                .map_err(|error| error.to_string())?;
         match &generated.bytes {
             Some(bytes) => {
                 let _ = db.insert_log(

@@ -45,10 +45,11 @@ pub fn thumbnail_generator_label(path: &Path) -> &'static str {
 pub fn generate_thumbnail(
     path: &Path,
     size: u32,
+    allow_upscale: bool,
     working_dir: &Path,
 ) -> Result<ThumbnailGenerationOutput, AppError> {
     if is_video_path(path) {
-        let bytes = render_video_thumbnail_with_ffmpeg(path, size, working_dir)?;
+        let bytes = render_video_thumbnail_with_ffmpeg(path, size, allow_upscale, working_dir)?;
         return Ok(ThumbnailGenerationOutput { bytes });
     }
 
@@ -58,28 +59,39 @@ pub fn generate_thumbnail(
         let source_quality = thumbnail_source_quality(size);
         let output_quality = thumbnail_output_quality(size);
         if use_high_quality_thumbnail_settings(size) {
-            if let Some(bytes) = render_square_thumbnail_with_sips(path, size, output_quality, working_dir)? {
+            if let Some(bytes) = render_square_thumbnail_with_sips(
+                path,
+                size,
+                allow_upscale,
+                output_quality,
+                working_dir,
+            )? {
                 return Ok(ThumbnailGenerationOutput { bytes: Some(bytes) });
             }
         }
 
         if !use_high_quality_thumbnail_settings(size) {
-            if let Some(bytes) = render_with_sips(path, render_size, source_quality, working_dir)? {
+            if let Some(bytes) =
+                render_with_sips(path, render_size, allow_upscale, source_quality, working_dir)?
+            {
                 return Ok(ThumbnailGenerationOutput { bytes: Some(bytes) });
             }
         }
 
-        if let Some(bytes) = render_with_sips(path, render_size, source_quality, working_dir)? {
-            let normalized = normalize_image_bytes_to_square_jpeg(&bytes, size, output_quality)?;
+        if let Some(bytes) =
+            render_with_sips(path, render_size, allow_upscale, source_quality, working_dir)?
+        {
+            let normalized =
+                normalize_image_bytes_to_square_jpeg(&bytes, size, allow_upscale, output_quality)?;
             return Ok(ThumbnailGenerationOutput {
                 bytes: Some(normalized),
             });
         }
     }
 
-    let image = load_image(path, size, working_dir)?;
+    let image = load_image(path, size, allow_upscale, working_dir)?;
     let output_quality = thumbnail_output_quality(size);
-    let bytes = encode_square_thumbnail_to_jpeg(&image, size, output_quality)?;
+    let bytes = encode_square_thumbnail_to_jpeg(&image, size, allow_upscale, output_quality)?;
     Ok(ThumbnailGenerationOutput {
         bytes: Some(bytes),
     })
@@ -97,7 +109,7 @@ pub fn generate_viewer_image(path: &Path, max_dimension: u32, working_dir: &Path
         }
     }
 
-    let image = load_image(path, max_dimension, working_dir)?;
+    let image = load_image(path, max_dimension, false, working_dir)?;
     let fitted = if image.width() > max_dimension || image.height() > max_dimension {
         image.resize(
             max_dimension,
@@ -477,6 +489,7 @@ pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError
 fn render_video_thumbnail_with_ffmpeg(
     path: &Path,
     size: u32,
+    allow_upscale: bool,
     working_dir: &Path,
 ) -> Result<Option<Vec<u8>>, AppError> {
     let ffmpeg = match find_command_binary("ffmpeg") {
@@ -518,11 +531,17 @@ fn render_video_thumbnail_with_ffmpeg(
     Ok(Some(encode_square_thumbnail_to_jpeg(
         &image,
         size,
+        allow_upscale,
         thumbnail_output_quality(size),
     )?))
 }
 
-fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::DynamicImage, AppError> {
+fn load_image(
+    path: &Path,
+    size_hint: u32,
+    allow_upscale: bool,
+    working_dir: &Path,
+) -> Result<image::DynamicImage, AppError> {
     let reader = ImageReader::open(path)?.with_guessed_format()?;
     match decode_with_orientation(reader) {
         Ok(image) => Ok(image),
@@ -533,7 +552,7 @@ fn load_image(path: &Path, size_hint: u32, working_dir: &Path) -> Result<image::
                 .unwrap_or_default()
                 .to_lowercase();
             if matches!(extension.as_str(), "heic" | "heif") {
-                if let Some(image) = load_image_with_sips(path, size_hint, working_dir)? {
+                if let Some(image) = load_image_with_sips(path, size_hint, allow_upscale, working_dir)? {
                     return Ok(image);
                 }
             }
@@ -626,11 +645,18 @@ fn is_video_extension(extension: &str) -> bool {
 fn load_image_with_sips(
     path: &Path,
     size_hint: u32,
+    allow_upscale: bool,
     working_dir: &Path,
 ) -> Result<Option<image::DynamicImage>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        if let Some(bytes) = render_with_sips(path, size_hint.max(512), 90, working_dir)? {
+        if let Some(bytes) = render_with_sips(
+            path,
+            size_hint.max(512),
+            allow_upscale,
+            90,
+            working_dir,
+        )? {
             let image = image::load_from_memory(&bytes)?;
             return Ok(Some(image));
         }
@@ -686,6 +712,7 @@ fn probe_image_dimensions_with_sips(path: &Path) -> Result<Option<(u32, u32)>, A
 fn render_square_thumbnail_with_sips(
     path: &Path,
     size: u32,
+    allow_upscale: bool,
     quality: u8,
     working_dir: &Path,
 ) -> Result<Option<Vec<u8>>, AppError> {
@@ -694,7 +721,11 @@ fn render_square_thumbnail_with_sips(
         let Some((source_width, source_height)) = probe_image_dimensions_with_sips(path)? else {
             return Ok(None);
         };
-        let size = size.max(1);
+        let size = if allow_upscale {
+            size.max(1)
+        } else {
+            size.max(1).min(source_width.min(source_height).max(1))
+        };
         let temp_path = temp_jpeg_path(path, working_dir);
         let _ = fs::remove_file(&temp_path);
 
@@ -776,9 +807,22 @@ fn render_square_thumbnail_with_sips(
     }
 }
 
-fn render_with_sips(path: &Path, width: u32, quality: u8, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
+fn render_with_sips(
+    path: &Path,
+    width: u32,
+    allow_upscale: bool,
+    quality: u8,
+    working_dir: &Path,
+) -> Result<Option<Vec<u8>>, AppError> {
     #[cfg(target_os = "macos")]
     {
+        let width = if allow_upscale {
+            width.max(1)
+        } else if let Some((source_width, source_height)) = probe_image_dimensions_with_sips(path)? {
+            width.max(1).min(source_width.max(source_height).max(1))
+        } else {
+            width.max(1)
+        };
         let temp_path = temp_jpeg_path(path, working_dir);
         let status = wait_for_status_with_timeout(
             Command::new("sips")
@@ -812,7 +856,7 @@ fn render_with_sips(path: &Path, width: u32, quality: u8, working_dir: &Path) ->
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, width, quality, working_dir);
+        let _ = (path, width, allow_upscale, quality, working_dir);
         Ok(None)
     }
 }
@@ -869,8 +913,13 @@ fn temp_jpeg_path(path: &Path, working_dir: &Path) -> PathBuf {
     working_dir.join(format!("mypicasa-{stem}-{stamp}.jpg"))
 }
 
-fn render_center_square(image: &DynamicImage, size: u32) -> DynamicImage {
-    image.resize_to_fill(size, size, FilterType::Lanczos3)
+fn render_center_square(image: &DynamicImage, size: u32, allow_upscale: bool) -> DynamicImage {
+    let target = if allow_upscale {
+        size.max(1)
+    } else {
+        size.max(1).min(image.width().min(image.height()).max(1))
+    };
+    image.resize_to_fill(target, target, FilterType::Lanczos3)
 }
 
 fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, AppError> {
@@ -884,20 +933,22 @@ fn encode_jpeg(image: &DynamicImage, quality: u8) -> Result<Vec<u8>, AppError> {
 fn encode_square_thumbnail_to_jpeg(
     image: &DynamicImage,
     size: u32,
+    allow_upscale: bool,
     quality: u8,
 ) -> Result<Vec<u8>, AppError> {
-    let thumb = render_center_square(image, size.max(1));
+    let thumb = render_center_square(image, size.max(1), allow_upscale);
     encode_jpeg(&thumb, quality)
 }
 
 fn normalize_image_bytes_to_square_jpeg(
     bytes: &[u8],
     size: u32,
+    allow_upscale: bool,
     quality: u8,
 ) -> Result<Vec<u8>, AppError> {
     let reader = ImageReader::new(Cursor::new(bytes)).with_guessed_format()?;
     let image = decode_with_orientation(reader)?;
-    encode_square_thumbnail_to_jpeg(&image, size, quality)
+    encode_square_thumbnail_to_jpeg(&image, size, allow_upscale, quality)
 }
 
 fn wait_for_status_with_timeout(

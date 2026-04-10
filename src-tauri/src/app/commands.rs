@@ -1255,7 +1255,7 @@ pub fn request_thumbnail(
     )?;
 
     let working_dir = state.app_data_dir.join("working");
-    match generate_thumbnail(&PathBuf::from(primary_path), size, &working_dir) {
+    match generate_thumbnail(&PathBuf::from(primary_path), size, !use_preview_cache, &working_dir) {
         Ok(result) => {
             let generated = result.bytes;
             if let Some(bytes) = generated {
