@@ -28,6 +28,8 @@
           "$APPDATA/preview-cache/**/*.jpg",
           "$APPDATA/viewer-cache/**/*.jpg",
           "$APPDATA/viewer-cache/**/*.mp4",
+          "$HOME/**/*.jpg",
+          "/Volumes/**/*.jpg",
           "$HOME/**/*.mp4",
           "$HOME/**/*.m4v",
           "$HOME/**/*.mov",
