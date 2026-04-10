@@ -124,6 +124,7 @@ pub struct AssetListRequest {
 pub struct AssetListResponse {
     pub items: Vec<AssetListItem>,
     pub next_cursor: Option<u32>,
+    pub total_count: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

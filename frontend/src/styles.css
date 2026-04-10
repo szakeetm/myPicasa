@@ -360,6 +360,10 @@ button:disabled:hover {
   text-transform: capitalize;
 }
 
+.timeline-marker-count {
+  font-weight: 400;
+}
+
 .grid-frame {
   flex: 1;
   padding: 8px;

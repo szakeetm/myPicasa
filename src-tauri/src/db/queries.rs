@@ -935,9 +935,11 @@ fn paged_asset_query(
         sql.push_str(
             " GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path",
         );
+        let count_sql = format!("SELECT COUNT(*) FROM ({sql}) counted_assets");
         sql.push_str(order_sql);
         sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
 
+        let total_count = conn.query_row(&count_sql, [], |row| row.get::<_, u32>(0))?;
         let mut stmt = conn.prepare(&sql)?;
         let rows = stmt.query_map([], |row| map_asset_list_item(row))?;
         let items = rows.filter_map(Result::ok).collect::<Vec<_>>();
@@ -945,6 +947,7 @@ fn paged_asset_query(
         Ok(AssetListResponse {
             items,
             next_cursor: has_more.then_some(offset + limit as u32),
+            total_count,
         })
     })
 }

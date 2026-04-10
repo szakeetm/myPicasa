@@ -77,6 +77,7 @@ export function App() {
   const viewerPlaybackSupport = useMemo(() => getViewerPlaybackSupport(), []);
   const [gridPages, setGridPages] = useState<GridPage[]>([]);
   const [timelineLabel, setTimelineLabel] = useState<string>();
+  const [viewAssetCount, setViewAssetCount] = useState(0);
   const [loadingPreviousAssets, setLoadingPreviousAssets] = useState(false);
   const [debugPanelCollapsed, setDebugPanelCollapsed] = useState(false);
   const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
@@ -247,6 +248,7 @@ export function App() {
         items: response.items,
       },
     ]);
+    setViewAssetCount(response.total_count);
     setThumbnailResetKey((value) => value + 1);
     setViewerPreviewReadyAssetIds([]);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
@@ -275,6 +277,7 @@ export function App() {
         return;
       }
 
+      setViewAssetCount(response.total_count);
       const pageStart = nextCursor;
       commitHydratedPage(pageStart, response.items, response.next_cursor ?? null);
       await logClient(
@@ -307,6 +310,7 @@ export function App() {
         return;
       }
 
+      setViewAssetCount(response.total_count);
       commitHydratedPage(previousCursor, response.items, response.next_cursor ?? null);
       await logClient(
         "ui.refresh",
@@ -981,6 +985,7 @@ export function App() {
       if (generation !== assetQueryGenerationRef.current) {
         return;
       }
+      setViewAssetCount(response.total_count);
       commitHydratedPage(pageStartCursor, response.items, response.next_cursor ?? null);
       await logClient(
         "ui.refresh",
@@ -1017,6 +1022,7 @@ export function App() {
     state.setSelectedAlbumId(undefined);
     state.setViewMode("timeline");
     commitGridPages([]);
+    setViewAssetCount(0);
     setLoadingPreviousAssets(false);
     setLoadingMoreAssets(false);
     setViewerPreviewReadyAssetIds([]);
@@ -1188,7 +1194,8 @@ export function App() {
         <Toolbar
           query={state.query}
           mediaKind={state.mediaKind}
-          timelineLabel={state.viewMode === "timeline" ? timelineLabel : undefined}
+          timelineLabel={timelineLabel}
+          assetCount={viewAssetCount}
           onQueryChange={state.setQuery}
           onMediaKindChange={state.setMediaKind}
         />
@@ -1209,9 +1216,7 @@ export function App() {
             onLoadMoreBefore={loadPreviousAssets}
             onLoadMore={loadMoreAssets}
             onLeadingDateChange={(value) => {
-              if (state.viewMode === "timeline") {
-                setTimelineLabel(formatTimelineLabel(value));
-              }
+              setTimelineLabel(formatTimelineLabel(value));
             }}
           />
         </div>

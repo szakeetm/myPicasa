@@ -83,6 +83,7 @@ export type AssetListItem = {
 export type AssetListResponse = {
   items: AssetListItem[];
   next_cursor?: number | null;
+  total_count: number;
 };
 
 export type AssetDetail = {

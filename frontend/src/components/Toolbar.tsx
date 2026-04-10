@@ -2,6 +2,7 @@ type ToolbarProps = {
   query: string;
   mediaKind: string;
   timelineLabel?: string;
+  assetCount?: number;
   onQueryChange: (value: string) => void;
   onMediaKindChange: (value: string) => void;
 };
@@ -10,6 +11,7 @@ export function Toolbar({
   query,
   mediaKind,
   timelineLabel,
+  assetCount,
   onQueryChange,
   onMediaKindChange,
 }: ToolbarProps) {
@@ -27,7 +29,10 @@ export function Toolbar({
         <option value="video">Videos</option>
       </select>
       <div className="timeline-marker" aria-live="polite">
-        {timelineLabel || "Timeline"}
+        <span>{timelineLabel || "Timeline"}</span>
+        {typeof assetCount === "number" ? (
+          <span className="timeline-marker-count"> • {assetCount} assets</span>
+        ) : null}
       </div>
     </div>
   );
