@@ -23,6 +23,7 @@ export function Toolbar({
       <select value={mediaKind} onChange={(event) => onMediaKindChange(event.target.value)}>
         <option value="">All media</option>
         <option value="photo">Photos</option>
+        <option value="live_photo">Live photos</option>
         <option value="video">Videos</option>
       </select>
       <div className="timeline-marker" aria-live="polite">

@@ -952,6 +952,13 @@ fn paged_asset_query(
 fn media_kind_filter_sql(kind: &str) -> String {
     match kind {
         "photo" => "a.media_kind IN ('photo', 'live_photo')".to_string(),
+        "live_photo" => "EXISTS (
+            SELECT 1
+            FROM asset_files af_live
+            WHERE af_live.asset_id = a.id
+              AND af_live.role = 'live_photo_video'
+        )"
+        .to_string(),
         "video" => "a.media_kind = 'video'".to_string(),
         other => format!("a.media_kind = '{}'", other.replace('\'', "''")),
     }

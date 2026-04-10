@@ -1,5 +1,6 @@
 import type { AlbumSummary, ImportProgress } from "../lib/types";
 import dayjs from "dayjs";
+import { useMemo, useState } from "react";
 
 type SidebarProps = {
   rootsInput: string;
@@ -52,9 +53,22 @@ export function Sidebar({
   onShowTimeline,
   onSelectAlbum,
 }: SidebarProps) {
+  const [albumQuery, setAlbumQuery] = useState("");
   const total = importStatus?.total_files ?? 0;
   const processed = importStatus?.processed_files ?? 0;
   const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
+  const visibleAlbums = useMemo(() => {
+    const normalizedQuery = albumQuery.trim().toLocaleLowerCase();
+    return albums.filter((album) => {
+      if (album.asset_count <= 0) {
+        return false;
+      }
+      if (!normalizedQuery) {
+        return true;
+      }
+      return album.name.toLocaleLowerCase().includes(normalizedQuery);
+    });
+  }, [albumQuery, albums]);
 
   return (
     <aside className="panel sidebar">
@@ -80,7 +94,7 @@ export function Sidebar({
           </span>
         </button>
 
-        {importStatus ? (
+        {importStatus && !settingsCollapsed ? (
           <div className="status-banner">
             {importStatus.status} • {importStatus.phase}
             <br />
@@ -212,22 +226,29 @@ export function Sidebar({
           Timeline
         </button>
         <div className="eyebrow">Albums</div>
-        {albums.length === 0 ? (
-          <div className="muted">Refresh a Takeout root to populate albums.</div>
+        <input
+          value={albumQuery}
+          onChange={(event) => setAlbumQuery(event.target.value)}
+          placeholder="Search albums"
+        />
+        {visibleAlbums.length === 0 ? (
+          <div className="muted">
+            {albumQuery.trim() ? "No albums match that search." : "Refresh a Takeout root to populate albums."}
+          </div>
         ) : null}
-        {albums.map((album) => (
+        {visibleAlbums.map((album) => (
           <button
             key={album.id}
             className={`album-item${selectedAlbumId === album.id ? " active" : ""}`}
             onClick={() => onSelectAlbum(album.id)}
           >
-            <div>{album.name}</div>
+            <div className="album-title">{album.name}</div>
             <div className="muted">
               {formatAlbumDateRange(album.begin_taken_at_utc, album.end_taken_at_utc)}
               <br />
               {album.asset_count} assets
               <br />
-              {album.source_path}
+              <span className="album-path">{album.source_path}</span>
             </div>
           </button>
         ))}

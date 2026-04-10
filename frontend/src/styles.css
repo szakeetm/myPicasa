@@ -315,13 +315,21 @@ button:disabled:hover {
   border: 1px solid var(--border);
   background: rgba(255, 255, 255, 0.66);
   border-radius: 16px;
-  padding: 10px 12px;
-  margin-bottom: 8px;
+  padding: 9px 12px;
+  margin-bottom: 4px;
 }
 
 .album-item.active {
   border-color: var(--accent);
   background: rgba(33, 80, 186, 0.08);
+}
+
+.album-title {
+  font-weight: 700;
+}
+
+.album-path {
+  font-size: 0.9em;
 }
 
 .content-panel {
