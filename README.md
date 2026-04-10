@@ -2,57 +2,172 @@
 
 Read-only desktop browser for Google Photos Takeout exports.
 
-`myPicasa` is a Tauri desktop app with a Rust backend and React frontend. It indexes a Takeout library into SQLite, reads originals in place, generates thumbnails on demand, and gives you a fast timeline/album browser without rewriting your source files.
+`myPicasa` is a Tauri desktop app with a Rust backend and React frontend. It indexes Google Photos Takeout media into SQLite, keeps the original files in place, generates derived media on demand, and gives you a fast local browser for large libraries, albums, live photos, and videos.
 
-The repo also now includes a parallel native macOS UI built with SwiftUI and UniFFI. It reuses the Rust backend in-process and leaves the existing Tauri app intact.
+The repo also includes an additive native macOS UI built with SwiftUI and UniFFI. The Tauri app remains the main desktop UI.
 
-## Current Design
+## What The App Does
 
-- Read-only by design: source Takeout files are never modified or copied into the library database.
-- SQLite-backed index in the app data directory.
-- Responsive desktop UI built with React, TypeScript, and Tauri.
-- Timeline and album browsing.
-- Search plus media/date filters.
-- Photo viewer with zoom.
-- Video playback and live photo playback from the same viewer modal.
-- Sidecar JSON parsing for Google Photos metadata.
-- Live photo companion movie detection and pairing.
-- Ingest diagnostics and app logs persisted in SQLite.
-- Thumbnail cache persisted on disk, with a memory working set for faster reuse.
-- Thumbnail generation limited to tiles actually visible on screen.
+- Reads Google Photos Takeout media in place without modifying originals.
+- Indexes media metadata into a local SQLite database.
+- Parses Google Photos JSON sidecars.
+- Detects and pairs live photo motion clips with still images.
+- Builds thumbnails, viewer previews, and rendered viewer-safe video files on demand.
+- Browses media in timeline and album views.
+- Searches assets by title and filename.
+- Filters by media type:
+  - all media
+  - photos
+  - live photos
+  - videos
+- Opens a viewer for photos, videos, and live photos.
+- Tracks diagnostics, recent logs, thumbnail generation logs, and batch transcode logs.
+- Lets you move generated cache storage to a custom folder, including external storage.
+- Can export and import local app state for backup or migration.
 
-## Architecture
+## Core Principles
 
-### Frontend
+- Read-only for source media: original Takeout files are never rewritten.
+- Local-first: database, caches, logs, and diagnostics live on your machine.
+- Derived-data separation: originals stay where they are; generated outputs can be relocated.
+- Practical large-library workflow: designed for browsing big Takeout archives and external drives.
 
-- React 19 + TypeScript
-- Zustand app state
-- Tauri bridge for native commands
-- CSS-based media grid and modal viewer
+## Features
 
-### Backend
+## Browsing
 
-- Rust + Tauri 2
-- SQLite via `rusqlite`
-- Filesystem scan with `walkdir`
-- Parallel work with `rayon`
-- Image decoding/resizing with `image`
-- Google Photos sidecar parsing with `serde_json`
+- Timeline view across the full indexed library.
+- Album list in the left sidebar.
+- Album search by album name.
+- Header date indicator based on the first visible asset in the current view.
+- Total asset count for the current result set in the header.
+- Hidden zero-asset albums in the sidebar.
+
+## Search And Filters
+
+- Full library search by title and filename.
+- Media-type filter with:
+  - `All media`
+  - `Photos`
+  - `Live photos`
+  - `Videos`
+- `Photos` includes live photos.
+- `Live photos` shows only assets that have an attached live-photo motion file.
+
+## Viewer
+
+- Image viewer for photos.
+- Video playback in the viewer.
+- Live photo viewer with still image plus motion playback.
+- Previous/next navigation between assets.
+- Open the original file in Finder.
+- Open the original file with the system default app.
+- Open the original file with Quick Look on macOS.
+
+## Thumbnail And Render Pipeline
+
+- On-demand grid thumbnails.
+- On-demand viewer previews for still images.
+- Background rendered viewer-safe video transcodes.
+- Thumbnail generation limited to visible or requested assets.
+- Disk-backed caches with an in-memory working set.
+- Cache stats visible in the debug panel.
+
+## Cache Storage Relocation
+
+- Configurable cache storage location for:
+  - thumbnails
+  - viewer previews
+  - rendered viewer media
+- Default cache location is the app-support directory.
+- Database remains in the original app-support location.
+- Optional copy of existing generated assets when changing cache storage.
+- Progress modal during cache migration.
+- Interrupt support during cache migration.
+
+## Backup Export / Import
+
+- Export local app state to a chosen folder.
+- Export includes:
+  - SQLite database
+  - app settings
+  - configured Takeout roots
+  - thumbnail cache
+  - preview cache
+  - viewer render cache
+- Import restores the same local app state from a backup folder.
+- Import asks for the current Takeout root location(s).
+- Import lets you choose a cache-storage location for the restored backup.
+- Import can optionally run a refresh afterward. This is recommended.
+- Backup export/import progress is shown in a modal.
+
+## Debugging And Diagnostics
+
+- Ingress diagnostics panel.
+- Recent app logs.
+- Thumbnail generation logs.
+- Batch transcode logs.
+- Cache stats for thumbnails, previews, and rendered viewer media.
+- Clear diagnostics.
+- Clear logs.
+- Clear thumbnails/previews.
+- Clear rendered viewer media.
+
+## Ingest Pipeline
+
+- Scans one or more Takeout roots.
+- Parses sidecar JSON.
+- Uses sidecar timestamps when available.
+- Detects and attaches live-photo motion clips.
+- Reconciles duplicates.
+- Records diagnostics for suspicious or unresolved ingest cases.
+- Refreshes the local index without altering originals.
+
+## Storage Model
+
+App-managed data includes:
+
+- `my_picasa.sqlite`
+- `settings.json`
+- thumbnail cache files
+- preview cache files
+- rendered viewer media
+- logs and diagnostics in SQLite
+
+Original Takeout media remains in its existing filesystem location and is read directly.
+
+## Backup Format
+
+A backup export folder contains:
+
+- `my_picasa.sqlite`
+- `settings.json`
+- `mypicasa-backup.json`
+- `thumbnail-cache/`
+- `preview-cache/`
+- `viewer-cache/`
+
+The backup manifest stores:
+
+- export format version
+- export timestamp
+- app settings
+- original indexed Takeout roots
 
 ## External Runtime Dependencies
 
-The app now relies on a couple of system tools for media handling:
+The app depends on a few system tools for media handling:
 
 - `ffmpeg`
-  Used for video thumbnail extraction.
+  Used for video thumbnails and video transcoding.
 - `ffprobe`
-  Used for video duration probing and thumbnail frame selection.
+  Used for video probing and metadata extraction.
 - `sips` on macOS
-  Used as a fallback/helper for HEIC/HEIF and some image rendering paths.
+  Used for some image rendering paths and HEIC/HEIF handling.
 - `qlmanage` on macOS
-  Used for some thumbnail generation paths, especially HEIC/HEIF.
+  Used in some macOS media preview paths.
 
-On macOS, `ffmpeg` and `ffprobe` are easiest to install with Homebrew:
+On macOS, install `ffmpeg` and `ffprobe` with Homebrew:
 
 ```bash
 brew install ffmpeg
@@ -60,109 +175,43 @@ brew install ffmpeg
 
 For the native macOS UI you also need:
 
-- Xcode Command Line Tools or full Xcode with the macOS SDK
-- Swift 6 toolchain, which ships with current Xcode releases
+- Xcode Command Line Tools or full Xcode
+- a current Swift toolchain
 
-## Project Dependencies
+## Tech Stack
 
-### Frontend packages
+## Frontend
 
-- `react`
-- `react-dom`
-- `zustand`
-- `dayjs`
-- `@tauri-apps/api`
-- `@tauri-apps/plugin-dialog`
+- React 19
+- TypeScript
+- Zustand
+- Day.js
+- Tauri JS APIs
 
-Note:
-`@tanstack/react-virtual` is still present in `frontend/package.json`, but the grid currently uses a plain CSS layout rather than virtual rows.
+## Backend
 
-### Rust crates
+- Rust
+- Tauri 2
+- SQLite via `rusqlite`
+- `walkdir` for scanning
+- `rayon` for parallel work
+- `image` for image processing
+- `serde_json` for sidecar parsing
 
-- `tauri`
-- `tauri-plugin-dialog`
-- `rusqlite`
-- `serde`
-- `serde_json`
-- `chrono`
-- `image`
-- `walkdir`
-- `rayon`
-- `blake3`
-- `tracing`
-- `tracing-subscriber`
-- `parking_lot`
-- `mime_guess`
-- `base64`
-- `thiserror`
+## Project Layout
 
-## Features
+- [README.md](/Users/martonady/Repos/myPicasa/README.md)
+  Main project overview.
+- [frontend/](/Users/martonady/Repos/myPicasa/frontend)
+  React/Tauri frontend.
+- [src-tauri/](/Users/martonady/Repos/myPicasa/src-tauri)
+  Rust backend and Tauri app shell.
+- [native-macos/](/Users/martonady/Repos/myPicasa/native-macos)
+  Native SwiftUI macOS client.
 
-### Ingest
+## Development Setup
 
-- Scans one or more Takeout roots.
-- Parses Google Photos JSON sidecars.
-- Uses sidecar timestamps where available.
-- Ignores album-root `metadata.json` files as album metadata rather than media sidecars.
-- Detects and pairs live photo companion movies with their still images.
-- Merges duplicate assets when matching hashes indicate the same underlying media.
-- Records diagnostics for unresolved or suspicious ingest cases.
-
-### Browsing
-
-- Album list in the sidebar.
-- Timeline view for all indexed media.
-- Search by title/filename.
-- Media type filter.
-- Date range filter.
-
-### Thumbnail Cache
-
-- Generated on demand.
-- Stored on disk under the app data directory.
-- Memory working set layered on top for faster repeated access.
-- Cache stats exposed in the debug panel:
-  count, total size, configured memory budget.
-- Cache can be cleared from the UI with `Clear thumbnails`.
-
-### Viewer
-
-- Photos open in a zoomable viewer.
-- Zoomed photos stay inside the viewer card and can be scrolled when enlarged.
-- Videos play directly in the viewer.
-- Live photo stills expose their companion motion clip in the viewer.
-
-## Keyboard Shortcuts
-
-Viewer shortcuts:
-
-- `Left Arrow`
-  Previous asset
-- `Right Arrow`
-  Next asset
-- `Escape`
-  Close viewer
-- `+` or `=`
-  Zoom in
-- `-`
-  Zoom out
-- `0`
-  Reset zoom to 100%
-
-## Debug Panel
-
-The right-hand debug panel currently exposes:
-
-- Ingest diagnostics
-- Recent logs
-- Thumbnail cache stats
-- Clear diagnostics
-- Clear logs
-- Clear thumbnails
-
-## Run In Development
-
-Install frontend dependencies first:
+Install frontend dependencies:
 
 ```bash
 cd frontend
@@ -170,27 +219,42 @@ npm install
 cd ..
 ```
 
-Start the desktop app:
+If you want to run the native macOS UI, also make sure Swift/Xcode tools are available.
+
+## Running The App
+
+Start the Tauri desktop app in development:
 
 ```bash
 npm run dev
 ```
 
-Useful additional commands:
+Useful commands:
 
 ```bash
 npm run frontend:dev
 npm run frontend:build
 npm run build
-npm run native:build
-npm run native:run
+```
+
+Frontend-only build:
+
+```bash
+cd frontend
+npm run build
+```
+
+Desktop bundle build:
+
+```bash
+npm run build
 ```
 
 ## Native macOS UI
 
-The native app lives under [native-macos/README.md](/Users/martonady/Repos/myPicasa/native-macos/README.md) and is additive. The Tauri app remains the default cross-platform UI.
+The native app is additive and documented further in [native-macos/README.md](/Users/martonady/Repos/myPicasa/native-macos/README.md).
 
-Build the Rust bridge and Swift bindings:
+Build the Rust bridge and Swift package:
 
 ```bash
 npm run native:build
@@ -202,53 +266,101 @@ Run the SwiftUI app:
 npm run native:run
 ```
 
-If you prefer to work directly with SwiftPM:
-
-```bash
-./scripts/build-swift-native.sh
-DYLD_LIBRARY_PATH="$PWD/native-macos/NativeLib" swift build --package-path native-macos
-DYLD_LIBRARY_PATH="$PWD/native-macos/NativeLib" swift run --package-path native-macos MyPicasaNativeApp
-```
-
-Open the native app in Xcode:
+Open it in Xcode:
 
 ```bash
 open native-macos/Package.swift
 ```
 
-## Build
+## First-Time Use
 
-Frontend only:
+1. Launch the app.
+2. Choose the extracted `Takeout/Google Photos` folder, or another folder that directly contains the media and sidecar JSON files.
+3. Click `Refresh Index`.
+4. Browse the timeline or albums.
+5. Optionally change cache storage to a larger external drive.
+6. Optionally export a backup of the app state.
 
-```bash
-cd frontend
-npm run build
-```
+## Cache Storage Instructions
 
-Desktop app bundle:
+The app can store generated data in a custom cache folder.
 
-```bash
-npm run build
-```
+Use this when:
 
-## Storage
+- your library is large
+- you want generated media on an external SSD
+- you want to keep app-support storage small
 
-App-managed data is stored in the Tauri app data directory and includes:
+Behavior:
 
-- `my_picasa.sqlite`
-- persisted thumbnail cache files
-- app-owned local state
+- default location stays under the app-support directory
+- changing cache storage can copy existing generated files
+- if you choose not to copy, the app switches to an empty derived-data location
+- the database stays in the original app-support directory
 
-The original Takeout media remains in its existing folders and is read in place.
+After moving cache storage:
 
-## Current UX Notes
+- thumbnails
+- previews
+- rendered viewer media
 
-- Thumbnail work is intentionally limited to on-screen items.
-- Live photos can show both a live-photo badge and a play affordance.
-- Standalone movies show duration and a play affordance on the tile.
-- Preview-generation debug logging is compiled in behind a flag and currently disabled by default.
+will be read from the new location.
 
-## Known Follow-Ups
+## Backup Instructions
 
-- The README documents the app as it behaves now, but the codebase still contains some earlier structures from the original prototype phase.
-- If the loaded asset page size grows substantially, the grid may eventually want viewport windowing again, but it currently prioritizes tighter row packing and correct on-screen thumbnail requests.
+## Export
+
+Use `Export Backup` in the settings panel to create a portable copy of the local app state.
+
+Recommended use cases:
+
+- cloud backup
+- migration to another machine
+- moving between internal and external storage
+- creating a restore point before major reindexing
+
+## Import
+
+Use `Import Backup` in the settings panel, then:
+
+1. Select the exported backup folder.
+2. Confirm or adjust the restored Takeout root location(s).
+3. Optionally choose a cache storage location.
+4. Choose whether to run a refresh after import.
+
+Refresh after import is recommended because it:
+
+- validates that the originals still exist
+- updates metadata if the Takeout files changed
+- refreshes album and file state against the current filesystem
+
+## Reset Behavior
+
+`Clear Local Database` removes local app state, including:
+
+- indexed database contents
+- thumbnails
+- viewer previews
+- rendered viewer media
+- working files
+- logs
+- diagnostics
+
+It does not modify the original Takeout media.
+
+## Keyboard Shortcuts
+
+Viewer shortcuts:
+
+- `Left Arrow` for previous asset
+- `Right Arrow` for next asset
+- `Escape` to close the viewer
+- `+` or `=` to zoom in
+- `-` to zoom out
+- `0` to reset zoom
+
+## Notes
+
+- Asset serving from custom cache folders is allowed from the default app-data area, the home directory, and mounted volumes as configured in [tauri.conf.json](/Users/martonady/Repos/myPicasa/src-tauri/tauri.conf.json).
+- The grid currently favors responsive CSS layout and on-demand media generation over aggressive virtualization.
+- The project still contains some earlier prototype structures, but the README reflects the app’s current behavior.
