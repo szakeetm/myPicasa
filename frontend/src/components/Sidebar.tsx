@@ -20,6 +20,8 @@ type SidebarProps = {
   onToggleSettingsCollapsed: () => void;
   onBrowseRoot: () => void;
   onRefresh: () => void;
+  onExportBackup: () => void;
+  onImportBackup: () => void;
   onResetDatabase: () => void;
   onShowTimeline: () => void;
   onSelectAlbum: (albumId: number) => void;
@@ -44,6 +46,8 @@ export function Sidebar({
   onToggleSettingsCollapsed,
   onBrowseRoot,
   onRefresh,
+  onExportBackup,
+  onImportBackup,
   onResetDatabase,
   onShowTimeline,
   onSelectAlbum,
@@ -60,16 +64,6 @@ export function Sidebar({
         <div className="muted">
           Indexes in SQLite and reads originals in place.
         </div>
-        {importStatus ? (
-          <div className="status-banner">
-            {importStatus.status} • {importStatus.phase}
-            <br />
-            scanned {importStatus.files_scanned} files
-            {total > 0 ? ` • ${processed}/${total} (${percent}%)` : ""}
-            {importStatus.worker_count ? ` • ${importStatus.worker_count} workers` : ""}
-            {importStatus.message ? ` • ${importStatus.message}` : ""}
-          </div>
-        ) : null}
       </div>
 
       <div className="controls controls-shell">
@@ -85,6 +79,17 @@ export function Sidebar({
             {settingsCollapsed ? "▾" : "▴"}
           </span>
         </button>
+
+        {importStatus ? (
+          <div className="status-banner">
+            {importStatus.status} • {importStatus.phase}
+            <br />
+            scanned {importStatus.files_scanned} files
+            {total > 0 ? ` • ${processed}/${total} (${percent}%)` : ""}
+            {importStatus.worker_count ? ` • ${importStatus.worker_count} workers` : ""}
+            {importStatus.message ? ` • ${importStatus.message}` : ""}
+          </div>
+        ) : null}
 
         {!settingsCollapsed ? (
           <div id="sidebar-settings-panel" className="controls settings-panel">
@@ -124,6 +129,14 @@ export function Sidebar({
               </button>
               <button className="button-danger" onClick={onResetDatabase}>
                 Clear Local Database
+              </button>
+            </div>
+            <div className="button-row">
+              <button className="button-secondary" onClick={onExportBackup}>
+                Export Backup
+              </button>
+              <button className="button-secondary" onClick={onImportBackup}>
+                Import Backup
               </button>
             </div>
             <div className="muted">

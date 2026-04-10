@@ -3,6 +3,7 @@ export type RefreshRequest = { roots: string[] };
 export type AppSettings = {
   viewer_preview_size: number;
   cache_storage_dir?: string | null;
+  indexed_roots: string[];
 };
 
 export type CacheStorageMigrationStatus = {
@@ -18,6 +19,19 @@ export type CacheStorageMigrationStatus = {
   copied_bytes: number;
   current_path?: string | null;
   message?: string | null;
+};
+
+export type AppBackupManifest = {
+  format_version: number;
+  exported_at: string;
+  settings: AppSettings;
+};
+
+export type AppBackupSummary = {
+  backup_dir: string;
+  settings: AppSettings;
+  cache_files: number;
+  cache_bytes: number;
 };
 
 export type ImportProgress = {

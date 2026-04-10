@@ -12,6 +12,7 @@ import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
 import type {
+  AppBackupManifest,
   AssetListItem,
   AssetListRequest,
   BatchThumbnailGenerationStatus,
@@ -92,8 +93,17 @@ export function App() {
   const [cacheStorageChangePending, setCacheStorageChangePending] = useState<string | null>(null);
   const [cacheStorageMigrationStatus, setCacheStorageMigrationStatus] = useState<CacheStorageMigrationStatus>();
   const [cacheStorageMigrationModalOpen, setCacheStorageMigrationModalOpen] = useState(false);
+  const [importBackupDir, setImportBackupDir] = useState<string>();
+  const [importBackupManifest, setImportBackupManifest] = useState<AppBackupManifest>();
+  const [importBackupRootsInput, setImportBackupRootsInput] = useState("");
+  const [importBackupCacheStorageDir, setImportBackupCacheStorageDir] = useState("");
+  const [importBackupShouldRefresh, setImportBackupShouldRefresh] = useState(true);
+  const [backupTransferWorking, setBackupTransferWorking] = useState(false);
+  const [backupTransferMode, setBackupTransferMode] = useState<"export" | "import">("export");
+  const [backupTransferMessage, setBackupTransferMessage] = useState("");
   const didInitFilterEffect = useRef(false);
   const didInitViewerPreviewSizeEffect = useRef(false);
+  const didInitRootsSettingsEffect = useRef(false);
   const cacheStorageMigrationWasRunningRef = useRef(false);
   const assetQueryGenerationRef = useRef(0);
   const gridPagesRef = useRef<GridPage[]>([]);
@@ -160,6 +170,26 @@ export function App() {
       });
     }
     return window.confirm(message);
+  }
+
+  function currentIndexedRoots() {
+    return state.rootsInput
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean);
+  }
+
+  function buildAppSettings(overrides?: Partial<{
+    viewerPreviewSize: number;
+    cacheStorageDir: string | null;
+    indexedRoots: string[];
+  }>) {
+    return {
+      viewer_preview_size: overrides?.viewerPreviewSize ?? state.viewerPreviewSize,
+      cache_storage_dir:
+        overrides?.cacheStorageDir !== undefined ? overrides.cacheStorageDir : cacheStorageDir || null,
+      indexed_roots: overrides?.indexedRoots ?? currentIndexedRoots(),
+    };
   }
 
   async function fetchAssetsPage(
@@ -312,6 +342,7 @@ export function App() {
         state.setViewerPreviewSize(settings.viewer_preview_size);
         setCacheStorageDir(settings.cache_storage_dir ?? "");
         setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+        state.setRootsInput(settings.indexed_roots.join(";"));
       });
       void api.getCacheStorageMigrationStatus().then((status) => {
         setCacheStorageMigrationStatus(status);
@@ -449,6 +480,7 @@ export function App() {
           state.setViewerPreviewSize(settings.viewer_preview_size);
           setCacheStorageDir(settings.cache_storage_dir ?? "");
           setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+          state.setRootsInput(settings.indexed_roots.join(";"));
           const cacheStats = await api.getCacheStats();
           if (!cancelled) {
             state.setCacheStats(cacheStats);
@@ -495,11 +527,40 @@ export function App() {
     setViewerPreviewReadyAssetIds([]);
   }, [state.viewerPreviewSize]);
 
-  async function handleRefreshIndex() {
-    const roots = state.rootsInput
-      .split(";")
-      .map((item) => item.trim())
-      .filter(Boolean);
+  useEffect(() => {
+    if (!tauriRuntime) {
+      return;
+    }
+    if (!didInitRootsSettingsEffect.current) {
+      didInitRootsSettingsEffect.current = true;
+      return;
+    }
+    if (backupTransferWorking || cacheStorageMigrationStatus?.running) {
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      void api
+        .updateAppSettings(buildAppSettings({ indexedRoots: currentIndexedRoots() }))
+        .then((settings) => {
+          setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+        })
+        .catch((error) => {
+          console.error("failed to persist indexed roots", error);
+        });
+    }, 400);
+
+    return () => window.clearTimeout(timer);
+  }, [
+    backupTransferWorking,
+    cacheStorageMigrationStatus?.running,
+    cacheStorageDir,
+    state.rootsInput,
+    state.viewerPreviewSize,
+    tauriRuntime,
+  ]);
+
+  async function startRefreshForRoots(roots: string[]) {
     await logClient("ui.import", `refresh requested for ${roots.length} roots`);
     state.setImportStatus({
       import_id: 0,
@@ -535,6 +596,13 @@ export function App() {
     }, 400);
 
     try {
+      if (tauriRuntime) {
+        const settings = await api.updateAppSettings(buildAppSettings({ indexedRoots: roots }));
+        state.setViewerPreviewSize(settings.viewer_preview_size);
+        setCacheStorageDir(settings.cache_storage_dir ?? "");
+        setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+        state.setRootsInput(settings.indexed_roots.join(";"));
+      }
       await api.startRefreshIndex({ roots });
     } finally {
       window.setTimeout(() => {
@@ -545,6 +613,11 @@ export function App() {
         });
       }, 50);
     }
+  }
+
+  async function handleRefreshIndex() {
+    const roots = currentIndexedRoots();
+    await startRefreshForRoots(roots);
   }
 
   async function handleBrowseRoot() {
@@ -599,6 +672,163 @@ export function App() {
     }
   }
 
+  async function handleExportBackup() {
+    if (!tauriRuntime || backupTransferWorking) {
+      return;
+    }
+
+    try {
+      const persistedSettings = await api.updateAppSettings(
+        buildAppSettings({ indexedRoots: currentIndexedRoots() }),
+      );
+      state.setRootsInput(persistedSettings.indexed_roots.join(";"));
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose backup export folder",
+      });
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+
+      setBackupTransferMode("export");
+      setBackupTransferMessage(`Exporting backup to ${selected}`);
+      setBackupTransferWorking(true);
+      const result = await api.exportAppBackup(selected);
+      setBackupTransferMessage(
+        `Export completed: ${result.cache_files} cache files, ${formatFileSize(result.cache_bytes)}`,
+      );
+      window.alert(
+        `Backup exported to ${result.backup_dir}\n\nCache files: ${result.cache_files}\nCache size: ${formatFileSize(result.cache_bytes)}`,
+      );
+    } catch (error) {
+      await logClient("ui.backup", `backup export failed: ${String(error)}`, "error");
+      window.alert(`Backup export failed: ${String(error)}`);
+    } finally {
+      setBackupTransferWorking(false);
+    }
+  }
+
+  async function handleOpenImportBackup() {
+    if (!tauriRuntime || backupTransferWorking) {
+      return;
+    }
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose backup folder to import",
+      });
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+
+      const manifest = await api.inspectAppBackup(selected);
+      setImportBackupDir(selected);
+      setImportBackupManifest(manifest);
+      setImportBackupRootsInput(
+        (manifest.settings.indexed_roots.length > 0
+          ? manifest.settings.indexed_roots
+          : currentIndexedRoots()
+        ).join(";"),
+      );
+      setImportBackupCacheStorageDir(manifest.settings.cache_storage_dir ?? "");
+      setImportBackupShouldRefresh(true);
+    } catch (error) {
+      await logClient("ui.backup", `backup inspect failed: ${String(error)}`, "error");
+      window.alert(`Backup import failed: ${String(error)}`);
+    }
+  }
+
+  async function handleBrowseImportCacheStorageDir() {
+    if (!tauriRuntime) {
+      return;
+    }
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose restored cache storage folder",
+      });
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+      setImportBackupCacheStorageDir(selected);
+    } catch (error) {
+      await logClient("ui.backup", `import cache browse failed: ${String(error)}`, "error");
+    }
+  }
+
+  async function handleBrowseImportTakeoutRoot() {
+    if (!tauriRuntime) {
+      return;
+    }
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose restored Google Photos Takeout root",
+      });
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+      setImportBackupRootsInput((current) => {
+        const trimmed = current.trim();
+        return trimmed ? `${trimmed};${selected}` : selected;
+      });
+    } catch (error) {
+      await logClient("ui.backup", `import takeout browse failed: ${String(error)}`, "error");
+    }
+  }
+
+  async function handleConfirmImportBackup() {
+    if (!importBackupDir || !importBackupManifest) {
+      return;
+    }
+
+    const roots = importBackupRootsInput
+      .split(";")
+      .map((item) => item.trim())
+      .filter(Boolean);
+    if (roots.length === 0) {
+      window.alert("Provide at least one Takeout root before importing.");
+      return;
+    }
+
+    try {
+      setBackupTransferMode("import");
+      setBackupTransferMessage(`Importing backup from ${importBackupDir}`);
+      setBackupTransferWorking(true);
+      const result = await api.importAppBackup(
+        importBackupDir,
+        roots,
+        importBackupCacheStorageDir.trim() || null,
+      );
+      setBackupTransferMessage(
+        `Import completed: ${result.cache_files} cache files restored, ${formatFileSize(result.cache_bytes)}`,
+      );
+      state.setViewerPreviewSize(result.settings.viewer_preview_size);
+      setCacheStorageDir(result.settings.cache_storage_dir ?? "");
+      setSavedCacheStorageDir(result.settings.cache_storage_dir ?? "");
+      state.setRootsInput(result.settings.indexed_roots.join(";"));
+      setImportBackupDir(undefined);
+      setImportBackupManifest(undefined);
+      setThumbnailResetKey((value) => value + 1);
+      setViewerPreviewReadyAssetIds([]);
+      await refreshDebugSurfaces();
+      await refreshAllAssets();
+      if (importBackupShouldRefresh) {
+        await startRefreshForRoots(result.settings.indexed_roots);
+      }
+    } catch (error) {
+      await logClient("ui.backup", `backup import failed: ${String(error)}`, "error");
+      window.alert(`Backup import failed: ${String(error)}`);
+    } finally {
+      setBackupTransferWorking(false);
+    }
+  }
+
   async function handleApplyCacheStorageDir() {
     const nextValue = cacheStorageDir.trim();
     const previousValue = savedCacheStorageDir.trim();
@@ -629,13 +859,13 @@ export function App() {
         setCacheStorageMigrationModalOpen(true);
         cacheStorageMigrationWasRunningRef.current = status.running;
       } else {
-        const settings = await api.updateAppSettings({
-          viewer_preview_size: state.viewerPreviewSize,
-          cache_storage_dir: pendingValue || null,
-        });
+        const settings = await api.updateAppSettings(
+          buildAppSettings({ cacheStorageDir: pendingValue || null }),
+        );
         state.setViewerPreviewSize(settings.viewer_preview_size);
         setCacheStorageDir(settings.cache_storage_dir ?? "");
         setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+        state.setRootsInput(settings.indexed_roots.join(";"));
         setCacheStorageMigrationStatus({
           status: "completed",
           running: false,
@@ -699,10 +929,11 @@ export function App() {
     }
 
     try {
-      const settings = await api.updateAppSettings({
-        viewer_preview_size: value,
-      });
+      const settings = await api.updateAppSettings(buildAppSettings({ viewerPreviewSize: value }));
       state.setViewerPreviewSize(settings.viewer_preview_size);
+      setCacheStorageDir(settings.cache_storage_dir ?? "");
+      setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+      state.setRootsInput(settings.indexed_roots.join(";"));
     } catch (error) {
       await logClient("ui.settings", `failed to update viewer preview size: ${String(error)}`, "error");
     }
@@ -946,6 +1177,8 @@ export function App() {
         onToggleSettingsCollapsed={() => state.setSettingsCollapsed(!state.settingsCollapsed)}
         onBrowseRoot={handleBrowseRoot}
         onRefresh={handleRefreshIndex}
+        onExportBackup={() => void handleExportBackup()}
+        onImportBackup={() => void handleOpenImportBackup()}
         onResetDatabase={handleResetDatabase}
         onShowTimeline={handleShowTimeline}
         onSelectAlbum={handleSelectAlbum}
@@ -1256,6 +1489,153 @@ export function App() {
         </div>
       ) : null}
 
+      {importBackupManifest && importBackupDir ? (
+        <div
+          className="viewer-backdrop"
+          onClick={() => {
+            if (!backupTransferWorking) {
+              setImportBackupDir(undefined);
+              setImportBackupManifest(undefined);
+            }
+          }}
+        >
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">Import Backup</div>
+                <div className="muted">
+                  Restore the exported database, settings, and caches from {importBackupDir}.
+                </div>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">
+                Backup from {formatLogTimestamp(importBackupManifest.exported_at)} •{" "}
+                {importBackupManifest.settings.indexed_roots.length} Takeout root
+                {importBackupManifest.settings.indexed_roots.length === 1 ? "" : "s"}
+              </div>
+              <div className="setting-row" style={{ marginTop: 16 }}>
+                <label className="setting-label" htmlFor="import-backup-roots">
+                  Takeout roots
+                </label>
+                <input
+                  id="import-backup-roots"
+                  value={importBackupRootsInput}
+                  onChange={(event) => setImportBackupRootsInput(event.target.value)}
+                  placeholder="/path/to/Takeout/Google Photos;/another/root"
+                  disabled={backupTransferWorking}
+                />
+              </div>
+              <div className="button-row" style={{ marginTop: 8 }}>
+                <button
+                  className="button-secondary"
+                  onClick={() => void handleBrowseImportTakeoutRoot()}
+                  disabled={backupTransferWorking}
+                >
+                  Browse Takeout Root
+                </button>
+              </div>
+              <div className="muted">
+                Point this backup at the current location of the original Takeout files.
+              </div>
+              <div className="setting-row" style={{ marginTop: 16 }}>
+                <label className="setting-label" htmlFor="import-backup-cache-dir">
+                  Cache storage location
+                </label>
+                <input
+                  id="import-backup-cache-dir"
+                  value={importBackupCacheStorageDir}
+                  onChange={(event) => setImportBackupCacheStorageDir(event.target.value)}
+                  placeholder="Leave blank to restore into the default app support folder"
+                  disabled={backupTransferWorking}
+                />
+              </div>
+              <div className="button-row" style={{ marginTop: 8 }}>
+                <button
+                  className="button-secondary"
+                  onClick={() => void handleBrowseImportCacheStorageDir()}
+                  disabled={backupTransferWorking}
+                >
+                  Browse Cache Folder
+                </button>
+                <button
+                  className="button-secondary"
+                  onClick={() => setImportBackupCacheStorageDir("")}
+                  disabled={backupTransferWorking}
+                >
+                  Use Default
+                </button>
+              </div>
+              <label
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                  marginTop: 16,
+                  cursor: backupTransferWorking ? "default" : "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={importBackupShouldRefresh}
+                  onChange={(event) => setImportBackupShouldRefresh(event.target.checked)}
+                  disabled={backupTransferWorking}
+                />
+                <span>
+                  Run refresh after import
+                  <span className="muted"> (recommended)</span>
+                </span>
+              </label>
+            </div>
+            <div className="button-row" style={{ marginTop: 16 }}>
+              <button
+                className="button-primary"
+                onClick={() => void handleConfirmImportBackup()}
+                disabled={backupTransferWorking}
+              >
+                {backupTransferWorking ? "Working" : "Import Backup"}
+              </button>
+              <button
+                className="button-danger"
+                onClick={() => {
+                  if (!backupTransferWorking) {
+                    setImportBackupDir(undefined);
+                    setImportBackupManifest(undefined);
+                  }
+                }}
+                disabled={backupTransferWorking}
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {backupTransferWorking ? (
+        <div className="viewer-backdrop">
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">
+                  {backupTransferMode === "export" ? "Exporting Backup" : "Importing Backup"}
+                </div>
+                <div className="muted">
+                  {backupTransferMode === "export"
+                    ? "Packaging the database, settings, and caches."
+                    : "Restoring the database, settings, and caches."}
+                </div>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">
+                {backupTransferMessage || "Working..."}
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <ViewerModal
         asset={state.selectedAsset}
         viewerPreviewSize={state.viewerPreviewSize}
@@ -1379,7 +1759,7 @@ function parseThumbLogMessage(message: string) {
   const baseMessage = message.replace(/\smetrics="[^"]*"/, "");
   const metrics = new Map<string, string>();
 
-  for (const key of ["queue_elapsed", "elapsed", "total_elapsed", "generated_size"]) {
+  for (const key of ["queue_elapsed", "elapsed", "total_elapsed"]) {
     const match = baseMessage.match(new RegExp(`${key}=([^ ]+)`));
     if (match) {
       metrics.set(formatMetricLabel(key), match[1]);

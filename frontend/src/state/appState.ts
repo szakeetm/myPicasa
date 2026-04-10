@@ -85,7 +85,6 @@ export const useAppState = create<AppState>()(
       name: "mypicasa-app-state",
       storage: createJSONStorage(() => localStorage),
       partialize: (state) => ({
-        rootsInput: state.rootsInput,
         viewerPreviewSize: state.viewerPreviewSize,
         settingsCollapsed: state.settingsCollapsed,
       }),

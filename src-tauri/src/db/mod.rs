@@ -1,9 +1,9 @@
 mod queries;
 mod schema;
 
-use std::{path::Path, sync::Mutex};
+use std::{fs, path::Path, sync::Mutex};
 
-use rusqlite::Connection;
+use rusqlite::{Connection, MAIN_DB};
 
 pub use queries::DatabaseQueries;
 
@@ -30,6 +30,57 @@ impl Database {
     {
         let guard = self.conn.lock().expect("database mutex poisoned");
         work(&guard)
+    }
+
+    pub fn export_to(&self, path: &Path) -> Result<(), AppError> {
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        let guard = self.conn.lock().expect("database mutex poisoned");
+        guard.pragma_update(None, "wal_checkpoint", "TRUNCATE")?;
+        guard.backup(MAIN_DB, path, None)?;
+        Ok(())
+    }
+
+    pub fn import_from(&self, path: &Path) -> Result<(), AppError> {
+        let mut guard = self.conn.lock().expect("database mutex poisoned");
+        guard.restore(MAIN_DB, path, None::<fn(rusqlite::backup::Progress)>)?;
+        guard.pragma_update(None, "foreign_keys", "ON")?;
+        schema::apply(&guard)?;
+        Ok(())
+    }
+
+    pub fn remap_takeout_roots(&self, mappings: &[(String, String)]) -> Result<(), AppError> {
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
+            for (from_root, to_root) in mappings {
+                tx.execute(
+                    "UPDATE file_entries
+                     SET path = replace(path, ?1, ?2),
+                         parent_path = replace(parent_path, ?1, ?2),
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE path LIKE ?3",
+                    rusqlite::params![from_root, to_root, format!("{from_root}%")],
+                )?;
+                tx.execute(
+                    "UPDATE albums
+                     SET source_path = replace(source_path, ?1, ?2),
+                         updated_at = CURRENT_TIMESTAMP
+                     WHERE source_path LIKE ?3",
+                    rusqlite::params![from_root, to_root, format!("{from_root}%")],
+                )?;
+                tx.execute(
+                    "UPDATE imports
+                     SET source_root = replace(source_root, ?1, ?2)",
+                    rusqlite::params![from_root, to_root],
+                )?;
+            }
+            tx.commit()?;
+            Ok(())
+        })
     }
 
     pub fn reset(&self) -> Result<(), AppError> {

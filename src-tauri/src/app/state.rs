@@ -171,6 +171,7 @@ impl Default for AppSettings {
         Self {
             viewer_preview_size: DEFAULT_VIEWER_PREVIEW_SIZE,
             cache_storage_dir: None,
+            indexed_roots: Vec::new(),
         }
     }
 }
@@ -185,6 +186,12 @@ impl AppSettings {
                     let trimmed = value.trim().to_string();
                     (!trimmed.is_empty()).then_some(trimmed)
                 }),
+            indexed_roots: self
+                .indexed_roots
+                .into_iter()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .collect(),
         }
     }
 }

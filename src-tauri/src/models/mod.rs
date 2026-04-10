@@ -2,8 +2,12 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
+    #[serde(default = "default_viewer_preview_size")]
     pub viewer_preview_size: u32,
+    #[serde(default)]
     pub cache_storage_dir: Option<String>,
+    #[serde(default)]
+    pub indexed_roots: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -20,6 +24,25 @@ pub struct CacheStorageMigrationStatus {
     pub copied_bytes: u64,
     pub current_path: Option<String>,
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppBackupManifest {
+    pub format_version: u32,
+    pub exported_at: String,
+    pub settings: AppSettings,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AppBackupSummary {
+    pub backup_dir: String,
+    pub settings: AppSettings,
+    pub cache_files: u64,
+    pub cache_bytes: u64,
+}
+
+fn default_viewer_preview_size() -> u32 {
+    1000
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

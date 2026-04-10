@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 
 import type {
   AlbumSummary,
+  AppBackupManifest,
+  AppBackupSummary,
   AppSettings,
   AssetDetail,
   AssetListRequest,
@@ -24,6 +26,12 @@ export const api = {
   getAppSettings: () => invoke<AppSettings>("get_app_settings"),
   updateAppSettings: (settings: AppSettings) =>
     invoke<AppSettings>("update_app_settings", { settings }),
+  inspectAppBackup: (backupDir: string) =>
+    invoke<AppBackupManifest>("inspect_app_backup", { backupDir }),
+  exportAppBackup: (backupDir: string) =>
+    invoke<AppBackupSummary>("export_app_backup", { backupDir }),
+  importAppBackup: (backupDir: string, takeoutRoots: string[], cacheStorageDir?: string | null) =>
+    invoke<AppBackupSummary>("import_app_backup", { backupDir, takeoutRoots, cacheStorageDir }),
   getCacheStorageMigrationStatus: () =>
     invoke<CacheStorageMigrationStatus>("get_cache_storage_migration_status"),
   startCacheStorageMigration: (cacheStorageDir?: string | null, copyExisting = true) =>

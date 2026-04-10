@@ -1,7 +1,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
 use std::io::{Read, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::Ordering;
 use std::thread;
@@ -27,18 +27,22 @@ use crate::{
         VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT,
     },
     models::{
-        AlbumSummary, AppSettings, AssetDetail, AssetListRequest, AssetListResponse,
+        AlbumSummary, AppBackupManifest, AppBackupSummary, AppSettings, AssetDetail,
+        AssetListRequest, AssetListResponse,
         BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats,
         CacheStorageMigrationStatus, DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest,
         ThumbnailBatchItem, ViewerMediaStatus, ViewerPlaybackHint, ViewerPlaybackSupport,
     },
     search::query_service,
+    util::time::utc_now,
 };
 
 type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
 const THUMBNAIL_CACHE_VERSION: u32 = 2;
 const PREVIEW_CACHE_VERSION: u32 = 2;
+const APP_BACKUP_MANIFEST_FILE: &str = "mypicasa-backup.json";
+const APP_BACKUP_DATABASE_FILE: &str = "my_picasa.sqlite";
 
 fn thumbnail_cache_key(asset_id: i64, size: u32, use_preview_cache: bool) -> String {
     if use_preview_cache {
@@ -274,6 +278,165 @@ pub fn update_app_settings(
     state.update_app_settings(settings).map_err(map_error)
 }
 
+#[tauri::command]
+pub fn inspect_app_backup(backup_dir: String) -> CommandResult<AppBackupManifest> {
+    load_backup_manifest(Path::new(&backup_dir))
+}
+
+#[tauri::command]
+pub fn export_app_backup(
+    backup_dir: String,
+    state: State<AppState>,
+) -> CommandResult<AppBackupSummary> {
+    ensure_cache_storage_change_allowed(state.inner())?;
+    let backup_dir = PathBuf::from(backup_dir);
+    fs::create_dir_all(&backup_dir).map_err(map_error)?;
+
+    let settings = state.app_settings_snapshot();
+    let manifest = AppBackupManifest {
+        format_version: 1,
+        exported_at: utc_now(),
+        settings: settings.clone(),
+    };
+    fs::write(
+        backup_manifest_path(&backup_dir),
+        serde_json::to_vec_pretty(&manifest).map_err(map_error)?,
+    )
+    .map_err(map_error)?;
+    fs::write(
+        backup_settings_path(&backup_dir),
+        serde_json::to_vec_pretty(&settings).map_err(map_error)?,
+    )
+    .map_err(map_error)?;
+    state
+        .db
+        .export_to(&backup_database_path(&backup_dir))
+        .map_err(map_error)?;
+
+    let cache_root = state.cache_data_dir();
+    let mut cache_files = 0_u64;
+    let mut cache_bytes = 0_u64;
+    for subdir in cache_storage_subdirs() {
+        clear_directory_contents(&backup_dir.join(subdir))?;
+        let (files, bytes) = copy_directory_recursive(&cache_root.join(subdir), &backup_dir.join(subdir))?;
+        cache_files += files;
+        cache_bytes += bytes;
+    }
+
+    state
+        .db
+        .insert_log(
+            "info",
+            "backup",
+            &format!(
+                "exported app backup to {} with {} cache files",
+                backup_dir.display(),
+                cache_files
+            ),
+            None,
+        )
+        .map_err(map_error)?;
+
+    Ok(AppBackupSummary {
+        backup_dir: backup_dir.to_string_lossy().to_string(),
+        settings,
+        cache_files,
+        cache_bytes,
+    })
+}
+
+#[tauri::command]
+pub fn import_app_backup(
+    backup_dir: String,
+    takeout_roots: Vec<String>,
+    cache_storage_dir: Option<String>,
+    state: State<AppState>,
+) -> CommandResult<AppBackupSummary> {
+    ensure_cache_storage_change_allowed(state.inner())?;
+    let backup_dir = PathBuf::from(backup_dir);
+    let manifest = load_backup_manifest(&backup_dir)?;
+    let imported_roots = takeout_roots
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect::<Vec<_>>();
+    if imported_roots.is_empty() {
+        return Err(InvokeError::from(
+            "At least one Takeout root is required when importing a backup".to_string(),
+        ));
+    }
+    if manifest.settings.indexed_roots.len() != imported_roots.len() {
+        return Err(InvokeError::from(format!(
+            "Backup expects {} Takeout roots, but {} were provided",
+            manifest.settings.indexed_roots.len(),
+            imported_roots.len()
+        )));
+    }
+
+    let mut restored_settings = manifest.settings.clone();
+    restored_settings.indexed_roots = imported_roots.clone();
+    restored_settings.cache_storage_dir = cache_storage_dir;
+    let restored_settings = state
+        .apply_app_settings(restored_settings, false)
+        .map_err(map_error)?;
+
+    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
+    state.inflight_thumbnails.lock().clear();
+    state.failed_thumbnails.lock().clear();
+    state.viewer_video_jobs.lock().clear();
+    *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
+    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
+    *state.import_status.lock() = None;
+
+    let cache_root = state.cache_data_dir();
+    let mut cache_files = 0_u64;
+    let mut cache_bytes = 0_u64;
+    for subdir in cache_storage_subdirs() {
+        let destination = cache_root.join(subdir);
+        clear_directory_contents(&destination)?;
+        let (files, bytes) = copy_directory_recursive(&backup_dir.join(subdir), &destination)?;
+        cache_files += files;
+        cache_bytes += bytes;
+    }
+
+    state
+        .db
+        .import_from(&backup_database_path(&backup_dir))
+        .map_err(map_error)?;
+    let root_mappings = manifest
+        .settings
+        .indexed_roots
+        .iter()
+        .cloned()
+        .zip(imported_roots.iter().cloned())
+        .collect::<Vec<_>>();
+    state
+        .db
+        .remap_takeout_roots(&root_mappings)
+        .map_err(map_error)?;
+
+    state
+        .db
+        .insert_log(
+            "info",
+            "backup",
+            &format!(
+                "imported app backup from {} with {} cache files",
+                backup_dir.display(),
+                cache_files
+            ),
+            None,
+        )
+        .map_err(map_error)?;
+
+    Ok(AppBackupSummary {
+        backup_dir: backup_dir.to_string_lossy().to_string(),
+        settings: restored_settings,
+        cache_files,
+        cache_bytes,
+    })
+}
+
 fn cache_storage_migration_status_snapshot(
     state: &AppState,
 ) -> CacheStorageMigrationStatus {
@@ -281,9 +444,32 @@ fn cache_storage_migration_status_snapshot(
 }
 
 fn ensure_cache_storage_change_allowed(state: &AppState) -> CommandResult<()> {
+    if matches!(
+        state
+            .import_status
+            .lock()
+            .as_ref()
+            .map(|item| item.status.as_str()),
+        Some("running")
+    ) {
+        return Err(InvokeError::from(
+            "Wait for the current refresh to finish before changing app storage".to_string(),
+        ));
+    }
     if state.batch_viewer_transcode.lock().running {
         return Err(InvokeError::from(
             "Stop batch video transcoding before changing cache storage".to_string(),
+        ));
+    }
+    if state.batch_thumbnail_generation.lock().running {
+        return Err(InvokeError::from(
+            "Stop batch thumbnail generation before changing app storage".to_string(),
+        ));
+    }
+    if state.cache_storage_migration.lock().running {
+        return Err(InvokeError::from(
+            "Wait for the current cache migration to finish before changing app storage"
+                .to_string(),
         ));
     }
     Ok(())
@@ -291,6 +477,84 @@ fn ensure_cache_storage_change_allowed(state: &AppState) -> CommandResult<()> {
 
 fn cache_storage_subdirs() -> [&'static str; 3] {
     ["thumbnail-cache", "preview-cache", "viewer-cache"]
+}
+
+fn backup_manifest_path(backup_dir: &Path) -> PathBuf {
+    backup_dir.join(APP_BACKUP_MANIFEST_FILE)
+}
+
+fn backup_database_path(backup_dir: &Path) -> PathBuf {
+    backup_dir.join(APP_BACKUP_DATABASE_FILE)
+}
+
+fn backup_settings_path(backup_dir: &Path) -> PathBuf {
+    backup_dir.join("settings.json")
+}
+
+fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(u64, u64), InvokeError> {
+    if !source.exists() {
+        fs::create_dir_all(destination).map_err(map_error)?;
+        return Ok((0, 0));
+    }
+    fs::create_dir_all(destination).map_err(map_error)?;
+    let mut files = 0_u64;
+    let mut bytes = 0_u64;
+    for entry in WalkDir::new(source).into_iter().flatten() {
+        let Ok(relative) = entry.path().strip_prefix(source) else {
+            continue;
+        };
+        let target = destination.join(relative);
+        if entry.file_type().is_dir() {
+            fs::create_dir_all(&target).map_err(map_error)?;
+            continue;
+        }
+        if let Some(parent) = target.parent() {
+            fs::create_dir_all(parent).map_err(map_error)?;
+        }
+        fs::copy(entry.path(), &target).map_err(map_error)?;
+        files += 1;
+        bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+    }
+    Ok((files, bytes))
+}
+
+fn clear_directory_contents(path: &Path) -> Result<(), InvokeError> {
+    if path.exists() {
+        fs::remove_dir_all(path).map_err(map_error)?;
+    }
+    fs::create_dir_all(path).map_err(map_error)?;
+    Ok(())
+}
+
+fn clear_app_derived_storage(state: &AppState) -> CommandResult<()> {
+    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
+    state.thumbnail_cache.lock().clear();
+    state.preview_cache.lock().clear();
+    state.inflight_thumbnails.lock().clear();
+    state.failed_thumbnails.lock().clear();
+    state.viewer_video_jobs.lock().clear();
+    *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
+    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
+
+    let mut cache_roots = vec![state.cache_data_dir(), state.default_cache_data_dir()];
+    cache_roots.sort();
+    cache_roots.dedup();
+    for cache_root in cache_roots {
+        for subdir in cache_storage_subdirs() {
+            clear_directory_contents(&cache_root.join(subdir))?;
+        }
+    }
+    clear_directory_contents(&state.working_dir())?;
+    state
+        .db
+        .clear_viewer_video_transcode_statuses()
+        .map_err(map_error)?;
+    Ok(())
+}
+
+fn load_backup_manifest(backup_dir: &Path) -> CommandResult<AppBackupManifest> {
+    let raw = fs::read_to_string(backup_manifest_path(backup_dir)).map_err(map_error)?;
+    serde_json::from_str::<AppBackupManifest>(&raw).map_err(map_error)
 }
 
 fn collect_cache_copy_plan(source_root: &std::path::Path) -> Vec<(PathBuf, PathBuf, u64)> {
@@ -401,6 +665,7 @@ pub fn start_cache_storage_migration(
     let next_settings = AppSettings {
         viewer_preview_size: current_settings.viewer_preview_size,
         cache_storage_dir,
+        indexed_roots: current_settings.indexed_roots.clone(),
     }
     .sanitized();
     let source_root = state.cache_data_dir();
@@ -2285,15 +2550,7 @@ pub fn record_client_log(
 pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.db.reset().map_err(map_error)?;
     *state.import_status.lock() = None;
-    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
-    state.thumbnail_cache.lock().clear();
-    state.preview_cache.lock().clear();
-    state.inflight_thumbnails.lock().clear();
-    state.failed_thumbnails.lock().clear();
-    state.viewer_video_jobs.lock().clear();
-    *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
-    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
-    clear_viewer_render_cache(&state.viewer_cache_dir()).map_err(map_error)?;
+    clear_app_derived_storage(state.inner())?;
     state
         .db
         .insert_log(
@@ -2409,6 +2666,9 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
         get_app_settings,
         update_app_settings,
+        inspect_app_backup,
+        export_app_backup,
+        import_app_backup,
         get_cache_storage_migration_status,
         start_cache_storage_migration,
         cancel_cache_storage_migration,
