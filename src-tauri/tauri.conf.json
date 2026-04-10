@@ -6,6 +6,7 @@
   "build": {
     "beforeDevCommand": "cd frontend && npm run dev -- --host 127.0.0.1 --port 1420",
     "beforeBuildCommand": "cd frontend && npm run build",
+    "beforeBundleCommand": "rm -f src-tauri/target/release/bundle/dmg/*.dmg src-tauri/target/release/bundle/macos/*.dmg src-tauri/target/release/bundle/macos/rw.*.dmg",
     "frontendDist": "../frontend/dist",
     "devUrl": "http://127.0.0.1:1420"
   },
