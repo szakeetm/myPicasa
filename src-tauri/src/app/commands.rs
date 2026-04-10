@@ -1,5 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs;
+use std::io::{Read, Write};
 use std::path::PathBuf;
 use std::process::Command;
 use std::sync::atomic::Ordering;
@@ -9,6 +10,7 @@ use std::time::{Duration, Instant};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use tauri::{State, generate_handler, ipc::InvokeError};
 use tracing::{error, info};
+use walkdir::WalkDir;
 
 use crate::{
     app::state::{
@@ -26,9 +28,9 @@ use crate::{
     },
     models::{
         AlbumSummary, AppSettings, AssetDetail, AssetListRequest, AssetListResponse,
-        BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats, DiagnosticEntry,
-        ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem, ViewerMediaStatus,
-        ViewerPlaybackHint, ViewerPlaybackSupport,
+        BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats,
+        CacheStorageMigrationStatus, DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest,
+        ThumbnailBatchItem, ViewerMediaStatus, ViewerPlaybackHint, ViewerPlaybackSupport,
     },
     search::query_service,
 };
@@ -272,6 +274,301 @@ pub fn update_app_settings(
     state.update_app_settings(settings).map_err(map_error)
 }
 
+fn cache_storage_migration_status_snapshot(
+    state: &AppState,
+) -> CacheStorageMigrationStatus {
+    state.cache_storage_migration.lock().clone()
+}
+
+fn ensure_cache_storage_change_allowed(state: &AppState) -> CommandResult<()> {
+    if state.batch_viewer_transcode.lock().running {
+        return Err(InvokeError::from(
+            "Stop batch video transcoding before changing cache storage".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn cache_storage_subdirs() -> [&'static str; 3] {
+    ["thumbnail-cache", "preview-cache", "viewer-cache"]
+}
+
+fn collect_cache_copy_plan(source_root: &std::path::Path) -> Vec<(PathBuf, PathBuf, u64)> {
+    let mut files = Vec::new();
+    for subdir in cache_storage_subdirs() {
+        let source_dir = source_root.join(subdir);
+        for entry in WalkDir::new(&source_dir).into_iter().flatten() {
+            if !entry.file_type().is_file() {
+                continue;
+            }
+            let Ok(relative_path) = entry.path().strip_prefix(source_root) else {
+                continue;
+            };
+            let size = entry.metadata().map(|meta| meta.len()).unwrap_or(0);
+            files.push((
+                entry.path().to_path_buf(),
+                relative_path.to_path_buf(),
+                size,
+            ));
+        }
+    }
+    files
+}
+
+fn copy_file_with_progress(
+    source: &std::path::Path,
+    destination: &std::path::Path,
+    status: &parking_lot::Mutex<CacheStorageMigrationStatus>,
+    cancel_flag: &std::sync::atomic::AtomicBool,
+) -> Result<bool, InvokeError> {
+    if cancel_flag.load(Ordering::SeqCst) {
+        return Ok(false);
+    }
+
+    if let Some(parent) = destination.parent() {
+        fs::create_dir_all(parent).map_err(map_error)?;
+    }
+
+    let mut reader = fs::File::open(source).map_err(map_error)?;
+    let mut writer = fs::File::create(destination).map_err(map_error)?;
+    let mut buffer = vec![0_u8; 1024 * 1024];
+    loop {
+        if cancel_flag.load(Ordering::SeqCst) {
+            return Ok(false);
+        }
+        let read = reader.read(&mut buffer).map_err(map_error)?;
+        if read == 0 {
+            break;
+        }
+        writer.write_all(&buffer[..read]).map_err(map_error)?;
+        let mut guard = status.lock();
+        guard.copied_bytes = guard.copied_bytes.saturating_add(read as u64);
+    }
+
+    Ok(true)
+}
+
+fn finish_cache_storage_migration(
+    state: &AppState,
+    status_value: &str,
+    message: String,
+) -> CacheStorageMigrationStatus {
+    let mut status = state.cache_storage_migration.lock();
+    status.status = status_value.to_string();
+    status.running = false;
+    status.message = Some(message);
+    status.current_path = None;
+    status.clone()
+}
+
+#[tauri::command]
+pub fn get_cache_storage_migration_status(
+    state: State<AppState>,
+) -> CommandResult<CacheStorageMigrationStatus> {
+    Ok(cache_storage_migration_status_snapshot(state.inner()))
+}
+
+#[tauri::command]
+pub fn cancel_cache_storage_migration(
+    state: State<AppState>,
+) -> CommandResult<CacheStorageMigrationStatus> {
+    let mut status = state.cache_storage_migration.lock();
+    if status.running {
+        status.stop_requested = true;
+        status.message = Some("Stopping after the current file...".to_string());
+        state
+            .cache_storage_migration_cancel
+            .store(true, Ordering::SeqCst);
+    }
+    Ok(status.clone())
+}
+
+#[tauri::command]
+pub fn start_cache_storage_migration(
+    cache_storage_dir: Option<String>,
+    copy_existing: bool,
+    state: State<AppState>,
+) -> CommandResult<CacheStorageMigrationStatus> {
+    ensure_cache_storage_change_allowed(state.inner())?;
+    {
+        let status = state.cache_storage_migration.lock();
+        if status.running {
+            return Ok(status.clone());
+        }
+    }
+
+    let current_settings = state.app_settings_snapshot();
+    let next_settings = AppSettings {
+        viewer_preview_size: current_settings.viewer_preview_size,
+        cache_storage_dir,
+    }
+    .sanitized();
+    let source_root = state.cache_data_dir();
+    let destination_root = state.resolve_cache_data_dir(&next_settings);
+
+    if source_root == destination_root {
+        return Ok(finish_cache_storage_migration(
+            state.inner(),
+            "completed",
+            "Cache storage location is already active.".to_string(),
+        ));
+    }
+
+    if !copy_existing {
+        let applied = state
+            .apply_app_settings(next_settings, false)
+            .map_err(map_error)?;
+        state
+            .db
+            .insert_log(
+                "info",
+                "settings",
+                &format!(
+                    "cache storage moved without copy to {}",
+                    destination_root.display()
+                ),
+                None,
+            )
+            .map_err(map_error)?;
+        {
+            let mut status = state.cache_storage_migration.lock();
+            *status = CacheStorageMigrationStatus {
+                status: "completed".to_string(),
+                running: false,
+                stop_requested: false,
+                copy_existing: false,
+                source_dir: Some(source_root.to_string_lossy().to_string()),
+                destination_dir: Some(destination_root.to_string_lossy().to_string()),
+                total_files: 0,
+                copied_files: 0,
+                total_bytes: 0,
+                copied_bytes: 0,
+                current_path: None,
+                message: Some("Switched cache storage. New assets will be rendered there.".to_string()),
+            };
+        }
+        let _ = applied;
+        return Ok(cache_storage_migration_status_snapshot(state.inner()));
+    }
+
+    let files = collect_cache_copy_plan(&source_root);
+    let total_files = files.len() as u64;
+    let total_bytes = files.iter().map(|(_, _, size)| *size).sum::<u64>();
+    state
+        .cache_storage_migration_cancel
+        .store(false, Ordering::SeqCst);
+    {
+        let mut status = state.cache_storage_migration.lock();
+        *status = CacheStorageMigrationStatus {
+            status: "running".to_string(),
+            running: true,
+            stop_requested: false,
+            copy_existing: true,
+            source_dir: Some(source_root.to_string_lossy().to_string()),
+            destination_dir: Some(destination_root.to_string_lossy().to_string()),
+            total_files,
+            copied_files: 0,
+            total_bytes,
+            copied_bytes: 0,
+            current_path: None,
+            message: Some(if total_files == 0 {
+                "No existing cache files found. Preparing destination...".to_string()
+            } else {
+                format!("Copying {total_files} cache files")
+            }),
+        };
+    }
+
+    let state = state.inner().clone();
+    let worker_state = state.clone();
+    thread::spawn(move || {
+        let copy_result = (|| -> CommandResult<()> {
+            fs::create_dir_all(&destination_root).map_err(map_error)?;
+            for subdir in cache_storage_subdirs() {
+                fs::create_dir_all(destination_root.join(subdir)).map_err(map_error)?;
+            }
+
+            for (source_path, relative_path, _) in files {
+                if worker_state.cache_storage_migration_cancel.load(Ordering::SeqCst) {
+                    return Ok(());
+                }
+                {
+                    let mut status = worker_state.cache_storage_migration.lock();
+                    status.current_path = Some(relative_path.to_string_lossy().to_string());
+                    status.message = Some(format!(
+                        "Copying {}",
+                        relative_path.to_string_lossy()
+                    ));
+                }
+
+                let destination_path = destination_root.join(&relative_path);
+                let copied = copy_file_with_progress(
+                    &source_path,
+                    &destination_path,
+                    &worker_state.cache_storage_migration,
+                    &worker_state.cache_storage_migration_cancel,
+                )?;
+                if !copied {
+                    return Ok(());
+                }
+
+                let mut status = worker_state.cache_storage_migration.lock();
+                status.copied_files = status.copied_files.saturating_add(1);
+            }
+
+            worker_state
+                .apply_app_settings(next_settings, true)
+                .map_err(map_error)?;
+            worker_state
+                .db
+                .insert_log(
+                    "info",
+                    "settings",
+                    &format!(
+                        "cache storage migrated from {} to {}",
+                        source_root.display(),
+                        destination_root.display()
+                    ),
+                    None,
+                )
+                .map_err(map_error)?;
+            Ok(())
+        })();
+
+        if worker_state.cache_storage_migration_cancel.load(Ordering::SeqCst) {
+            let _ = finish_cache_storage_migration(
+                &worker_state,
+                "cancelled",
+                "Copy interrupted. The active cache location was left unchanged.".to_string(),
+            );
+            worker_state
+                .cache_storage_migration_cancel
+                .store(false, Ordering::SeqCst);
+            return;
+        }
+
+        match copy_result {
+            Ok(()) => {
+                let message = if total_files == 0 {
+                    "Cache location changed. No existing cache files needed copying.".to_string()
+                } else {
+                    format!("Copied {total_files} cache files and switched to the new location.")
+                };
+                let _ = finish_cache_storage_migration(&worker_state, "completed", message);
+            }
+            Err(error) => {
+                let message = format!("Cache copy failed: {error:?}");
+                let _ = finish_cache_storage_migration(&worker_state, "failed", message.clone());
+                let _ = worker_state
+                    .db
+                    .insert_log("error", "settings", &message, None);
+            }
+        }
+    });
+
+    Ok(cache_storage_migration_status_snapshot(&state))
+}
+
 fn collect_all_media_assets(state: &AppState) -> Result<Vec<BatchThumbnailAsset>, InvokeError> {
     state
         .db
@@ -495,7 +792,7 @@ fn queue_viewer_video_transcode(
         .unwrap_or(0);
     let timeout_ms = duration_ms.max(VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT.as_millis() as u64);
     let source_bytes = fs::metadata(&source_path).map(|meta| meta.len()).unwrap_or(0);
-    let Some(output_path) = viewer_video_cache_path(&source_path, &state.app_data_dir.join("viewer-cache"))
+    let Some(output_path) = viewer_video_cache_path(&source_path, &state.viewer_cache_dir())
         .map_err(map_error)?
     else {
         return Ok(unavailable_viewer_media_status("Video playback unavailable", codec, None));
@@ -596,7 +893,7 @@ fn queue_viewer_video_transcode(
     let temp_output_path_for_job = temp_output_path.clone();
     thread::spawn(move || {
         let (filename, file_size) = media_debug_info(&job_key);
-        let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
+        let viewer_cache_dir = state.viewer_cache_dir();
         let result = generate_viewer_video(
             &source_path,
             &viewer_cache_dir,
@@ -886,7 +1183,7 @@ pub fn start_batch_viewer_transcode(
             status.message = Some(format!("Preparing {} videos", videos.len()));
         }
 
-        let viewer_cache_dir = worker_state.app_data_dir.join("viewer-cache");
+        let viewer_cache_dir = worker_state.viewer_cache_dir();
         for (index, (asset_id, source_path, source_bytes)) in videos.into_iter().enumerate() {
             {
                 let status = worker_state.batch_viewer_transcode.lock();
@@ -1254,7 +1551,7 @@ pub fn request_thumbnail(
         ),
     )?;
 
-    let working_dir = state.app_data_dir.join("working");
+    let working_dir = state.working_dir();
     match generate_thumbnail(&PathBuf::from(primary_path), size, !use_preview_cache, &working_dir) {
         Ok(result) => {
             let generated = result.bytes;
@@ -1737,7 +2034,7 @@ pub fn load_viewer_frame(
 
     if prefer_original {
         if image_requires_backend_orientation(&source_path) {
-            let working_dir = state.app_data_dir.join("working");
+            let working_dir = state.working_dir();
             if let Some(bytes) =
                 generate_viewer_image(&source_path, u32::MAX, &working_dir).map_err(map_error)?
             {
@@ -1755,8 +2052,8 @@ pub fn load_viewer_frame(
         )));
     }
 
-    let viewer_cache_dir = state.app_data_dir.join("viewer-cache");
-    let working_dir = state.app_data_dir.join("working");
+    let viewer_cache_dir = state.viewer_cache_dir();
+    let working_dir = state.working_dir();
     match generate_viewer_image_file(
         &source_path,
         2400,
@@ -1897,7 +2194,7 @@ pub fn get_cache_stats(state: State<AppState>) -> CommandResult<CacheStats> {
     stats.preview_bytes = preview_stats.thumbnail_bytes;
     stats.preview_budget_bytes = preview_stats.thumbnail_budget_bytes;
     let (viewer_render_items, viewer_render_bytes) =
-        viewer_render_cache_stats(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
+        viewer_render_cache_stats(&state.viewer_cache_dir()).map_err(map_error)?;
     stats.viewer_render_items = viewer_render_items;
     stats.viewer_render_bytes = viewer_render_bytes;
     Ok(stats)
@@ -1921,7 +2218,7 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
 
 #[tauri::command]
 pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResult<()> {
-    clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
+    clear_viewer_render_cache(&state.viewer_cache_dir()).map_err(map_error)?;
     state.viewer_video_jobs.lock().clear();
     state
         .db
@@ -1996,7 +2293,7 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
     state.viewer_video_jobs.lock().clear();
     *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
     *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
-    clear_viewer_render_cache(&state.app_data_dir.join("viewer-cache")).map_err(map_error)?;
+    clear_viewer_render_cache(&state.viewer_cache_dir()).map_err(map_error)?;
     state
         .db
         .insert_log(
@@ -2112,6 +2409,9 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
     generate_handler![
         get_app_settings,
         update_app_settings,
+        get_cache_storage_migration_status,
+        start_cache_storage_migration,
+        cancel_cache_storage_migration,
         refresh_index,
         start_refresh_index,
         get_import_status,

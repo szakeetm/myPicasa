@@ -9,6 +9,7 @@ import type {
   BatchThumbnailGenerationStatus,
   BatchViewerTranscodeStatus,
   CacheStats,
+  CacheStorageMigrationStatus,
   DiagnosticEntry,
   ImportProgress,
   LogEntry,
@@ -23,6 +24,15 @@ export const api = {
   getAppSettings: () => invoke<AppSettings>("get_app_settings"),
   updateAppSettings: (settings: AppSettings) =>
     invoke<AppSettings>("update_app_settings", { settings }),
+  getCacheStorageMigrationStatus: () =>
+    invoke<CacheStorageMigrationStatus>("get_cache_storage_migration_status"),
+  startCacheStorageMigration: (cacheStorageDir?: string | null, copyExisting = true) =>
+    invoke<CacheStorageMigrationStatus>("start_cache_storage_migration", {
+      cacheStorageDir,
+      copyExisting,
+    }),
+  cancelCacheStorageMigration: () =>
+    invoke<CacheStorageMigrationStatus>("cancel_cache_storage_migration"),
   startRefreshIndex: (request: RefreshRequest) =>
     invoke<void>("start_refresh_index", { request }),
   refreshIndex: (request: RefreshRequest) =>

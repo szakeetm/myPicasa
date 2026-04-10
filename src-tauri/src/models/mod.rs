@@ -3,6 +3,23 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
     pub viewer_preview_size: u32,
+    pub cache_storage_dir: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CacheStorageMigrationStatus {
+    pub status: String,
+    pub running: bool,
+    pub stop_requested: bool,
+    pub copy_existing: bool,
+    pub source_dir: Option<String>,
+    pub destination_dir: Option<String>,
+    pub total_files: u64,
+    pub copied_files: u64,
+    pub total_bytes: u64,
+    pub copied_bytes: u64,
+    pub current_path: Option<String>,
+    pub message: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

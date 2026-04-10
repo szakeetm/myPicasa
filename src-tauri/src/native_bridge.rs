@@ -112,7 +112,7 @@ impl NativeAppBridge {
         stats.preview_bytes = preview_stats.thumbnail_bytes;
         stats.preview_budget_bytes = preview_stats.thumbnail_budget_bytes;
         let (viewer_render_items, viewer_render_bytes) =
-            viewer_render_cache_stats(&self.state.app_data_dir.join("viewer-cache"))?;
+            viewer_render_cache_stats(&self.state.viewer_cache_dir())?;
         stats.viewer_render_items = viewer_render_items;
         stats.viewer_render_bytes = viewer_render_bytes;
         Ok(serde_json::to_string(&stats)?)
@@ -179,7 +179,7 @@ impl NativeAppBridge {
     }
 
     pub fn clear_viewer_render_cache(&self) -> BridgeResult<()> {
-        clear_viewer_render_cache(&self.state.app_data_dir.join("viewer-cache"))?;
+        clear_viewer_render_cache(&self.state.viewer_cache_dir())?;
         self.state.viewer_video_jobs.lock().clear();
         self.state
             .db
@@ -211,7 +211,7 @@ impl NativeAppBridge {
         self.state.viewer_video_jobs.lock().clear();
         *self.state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
         *self.state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
-        clear_viewer_render_cache(&self.state.app_data_dir.join("viewer-cache"))?;
+        clear_viewer_render_cache(&self.state.viewer_cache_dir())?;
         self.state.db.insert_log(
             "warning",
             "reset",

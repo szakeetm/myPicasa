@@ -37,15 +37,21 @@ pub fn build_app_state(
 
     let db_path = app_data_dir.join("my_picasa.sqlite");
     let settings_path = app_settings_path(&app_data_dir);
-    let thumbnail_cache_dir = app_data_dir.join("thumbnail-cache");
-    let preview_cache_dir = app_data_dir.join("preview-cache");
-    let viewer_cache_dir = app_data_dir.join("viewer-cache");
     let working_dir = app_data_dir.join("working");
+    let app_settings = load_app_settings(&settings_path)?;
+    let cache_data_dir = app_settings
+        .cache_storage_dir
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| app_data_dir.clone());
+    let thumbnail_cache_dir = cache_data_dir.join("thumbnail-cache");
+    let preview_cache_dir = cache_data_dir.join("preview-cache");
+    let viewer_cache_dir = cache_data_dir.join("viewer-cache");
 
+    fs::create_dir_all(&thumbnail_cache_dir)?;
     fs::create_dir_all(&preview_cache_dir)?;
     fs::create_dir_all(&viewer_cache_dir)?;
     fs::create_dir_all(&working_dir)?;
-    let app_settings = load_app_settings(&settings_path)?;
     persist_app_settings(&settings_path, &app_settings)?;
 
     let database = Database::new(&db_path)?;
@@ -88,6 +94,7 @@ pub fn build_app_state(
     let state = AppState {
         db: Arc::new(database),
         app_data_dir: Arc::new(app_data_dir),
+        cache_data_dir: Arc::new(Mutex::new(cache_data_dir)),
         settings_path: Arc::new(settings_path),
         app_settings: Arc::new(Mutex::new(app_settings)),
         thumbnail_worker_count: worker_count,
@@ -103,6 +110,10 @@ pub fn build_app_state(
         viewer_video_jobs: Arc::new(Mutex::new(HashMap::new())),
         batch_viewer_transcode: Arc::new(Mutex::new(BatchViewerTranscodeState::idle())),
         batch_thumbnail_generation: Arc::new(Mutex::new(BatchThumbnailGenerationState::idle())),
+        cache_storage_migration: Arc::new(Mutex::new(
+            crate::models::CacheStorageMigrationStatus::idle(),
+        )),
+        cache_storage_migration_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
     state

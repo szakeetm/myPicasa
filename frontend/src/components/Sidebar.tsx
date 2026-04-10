@@ -4,13 +4,19 @@ import dayjs from "dayjs";
 type SidebarProps = {
   rootsInput: string;
   viewerPreviewSize: number;
+  cacheStorageDir: string;
   settingsCollapsed: boolean;
+  cacheStorageBusy?: boolean;
   importStatus?: ImportProgress | null;
   browseEnabled?: boolean;
   albums: AlbumSummary[];
   selectedAlbumId?: number;
   onRootsInputChange: (value: string) => void;
   onViewerPreviewSizeChange: (value: number) => void;
+  onCacheStorageDirChange: (value: string) => void;
+  onApplyCacheStorageDir: () => void;
+  onBrowseCacheStorageDir: () => void;
+  onResetCacheStorageDir: () => void;
   onToggleSettingsCollapsed: () => void;
   onBrowseRoot: () => void;
   onRefresh: () => void;
@@ -22,13 +28,19 @@ type SidebarProps = {
 export function Sidebar({
   rootsInput,
   viewerPreviewSize,
+  cacheStorageDir,
   settingsCollapsed,
+  cacheStorageBusy = false,
   importStatus,
   browseEnabled = true,
   albums,
   selectedAlbumId,
   onRootsInputChange,
   onViewerPreviewSizeChange,
+  onCacheStorageDirChange,
+  onApplyCacheStorageDir,
+  onBrowseCacheStorageDir,
+  onResetCacheStorageDir,
   onToggleSettingsCollapsed,
   onBrowseRoot,
   onRefresh,
@@ -117,6 +129,48 @@ export function Sidebar({
             <div className="muted">
               Removes the local SQLite index, logs, albums, diagnostics, and cached app state.
               Source Takeout files are not touched.
+            </div>
+            <div className="setting-row">
+              <label className="setting-label" htmlFor="cache-storage-dir">
+                Cache storage location
+              </label>
+              <input
+                id="cache-storage-dir"
+                value={cacheStorageDir}
+                onChange={(event) => onCacheStorageDirChange(event.target.value)}
+                placeholder="Leave blank to use the default app support folder"
+                disabled={cacheStorageBusy}
+              />
+            </div>
+            <div className="button-row">
+              <button
+                className="button-secondary"
+                onClick={onBrowseCacheStorageDir}
+                disabled={!browseEnabled || cacheStorageBusy}
+              >
+                Browse Cache Folder
+              </button>
+              <button
+                className="button-secondary"
+                onClick={onResetCacheStorageDir}
+                disabled={cacheStorageBusy}
+              >
+                Use Default
+              </button>
+              <button
+                className="button-primary"
+                onClick={onApplyCacheStorageDir}
+                disabled={cacheStorageBusy}
+              >
+                {cacheStorageBusy ? "Working" : "Apply Cache Location"}
+              </button>
+            </div>
+            <div className="muted">
+              Stores generated thumbnails, previews, and rendered viewer media here.
+              <br />
+              Leave blank to keep using the default Library/Application Support location.
+              <br />
+              The SQLite database stays in its original app-support folder for now.
             </div>
             <div className="setting-row">
               <label className="setting-label" htmlFor="viewer-preview-size">

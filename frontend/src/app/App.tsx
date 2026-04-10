@@ -16,6 +16,7 @@ import type {
   AssetListRequest,
   BatchThumbnailGenerationStatus,
   BatchViewerTranscodeStatus,
+  CacheStorageMigrationStatus,
   LogEntry,
   ViewerPlaybackSupport,
 } from "../lib/types";
@@ -86,8 +87,14 @@ export function App() {
   const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
   const [batchTranscodeStatus, setBatchTranscodeStatus] = useState<BatchViewerTranscodeStatus>();
   const [batchTranscodeLogs, setBatchTranscodeLogs] = useState<LogEntry[]>([]);
+  const [cacheStorageDir, setCacheStorageDir] = useState("");
+  const [savedCacheStorageDir, setSavedCacheStorageDir] = useState("");
+  const [cacheStorageChangePending, setCacheStorageChangePending] = useState<string | null>(null);
+  const [cacheStorageMigrationStatus, setCacheStorageMigrationStatus] = useState<CacheStorageMigrationStatus>();
+  const [cacheStorageMigrationModalOpen, setCacheStorageMigrationModalOpen] = useState(false);
   const didInitFilterEffect = useRef(false);
   const didInitViewerPreviewSizeEffect = useRef(false);
+  const cacheStorageMigrationWasRunningRef = useRef(false);
   const assetQueryGenerationRef = useRef(0);
   const gridPagesRef = useRef<GridPage[]>([]);
   const hydratingPageStartsRef = useRef(new Set<number>());
@@ -303,6 +310,12 @@ export function App() {
     if (tauriRuntime) {
       void api.getAppSettings().then((settings) => {
         state.setViewerPreviewSize(settings.viewer_preview_size);
+        setCacheStorageDir(settings.cache_storage_dir ?? "");
+        setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+      });
+      void api.getCacheStorageMigrationStatus().then((status) => {
+        setCacheStorageMigrationStatus(status);
+        cacheStorageMigrationWasRunningRef.current = status.running;
       });
     }
     void refreshDebugSurfaces();
@@ -400,6 +413,66 @@ export function App() {
       window.clearInterval(timer);
     };
   }, [batchTranscodeOpen, batchTranscodeStatus?.status]);
+
+  useEffect(() => {
+    if (!tauriRuntime) {
+      return;
+    }
+    const shouldPoll =
+      cacheStorageMigrationStatus?.running ||
+      cacheStorageMigrationStatus?.status === "completed" ||
+      cacheStorageMigrationStatus?.status === "failed" ||
+      cacheStorageMigrationStatus?.status === "cancelled";
+    if (!shouldPoll) {
+      return;
+    }
+
+    let cancelled = false;
+    async function refreshMigrationStatus() {
+      try {
+        const status = await api.getCacheStorageMigrationStatus();
+        if (cancelled) {
+          return;
+        }
+        setCacheStorageMigrationStatus(status);
+        if (status.running) {
+          setCacheStorageMigrationModalOpen(true);
+        } else if (cacheStorageMigrationWasRunningRef.current && status.status !== "idle") {
+          setCacheStorageMigrationModalOpen(true);
+        }
+        cacheStorageMigrationWasRunningRef.current = status.running;
+        if (!status.running && status.status !== "idle") {
+          const settings = await api.getAppSettings();
+          if (cancelled) {
+            return;
+          }
+          state.setViewerPreviewSize(settings.viewer_preview_size);
+          setCacheStorageDir(settings.cache_storage_dir ?? "");
+          setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+          const cacheStats = await api.getCacheStats();
+          if (!cancelled) {
+            state.setCacheStats(cacheStats);
+          }
+        }
+      } catch (error) {
+        console.error("failed to refresh cache migration status", error);
+      }
+    }
+
+    void refreshMigrationStatus();
+    if (!cacheStorageMigrationStatus?.running) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshMigrationStatus();
+    }, 500);
+
+    return () => {
+      cancelled = true;
+      window.clearInterval(timer);
+    };
+  }, [cacheStorageMigrationStatus?.running, cacheStorageMigrationStatus?.status, state, tauriRuntime]);
 
   useEffect(() => {
     if (!didInitFilterEffect.current) {
@@ -501,6 +574,98 @@ export function App() {
       const message = error instanceof Error ? error.message : String(error);
       await logClient("ui.import", `browse dialog failed: ${message}`, "error");
       window.alert(`Browse failed: ${message}`);
+    }
+  }
+
+  async function handleBrowseCacheStorageDir() {
+    if (!tauriRuntime) {
+      return;
+    }
+
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+        title: "Choose cache storage folder",
+      });
+
+      if (!selected || Array.isArray(selected)) {
+        return;
+      }
+
+      setCacheStorageDir(selected);
+    } catch (error) {
+      await logClient("ui.settings", `cache storage browse failed: ${String(error)}`, "error");
+    }
+  }
+
+  async function handleApplyCacheStorageDir() {
+    const nextValue = cacheStorageDir.trim();
+    const previousValue = savedCacheStorageDir.trim();
+    if (nextValue === previousValue) {
+      return;
+    }
+
+    if (!tauriRuntime) {
+      setSavedCacheStorageDir(nextValue);
+      return;
+    }
+
+    setCacheStorageChangePending(nextValue);
+  }
+
+  async function handleConfirmCacheStorageChange(copyExisting: boolean) {
+    const pendingValue = cacheStorageChangePending;
+    if (pendingValue === null) {
+      return;
+    }
+
+    setCacheStorageChangePending(null);
+
+    try {
+      if (copyExisting) {
+        const status = await api.startCacheStorageMigration(pendingValue || null, true);
+        setCacheStorageMigrationStatus(status);
+        setCacheStorageMigrationModalOpen(true);
+        cacheStorageMigrationWasRunningRef.current = status.running;
+      } else {
+        const settings = await api.updateAppSettings({
+          viewer_preview_size: state.viewerPreviewSize,
+          cache_storage_dir: pendingValue || null,
+        });
+        state.setViewerPreviewSize(settings.viewer_preview_size);
+        setCacheStorageDir(settings.cache_storage_dir ?? "");
+        setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+        setCacheStorageMigrationStatus({
+          status: "completed",
+          running: false,
+          stop_requested: false,
+          copy_existing: false,
+          source_dir: undefined,
+          destination_dir: undefined,
+          total_files: 0,
+          copied_files: 0,
+          total_bytes: 0,
+          copied_bytes: 0,
+          current_path: undefined,
+          message: "Switched cache storage. New assets will be rendered there.",
+        });
+        setCacheStorageMigrationModalOpen(true);
+        cacheStorageMigrationWasRunningRef.current = false;
+        state.setCacheStats(await api.getCacheStats());
+      }
+    } catch (error) {
+      await logClient("ui.settings", `failed to change cache storage: ${String(error)}`, "error");
+      window.alert(`Failed to change cache storage: ${String(error)}`);
+    }
+  }
+
+  async function handleCancelCacheStorageMigration() {
+    try {
+      const status = await api.cancelCacheStorageMigration();
+      setCacheStorageMigrationStatus(status);
+    } catch (error) {
+      await logClient("ui.settings", `failed to stop cache copy: ${String(error)}`, "error");
     }
   }
 
@@ -765,13 +930,19 @@ export function App() {
       <Sidebar
         rootsInput={state.rootsInput}
         viewerPreviewSize={state.viewerPreviewSize}
+        cacheStorageDir={cacheStorageDir}
         settingsCollapsed={state.settingsCollapsed}
+        cacheStorageBusy={cacheStorageMigrationStatus?.running}
         importStatus={state.importStatus}
         browseEnabled={tauriRuntime}
         albums={state.albums}
         selectedAlbumId={state.selectedAlbumId}
         onRootsInputChange={state.setRootsInput}
         onViewerPreviewSizeChange={(value) => void handleViewerPreviewSizeChange(value)}
+        onCacheStorageDirChange={setCacheStorageDir}
+        onApplyCacheStorageDir={() => void handleApplyCacheStorageDir()}
+        onBrowseCacheStorageDir={() => void handleBrowseCacheStorageDir()}
+        onResetCacheStorageDir={() => setCacheStorageDir("")}
         onToggleSettingsCollapsed={() => state.setSettingsCollapsed(!state.settingsCollapsed)}
         onBrowseRoot={handleBrowseRoot}
         onRefresh={handleRefreshIndex}
@@ -991,6 +1162,100 @@ export function App() {
         </div>
       ) : null}
 
+      {cacheStorageChangePending !== null ? (
+        <div className="viewer-backdrop" onClick={() => setCacheStorageChangePending(null)}>
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">Move Cache Storage?</div>
+                <div className="muted">
+                  Existing thumbnails, previews, and rendered viewer media can be copied to the new
+                  location instead of being regenerated later.
+                </div>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">
+                New location: {cacheStorageChangePending || "default app support folder"}
+              </div>
+            </div>
+            <div className="button-row" style={{ marginTop: 16 }}>
+              <button className="button-primary" onClick={() => void handleConfirmCacheStorageChange(true)}>
+                Copy Existing Cache
+              </button>
+              <button className="button-secondary" onClick={() => void handleConfirmCacheStorageChange(false)}>
+                Use Empty Location
+              </button>
+              <button className="button-danger" onClick={() => setCacheStorageChangePending(null)}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {cacheStorageMigrationModalOpen &&
+      cacheStorageMigrationStatus &&
+      cacheStorageMigrationStatus.status !== "idle" ? (
+        <div
+          className="viewer-backdrop"
+          onClick={() => {
+            if (!cacheStorageMigrationStatus.running) {
+              setCacheStorageMigrationModalOpen(false);
+            }
+          }}
+        >
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">Cache Storage Copy</div>
+                <div className="muted">
+                  {cacheStorageMigrationStatus.copy_existing
+                    ? "Moving generated cache assets to the new storage location."
+                    : "Updating cache storage location."}
+                </div>
+              </div>
+              <div className="button-row">
+                {cacheStorageMigrationStatus.running ? (
+                  <button className="button-secondary" onClick={() => void handleCancelCacheStorageMigration()}>
+                    Interrupt
+                  </button>
+                ) : null}
+                <button
+                  className="button-danger"
+                  onClick={() => setCacheStorageMigrationModalOpen(false)}
+                  disabled={cacheStorageMigrationStatus.running}
+                >
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">
+                {formatCacheStorageMigrationLine(cacheStorageMigrationStatus)}
+              </div>
+              {cacheStorageMigrationStatus.destination_dir ? (
+                <div style={{ marginTop: 16 }}>
+                  <strong>Destination</strong>
+                  <div className="muted">{cacheStorageMigrationStatus.destination_dir}</div>
+                </div>
+              ) : null}
+              {cacheStorageMigrationStatus.current_path ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  Current file {cacheStorageMigrationStatus.current_path}
+                </div>
+              ) : null}
+              {cacheStorageMigrationStatus.total_bytes > 0 ? (
+                <div className="muted" style={{ marginTop: 8 }}>
+                  {formatFileSize(cacheStorageMigrationStatus.copied_bytes)} /{" "}
+                  {formatFileSize(cacheStorageMigrationStatus.total_bytes)}
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
+
       <ViewerModal
         asset={state.selectedAsset}
         viewerPreviewSize={state.viewerPreviewSize}
@@ -1084,6 +1349,24 @@ function formatThumbnailBatchStatusLine(status?: BatchThumbnailGenerationStatus)
   }
   if (typeof status.elapsed_ms === "number") {
     parts.push(`${(status.elapsed_ms / 1000).toFixed(1)}s elapsed`);
+  }
+  if (status.message) {
+    parts.push(status.message);
+  }
+  return parts.join(" • ");
+}
+
+function formatCacheStorageMigrationLine(status?: CacheStorageMigrationStatus) {
+  if (!status) {
+    return "No cache storage copy in progress.";
+  }
+
+  const parts: string[] = [status.status];
+  if (status.total_files > 0) {
+    parts.push(`${status.copied_files}/${status.total_files} files`);
+  }
+  if (status.stop_requested) {
+    parts.push("stop requested");
   }
   if (status.message) {
     parts.push(status.message);

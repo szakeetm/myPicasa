@@ -2,6 +2,22 @@ export type RefreshRequest = { roots: string[] };
 
 export type AppSettings = {
   viewer_preview_size: number;
+  cache_storage_dir?: string | null;
+};
+
+export type CacheStorageMigrationStatus = {
+  status: "idle" | "running" | "completed" | "failed" | "cancelled";
+  running: boolean;
+  stop_requested: boolean;
+  copy_existing: boolean;
+  source_dir?: string | null;
+  destination_dir?: string | null;
+  total_files: number;
+  copied_files: number;
+  total_bytes: number;
+  copied_bytes: number;
+  current_path?: string | null;
+  message?: string | null;
 };
 
 export type ImportProgress = {
