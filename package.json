@@ -5,9 +5,6 @@
     "dev": "./frontend/node_modules/.bin/tauri dev --config src-tauri/tauri.conf.json",
     "build": "./frontend/node_modules/.bin/tauri build --config src-tauri/tauri.conf.json",
     "frontend:dev": "cd frontend && npm run dev",
-    "frontend:build": "cd frontend && npm run build",
-    "native:bridge": "./scripts/build-swift-native.sh",
-    "native:build": "./scripts/build-swift-native.sh && swift build --package-path native-macos",
-    "native:run": "./scripts/run-swift-native.sh"
+    "frontend:build": "cd frontend && npm run build"
   }
 }

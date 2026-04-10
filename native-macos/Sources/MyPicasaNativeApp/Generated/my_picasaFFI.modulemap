@@ -1,7 +1,0 @@
-module my_picasaFFI {
-    header "my_picasaFFI.h"
-    export *
-    use "Darwin"
-    use "_Builtin_stdbool"
-    use "_Builtin_stdint"
-}

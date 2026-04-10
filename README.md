@@ -4,8 +4,6 @@ Read-only desktop browser for Google Photos Takeout exports.
 
 `myPicasa` is a Tauri desktop app with a Rust backend and React frontend. It indexes Google Photos Takeout media into SQLite, keeps the original files in place, generates derived media on demand, and gives you a fast local browser for large libraries, albums, live photos, and videos.
 
-The repo also includes an additive native macOS UI built with SwiftUI and UniFFI. The Tauri app remains the main desktop UI.
-
 ## What The App Does
 
 - Reads Google Photos Takeout media in place without modifying originals.
@@ -173,11 +171,6 @@ On macOS, install `ffmpeg` and `ffprobe` with Homebrew:
 brew install ffmpeg
 ```
 
-For the native macOS UI you also need:
-
-- Xcode Command Line Tools or full Xcode
-- a current Swift toolchain
-
 ## Tech Stack
 
 ## Frontend
@@ -206,8 +199,6 @@ For the native macOS UI you also need:
   React/Tauri frontend.
 - [src-tauri/](/Users/martonady/Repos/myPicasa/src-tauri)
   Rust backend and Tauri app shell.
-- [native-macos/](/Users/martonady/Repos/myPicasa/native-macos)
-  Native SwiftUI macOS client.
 
 ## Development Setup
 
@@ -218,8 +209,6 @@ cd frontend
 npm install
 cd ..
 ```
-
-If you want to run the native macOS UI, also make sure Swift/Xcode tools are available.
 
 ## Running The App
 
@@ -248,28 +237,6 @@ Desktop bundle build:
 
 ```bash
 npm run build
-```
-
-## Native macOS UI
-
-The native app is additive and documented further in [native-macos/README.md](/Users/martonady/Repos/myPicasa/native-macos/README.md).
-
-Build the Rust bridge and Swift package:
-
-```bash
-npm run native:build
-```
-
-Run the SwiftUI app:
-
-```bash
-npm run native:run
-```
-
-Open it in Xcode:
-
-```bash
-open native-macos/Package.swift
 ```
 
 ## First-Time Use
