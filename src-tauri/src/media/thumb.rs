@@ -622,6 +622,14 @@ fn find_command_binary(name: &str) -> Option<PathBuf> {
             if candidate.is_file() {
                 return Some(candidate);
             }
+
+            #[cfg(target_os = "windows")]
+            {
+                let candidate = path.join(format!("{name}.exe"));
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
         }
     }
     None

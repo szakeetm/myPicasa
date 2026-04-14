@@ -210,6 +210,33 @@ npm install
 cd ..
 ```
 
+Windows desktop development also needs the native Tauri prerequisites:
+
+- Microsoft C++ Build Tools with `Desktop development with C++`
+- Microsoft Edge WebView2 Runtime
+- Rust via `rustup`
+- `ffmpeg` and `ffprobe` on `PATH`
+
+If you use Chocolatey, a practical setup is:
+
+```powershell
+choco install visualstudio2022community visualstudio2022-workload-nativedesktop -y
+choco install webview2-runtime -y
+choco install rustup.install -y
+choco install ffmpeg -y
+```
+
+If Visual Studio 2022 Community is already installed, you can skip reinstalling it and just make sure the `Desktop development with C++` workload is present.
+
+After installing Rust, open a new terminal and confirm:
+
+```powershell
+rustc -V
+cargo -V
+ffmpeg -version
+ffprobe -version
+```
+
 ## Running The App
 
 Start the Tauri desktop app in development:
@@ -225,6 +252,8 @@ npm run frontend:dev
 npm run frontend:build
 npm run build
 ```
+
+On Windows, `npm run dev` now uses the frontend-local Tauri CLI through `npm exec --prefix frontend ...`, so it works from PowerShell and Command Prompt while still running from the Tauri project root.
 
 Frontend-only build:
 
