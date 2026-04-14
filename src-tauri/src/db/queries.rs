@@ -672,7 +672,7 @@ impl DatabaseQueries for super::Database {
                        AND af_hidden.role = 'live_photo_video'
                    )"
             ),
-            " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
+            " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) ASC, a.id ASC",
             request,
         )
     }
