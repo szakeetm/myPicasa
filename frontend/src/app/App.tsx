@@ -91,6 +91,7 @@ export function App() {
   const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
   const [batchTranscodeStatus, setBatchTranscodeStatus] = useState<BatchViewerTranscodeStatus>();
   const [batchTranscodeLogs, setBatchTranscodeLogs] = useState<LogEntry[]>([]);
+  const [logAssetPaths, setLogAssetPaths] = useState<Record<number, string>>({});
   const [cacheStorageDir, setCacheStorageDir] = useState("");
   const [savedCacheStorageDir, setSavedCacheStorageDir] = useState("");
   const [cacheStorageChangePending, setCacheStorageChangePending] = useState<string | null>(null);
@@ -1104,8 +1105,13 @@ export function App() {
   async function handleCopyThumbLog() {
     const text = thumbGenerationLogs
       .map(
-        (entry) =>
-          `${formatLogTimestamp(entry.created_at)} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}`,
+        (entry) => {
+          const relativePath =
+            entry.asset_id != null ? logAssetPaths[entry.asset_id] : undefined;
+          return `${formatLogTimestamp(entry.created_at)} [${entry.level}] asset=${entry.asset_id ?? "?"} ${entry.message}${
+            relativePath ? `\n${relativePath}` : ""
+          }`;
+        },
       )
       .join("\n");
     await navigator.clipboard.writeText(text);
@@ -1156,8 +1162,13 @@ export function App() {
   async function handleCopyBatchTranscodeLog() {
     const text = batchTranscodeLogs
       .map(
-        (entry) =>
-          `${formatLogTimestamp(entry.created_at)} ${entry.message}`,
+        (entry) => {
+          const relativePath =
+            entry.asset_id != null ? logAssetPaths[entry.asset_id] : undefined;
+          return `${formatLogTimestamp(entry.created_at)} ${entry.message}${
+            relativePath ? `\n${relativePath}` : ""
+          }`;
+        },
       )
       .join("\n");
     await navigator.clipboard.writeText(text);
@@ -1174,6 +1185,46 @@ export function App() {
       .join("\n");
     await navigator.clipboard.writeText(text);
   }
+
+  useEffect(() => {
+    const targetLogs = [
+      ...(thumbLogOpen ? thumbGenerationLogs : []),
+      ...(batchTranscodeOpen ? batchTranscodeLogs : []),
+    ];
+    const assetIds = [...new Set(targetLogs.map((entry) => entry.asset_id).filter((value): value is number => value != null))];
+    const missingIds = assetIds.filter((assetId) => !logAssetPaths[assetId]);
+    if (missingIds.length === 0) {
+      return;
+    }
+
+    let cancelled = false;
+    void Promise.all(
+      missingIds.map(async (assetId) => {
+        try {
+          const detail = await api.getAssetDetail(assetId);
+          const relativePath = detail.primary_path
+            ? formatPathRelativeToRoots(detail.primary_path, currentIndexedRoots())
+            : undefined;
+          return relativePath ? [assetId, relativePath] as const : undefined;
+        } catch {
+          return undefined;
+        }
+      }),
+    ).then((entries) => {
+      if (cancelled) {
+        return;
+      }
+      const resolved = Object.fromEntries(entries.filter((entry): entry is readonly [number, string] => Boolean(entry)));
+      if (Object.keys(resolved).length === 0) {
+        return;
+      }
+      setLogAssetPaths((current) => ({ ...current, ...resolved }));
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [batchTranscodeLogs, batchTranscodeOpen, logAssetPaths, state.rootsInput, thumbGenerationLogs, thumbLogOpen]);
 
   function handleViewerPreviewReady(assetId: number) {
     setViewerPreviewReadyAssetIds((current) =>
@@ -1413,6 +1464,9 @@ export function App() {
                         <span className="thumb-log-main-message">
                           [{entry.level}] asset={entry.asset_id ?? "?"} {parsed.baseMessage}
                         </span>
+                        {entry.asset_id != null && logAssetPaths[entry.asset_id] ? (
+                          <span className="thumb-log-main-message">{logAssetPaths[entry.asset_id]}</span>
+                        ) : null}
                         {parsed.metrics.length > 0 ? (
                           <span className="thumb-log-metrics">
                             {parsed.metrics.map((metric) => (
@@ -1514,7 +1568,12 @@ export function App() {
                 batchTranscodeLogs.map((entry) => (
                   <div key={entry.id} className="thumb-log-line">
                     <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
-                    <span className="thumb-log-message">{entry.message}</span>
+                    <span className="thumb-log-message">
+                      <span className="thumb-log-main-message">{entry.message}</span>
+                      {entry.asset_id != null && logAssetPaths[entry.asset_id] ? (
+                        <span className="thumb-log-main-message">{logAssetPaths[entry.asset_id]}</span>
+                      ) : null}
+                    </span>
                   </div>
                 ))
               ) : (
@@ -1927,6 +1986,24 @@ function formatMediaDurationMs(durationMs: number) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   }
   return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function formatPathRelativeToRoots(sourcePath: string, indexedRoots: string[]) {
+  const normalizedRoots = indexedRoots
+    .map((root) => root.trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+
+  for (const root of normalizedRoots) {
+    if (sourcePath === root) {
+      return ".";
+    }
+    if (sourcePath.startsWith(`${root}/`)) {
+      return sourcePath.slice(root.length + 1);
+    }
+  }
+
+  return sourcePath;
 }
 
 function getViewerPlaybackSupport(): ViewerPlaybackSupport {
