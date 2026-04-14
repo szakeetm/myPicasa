@@ -56,6 +56,152 @@ fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
 }
 
+fn reveal_path_in_file_manager(path: &Path) -> Result<(), InvokeError> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open")
+            .arg("-R")
+            .arg(path)
+            .status()
+            .map_err(map_error)?;
+        if !status.success() {
+            return Err(InvokeError::from(
+                "Failed to reveal asset in Finder".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("explorer")
+            .arg("/select,")
+            .arg(path)
+            .status()
+            .map_err(map_error)?;
+        if !status.success() {
+            return Err(InvokeError::from(
+                "Failed to reveal asset in Explorer".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = path;
+        Err(InvokeError::from(
+            "Reveal in file manager is not supported on this platform".to_string(),
+        ))
+    }
+}
+
+fn open_path_with_default_app(path: &Path) -> Result<(), InvokeError> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = Command::new("open").arg(path).status().map_err(map_error)?;
+        if !status.success() {
+            return Err(InvokeError::from(
+                "Failed to open asset with default app".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let status = Command::new("cmd")
+            .arg("/C")
+            .arg("start")
+            .arg("")
+            .arg(path)
+            .status()
+            .map_err(map_error)?;
+        if !status.success() {
+            return Err(InvokeError::from(
+                "Failed to open asset with default app".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = path;
+        Err(InvokeError::from(
+            "Open with default app is not supported on this platform".to_string(),
+        ))
+    }
+}
+
+fn open_path_with_preview(path: &Path, is_video: bool) -> Result<(), InvokeError> {
+    #[cfg(target_os = "macos")]
+    {
+        let status = if is_video {
+            Command::new("osascript")
+                .arg("-e")
+                .arg("on run argv")
+                .arg("-e")
+                .arg("set mediaPath to POSIX file (item 1 of argv)")
+                .arg("-e")
+                .arg("tell application \"QuickTime Player\"")
+                .arg("-e")
+                .arg("activate")
+                .arg("-e")
+                .arg("set openedDocument to open mediaPath")
+                .arg("-e")
+                .arg("play openedDocument")
+                .arg("-e")
+                .arg("end tell")
+                .arg("-e")
+                .arg("end run")
+                .arg(path)
+                .status()
+                .map_err(map_error)?
+        } else {
+            Command::new("qlmanage")
+                .arg("-p")
+                .arg(path)
+                .status()
+                .map_err(map_error)?
+        };
+        if !status.success() {
+            return Err(InvokeError::from(
+                "Failed to open asset with Quick Look".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "windows")]
+    {
+        let _ = is_video;
+        let Some(parent) = path.parent() else {
+            return Err(InvokeError::from(
+                "Failed to determine asset folder".to_string(),
+            ));
+        };
+        let status = Command::new("explorer")
+            .arg(parent)
+            .status()
+            .map_err(map_error)?;
+        if !status.success() {
+            return Err(InvokeError::from(
+                "Failed to open asset folder in Explorer".to_string(),
+            ));
+        }
+        return Ok(());
+    }
+
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = (path, is_video);
+        Err(InvokeError::from(
+            "Preview action is not supported on this platform".to_string(),
+        ))
+    }
+}
+
 fn is_refresh_running(state: &AppState) -> bool {
     matches!(
         state
@@ -2618,34 +2764,22 @@ pub fn clear_logs(state: State<AppState>) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub fn show_asset_in_finder(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
+pub fn reveal_asset_in_file_manager(
+    asset_id: i64,
+    state: State<AppState>,
+) -> CommandResult<()> {
     let path = primary_asset_path(state.inner(), asset_id)?;
-    let status = Command::new("open")
-        .arg("-R")
-        .arg(&path)
-        .status()
-        .map_err(map_error)?;
-    if !status.success() {
-        return Err(InvokeError::from("Failed to reveal asset in Finder".to_string()));
-    }
-    Ok(())
+    reveal_path_in_file_manager(&path)
 }
 
 #[tauri::command]
 pub fn open_asset_with_default_app(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
     let path = primary_asset_path(state.inner(), asset_id)?;
-    let status = Command::new("open")
-        .arg(&path)
-        .status()
-        .map_err(map_error)?;
-    if !status.success() {
-        return Err(InvokeError::from("Failed to open asset with default app".to_string()));
-    }
-    Ok(())
+    open_path_with_default_app(&path)
 }
 
 #[tauri::command]
-pub fn open_asset_with_quicklook(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
+pub fn open_asset_preview(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
     let path = primary_asset_path(state.inner(), asset_id)?;
     let extension = path
         .extension()
@@ -2655,38 +2789,7 @@ pub fn open_asset_with_quicklook(asset_id: i64, state: State<AppState>) -> Comma
         extension.as_deref(),
         Some("mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm" | "mts" | "m2ts" | "3gp")
     );
-    let status = if is_video {
-        Command::new("osascript")
-            .arg("-e")
-            .arg("on run argv")
-            .arg("-e")
-            .arg("set mediaPath to POSIX file (item 1 of argv)")
-            .arg("-e")
-            .arg("tell application \"QuickTime Player\"")
-            .arg("-e")
-            .arg("activate")
-            .arg("-e")
-            .arg("set openedDocument to open mediaPath")
-            .arg("-e")
-            .arg("play openedDocument")
-            .arg("-e")
-            .arg("end tell")
-            .arg("-e")
-            .arg("end run")
-            .arg(&path)
-            .status()
-            .map_err(map_error)?
-    } else {
-        Command::new("qlmanage")
-            .arg("-p")
-            .arg(&path)
-            .status()
-            .map_err(map_error)?
-    };
-    if !status.success() {
-        return Err(InvokeError::from("Failed to open asset with Quick Look".to_string()));
-    }
-    Ok(())
+    open_path_with_preview(&path, is_video)
 }
 
 #[tauri::command]
@@ -2741,9 +2844,9 @@ pub fn command_handlers() -> impl Fn(tauri::ipc::Invoke<tauri::Wry>) -> bool {
         clear_thumb_generation_logs,
         clear_batch_viewer_transcode_logs,
         record_client_log,
-        show_asset_in_finder,
+        reveal_asset_in_file_manager,
         open_asset_with_default_app,
-        open_asset_with_quicklook,
+        open_asset_preview,
         open_url_in_browser,
         reset_local_database,
         clear_diagnostics,

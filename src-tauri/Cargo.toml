@@ -5,7 +5,7 @@ edition = "2024"
 default-run = "my_picasa"
 
 [lib]
-name = "my_picasa"
+name = "my_picasa_lib"
 crate-type = ["rlib", "cdylib", "staticlib"]
 
 [dependencies]

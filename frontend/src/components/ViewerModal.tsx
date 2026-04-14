@@ -28,6 +28,8 @@ export function ViewerModal({
   onClose,
   onViewerPreviewReady,
 }: ViewerModalProps) {
+  const isMacOs = typeof navigator !== "undefined" && /Mac/i.test(navigator.userAgent);
+  const isWindows = typeof navigator !== "undefined" && /Windows/i.test(navigator.userAgent);
   const [imageSrc, setImageSrc] = useState<string>();
   const [imageError, setImageError] = useState<string>();
   const [videoSrc, setVideoSrc] = useState<string>();
@@ -76,6 +78,18 @@ export function ViewerModal({
   const shouldPreferOriginalLivePhotoBytes = shouldPreferOriginalVideoBytesForPath(
     asset?.live_photo_video_path,
   );
+  const revealActionLabel = isWindows
+    ? "Show In Explorer"
+    : isMacOs
+      ? "Show In Finder"
+      : "Show In File Manager";
+  const previewActionLabel = isWindows
+    ? "Open Folder In Explorer"
+    : isMacOs
+      ? isVideo
+        ? "Open With QuickTime"
+        : "Open With Quick Look"
+      : "Open Preview";
   const canonicalImageSize =
     asset?.width && asset?.height
       ? { width: asset.width, height: asset.height }
@@ -393,12 +407,12 @@ export function ViewerModal({
     livePhotoVideoElementRef.current?.pause();
   }
 
-  async function handleShowInFinder() {
+  async function handleRevealInFileManager() {
     if (!asset?.primary_path) {
       return;
     }
     pauseModalPlayback();
-    await api.showAssetInFinder(asset.id);
+    await api.revealAssetInFileManager(asset.id);
   }
 
   async function handleOpenInDefaultApp() {
@@ -409,12 +423,12 @@ export function ViewerModal({
     await api.openAssetWithDefaultApp(asset.id);
   }
 
-  async function handleOpenWithQuickLookOrQuickTime() {
+  async function handleOpenAssetPreview() {
     if (!asset?.primary_path) {
       return;
     }
     pauseModalPlayback();
-    await api.openAssetWithQuickLook(asset.id);
+    await api.openAssetPreview(asset.id);
   }
 
   async function handleOpenOnGooglePhotos() {
@@ -581,7 +595,7 @@ export function ViewerModal({
         onClose();
       } else if ((event.key === "f" || event.key === "F") && asset?.primary_path && !isEditable) {
         event.preventDefault();
-        void handleShowInFinder();
+        void handleRevealInFileManager();
       } else if ((event.key === "o" || event.key === "O") && asset?.primary_path && !isEditable) {
         event.preventDefault();
         void handleOpenInDefaultApp();
@@ -590,7 +604,7 @@ export function ViewerModal({
           return;
         }
         event.preventDefault();
-        void handleOpenWithQuickLookOrQuickTime();
+        void handleOpenAssetPreview();
       }
     }
     window.addEventListener("keydown", onKeyDown);
@@ -628,9 +642,9 @@ export function ViewerModal({
               <>
                 <button
                   className="button-secondary"
-                  onClick={() => void handleShowInFinder()}
+                  onClick={() => void handleRevealInFileManager()}
                 >
-                  Show In Finder
+                  {revealActionLabel}
                 </button>
                 <button
                   className="button-secondary"
@@ -640,9 +654,9 @@ export function ViewerModal({
                 </button>
                 <button
                   className="button-secondary"
-                  onClick={() => void handleOpenWithQuickLookOrQuickTime()}
+                  onClick={() => void handleOpenAssetPreview()}
                 >
-                  {isVideo ? "Open With QuickTime" : "Open With Quick Look"}
+                  {previewActionLabel}
                 </button>
               </>
             ) : null}

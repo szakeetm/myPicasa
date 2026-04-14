@@ -19,8 +19,10 @@ const EXTERNAL_TOOL_TIMEOUT: Duration = Duration::from_secs(12);
 const VIDEO_THUMBNAIL_TIMEOUT: Duration = Duration::from_secs(30);
 pub const VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT: Duration = Duration::from_secs(30);
 const DEFAULT_THUMBNAIL_JPEG_QUALITY: u8 = 82;
+#[cfg(target_os = "macos")]
 const DEFAULT_THUMBNAIL_SOURCE_JPEG_QUALITY: u8 = 82;
 const HIGH_QUALITY_THUMB_JPEG_QUALITY: u8 = 94;
+#[cfg(target_os = "macos")]
 const HIGH_QUALITY_THUMB_SOURCE_JPEG_QUALITY: u8 = 96;
 const HIGH_QUALITY_THUMB_MAX_SIZE: u32 = 512;
 
@@ -596,6 +598,7 @@ fn thumbnail_output_quality(size: u32) -> u8 {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn thumbnail_source_quality(size: u32) -> u8 {
     if use_high_quality_thumbnail_settings(size) {
         HIGH_QUALITY_THUMB_SOURCE_JPEG_QUALITY
@@ -604,6 +607,7 @@ fn thumbnail_source_quality(size: u32) -> u8 {
     }
 }
 
+#[cfg(target_os = "macos")]
 fn thumbnail_render_size(size: u32) -> u32 {
     let requested_size = size.max(1);
     if use_high_quality_thumbnail_settings(requested_size) {
@@ -673,11 +677,12 @@ fn load_image_with_sips(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, size_hint, working_dir);
+        let _ = (path, size_hint, allow_upscale, working_dir);
         Ok(None)
     }
 }
 
+#[cfg(target_os = "macos")]
 fn probe_image_dimensions_with_sips(path: &Path) -> Result<Option<(u32, u32)>, AppError> {
     #[cfg(target_os = "macos")]
     {
@@ -709,14 +714,9 @@ fn probe_image_dimensions_with_sips(path: &Path) -> Result<Option<(u32, u32)>, A
 
         Ok(width.zip(height))
     }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = path;
-        Ok(None)
-    }
 }
 
+#[cfg(target_os = "macos")]
 fn render_square_thumbnail_with_sips(
     path: &Path,
     size: u32,
@@ -807,14 +807,9 @@ fn render_square_thumbnail_with_sips(
         let _ = fs::remove_file(&temp_path);
         return Ok(Some(bytes));
     }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (path, size, quality, working_dir);
-        Ok(None)
-    }
 }
 
+#[cfg(target_os = "macos")]
 fn render_with_sips(
     path: &Path,
     width: u32,
@@ -860,12 +855,6 @@ fn render_with_sips(
         let bytes = fs::read(&temp_path)?;
         let _ = fs::remove_file(&temp_path);
         return Ok(Some(bytes));
-    }
-
-    #[cfg(not(target_os = "macos"))]
-    {
-        let _ = (path, width, allow_upscale, quality, working_dir);
-        Ok(None)
     }
 }
 
@@ -948,6 +937,7 @@ fn encode_square_thumbnail_to_jpeg(
     encode_jpeg(&thumb, quality)
 }
 
+#[cfg(target_os = "macos")]
 fn normalize_image_bytes_to_square_jpeg(
     bytes: &[u8],
     size: u32,

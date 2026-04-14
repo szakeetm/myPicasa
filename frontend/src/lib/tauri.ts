@@ -94,11 +94,11 @@ export const api = {
   clearBatchViewerTranscodeLogs: () => invoke<void>("clear_batch_viewer_transcode_logs"),
   recordClientLog: (level: string, scope: string, message: string) =>
     invoke<void>("record_client_log", { level, scope, message }),
-  showAssetInFinder: (assetId: number) => invoke<void>("show_asset_in_finder", { assetId }),
+  revealAssetInFileManager: (assetId: number) =>
+    invoke<void>("reveal_asset_in_file_manager", { assetId }),
   openAssetWithDefaultApp: (assetId: number) =>
     invoke<void>("open_asset_with_default_app", { assetId }),
-  openAssetWithQuickLook: (assetId: number) =>
-    invoke<void>("open_asset_with_quicklook", { assetId }),
+  openAssetPreview: (assetId: number) => invoke<void>("open_asset_preview", { assetId }),
   openUrlInBrowser: (url: string) => invoke<void>("open_url_in_browser", { url }),
   clearDiagnostics: () => invoke<void>("clear_diagnostics"),
   clearLogs: () => invoke<void>("clear_logs"),
