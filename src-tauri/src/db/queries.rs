@@ -219,14 +219,14 @@ impl DatabaseQueries for super::Database {
 
     fn soft_delete_missing_files(&self, import_id: i64, roots: &[String]) -> Result<u32, AppError> {
         self.with_connection(|conn| {
-            let mut count = 0_u32;
-            for root in roots {
-                count += conn.execute(
-                    "UPDATE file_entries SET is_deleted = 1, updated_at = ?1
-                     WHERE last_seen_import_id != ?2 AND is_deleted = 0 AND path LIKE ?3",
-                    params![utc_now(), import_id, format!("{root}%")],
-                )? as u32;
-            }
+            let _ = roots;
+            let count = conn.execute(
+                "UPDATE file_entries
+                 SET is_deleted = 1, updated_at = ?1
+                 WHERE last_seen_import_id != ?2
+                   AND is_deleted = 0",
+                params![utc_now(), import_id],
+            )? as u32;
             Ok(count)
         })
     }
