@@ -882,15 +882,15 @@ export function ViewerModal({
             {canonicalImageSize ? ` • ${canonicalImageSize.width}x${canonicalImageSize.height}` : ""}
             {asset.file_size ? ` • ${formatFileSize(asset.file_size)}` : ""}
           </p>
-          <div className="chips">
-            <span className="chip">{asset.media_kind}</span>
-            <span className="chip">{asset.display_type}</span>
-            {asset.albums.map((album) => (
-              <span className="chip" key={album}>
-                {album}
-              </span>
-            ))}
-          </div>
+          {asset.albums.length > 0 ? (
+            <div className="chips">
+              {asset.albums.map((album) => (
+                <span className="chip" key={album}>
+                  {album}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
     </div>

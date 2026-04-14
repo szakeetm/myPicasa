@@ -84,6 +84,7 @@ export function App() {
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [viewerPreviewReadyAssetIds, setViewerPreviewReadyAssetIds] = useState<number[]>([]);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
   const [batchThumbnailStatus, setBatchThumbnailStatus] = useState<BatchThumbnailGenerationStatus>();
   const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
@@ -1171,6 +1172,7 @@ export function App() {
     <div className={`app-shell${debugPanelCollapsed ? " debug-collapsed" : ""}`}>
       <Sidebar
         rootsInput={state.rootsInput}
+        indexedRoots={currentIndexedRoots()}
         viewerPreviewSize={state.viewerPreviewSize}
         cacheStorageDir={cacheStorageDir}
         settingsCollapsed={state.settingsCollapsed}
@@ -1208,6 +1210,7 @@ export function App() {
         <div className="grid-frame">
           <MediaGrid
             assets={state.assets}
+            viewMode={state.viewMode}
             entries={gridEntries}
             viewerPreviewSize={state.viewerPreviewSize}
             onSelect={handleSelectAsset}
@@ -1238,11 +1241,58 @@ export function App() {
         onToggleCollapsed={() => setDebugPanelCollapsed((current) => !current)}
         onOpenThumbLog={() => void handleOpenThumbLog()}
         onOpenBatchTranscode={() => void handleOpenBatchTranscode()}
+        onOpenDiagnostics={() => setDiagnosticsOpen(true)}
         onClearThumbnails={handleClearThumbnails}
         onClearViewerRenders={handleClearViewerRenders}
-        onClearDiagnostics={handleClearDiagnostics}
         onClearLogs={handleClearLogs}
       />
+
+      {diagnosticsOpen ? (
+        <div className="viewer-backdrop" onClick={() => setDiagnosticsOpen(false)}>
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">Ingress Diagnostics</div>
+                <div className="muted">
+                  Import warnings and unresolved sidecar or matching issues.
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="button-secondary" onClick={handleClearDiagnostics}>
+                  Clear
+                </button>
+                <button className="button-danger" onClick={() => setDiagnosticsOpen(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">
+                {state.diagnostics.length} warning{state.diagnostics.length === 1 ? "" : "s"}
+              </div>
+            </div>
+            <div className="thumb-log-list">
+              {state.diagnostics.length > 0 ? (
+                state.diagnostics.map((diagnostic) => (
+                  <div key={diagnostic.id} className="thumb-log-line thumb-log-line-detailed">
+                    <span className="thumb-log-timestamp">{formatLogTimestamp(diagnostic.created_at)}</span>
+                    <span className="thumb-log-message">
+                      <span className="thumb-log-main-message">
+                        [{diagnostic.severity}] {diagnostic.diagnostic_type} • import {diagnostic.import_id} • {diagnostic.message}
+                      </span>
+                      {diagnostic.related_path ? (
+                        <span className="thumb-log-main-message">{diagnostic.related_path}</span>
+                      ) : null}
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state">No ingress diagnostics recorded.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {thumbLogOpen ? (
         <div className="viewer-backdrop" onClick={() => setThumbLogOpen(false)}>

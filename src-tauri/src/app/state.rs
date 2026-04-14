@@ -15,6 +15,8 @@ use crate::{
 };
 
 pub const DEFAULT_VIEWER_PREVIEW_SIZE: u32 = 1000;
+pub const THUMBNAIL_CACHE_VERSION: u32 = 3;
+pub const PREVIEW_CACHE_VERSION: u32 = 3;
 const VIEWER_PREVIEW_SIZE_OPTIONS: [u32; 4] = [1000, 1280, 1600, 2048];
 
 #[derive(Clone)]
@@ -183,12 +185,10 @@ impl AppSettings {
     pub fn sanitized(self) -> Self {
         Self {
             viewer_preview_size: self.viewer_preview_size.clamp(512, 4096),
-            cache_storage_dir: self
-                .cache_storage_dir
-                .and_then(|value| {
-                    let trimmed = value.trim().to_string();
-                    (!trimmed.is_empty()).then_some(trimmed)
-                }),
+            cache_storage_dir: self.cache_storage_dir.and_then(|value| {
+                let trimmed = value.trim().to_string();
+                (!trimmed.is_empty()).then_some(trimmed)
+            }),
             indexed_roots: self
                 .indexed_roots
                 .into_iter()
@@ -235,11 +235,26 @@ pub fn persist_app_settings(settings_path: &Path, settings: &AppSettings) -> Res
     Ok(())
 }
 
-pub fn preview_cache_replacement_keys(asset_id: i64, keep_size: u32) -> Vec<String> {
+pub fn source_cache_namespace(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    blake3::hash(normalized.as_bytes()).to_hex().to_string()
+}
+
+pub fn thumbnail_cache_key_for_path(path: &Path, size: u32, use_preview_cache: bool) -> String {
+    let namespace = source_cache_namespace(path);
+    if use_preview_cache {
+        format!("pv{PREVIEW_CACHE_VERSION}:{namespace}:{size}")
+    } else {
+        format!("v{THUMBNAIL_CACHE_VERSION}:{namespace}:{size}")
+    }
+}
+
+pub fn preview_cache_replacement_keys_for_path(path: &Path, keep_size: u32) -> Vec<String> {
+    let namespace = source_cache_namespace(path);
     VIEWER_PREVIEW_SIZE_OPTIONS
         .into_iter()
         .filter(|size| *size != keep_size)
-        .map(|size| format!("pv2:{asset_id}:{size}"))
+        .map(|size| format!("pv{PREVIEW_CACHE_VERSION}:{namespace}:{size}"))
         .collect()
 }
 

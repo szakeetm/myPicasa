@@ -17,6 +17,7 @@ const PREVIEW_ENQUEUE_BATCH_SIZE = 24;
 
 type MediaGridProps = {
   assets: AssetListItem[];
+  viewMode: "timeline" | "album";
   entries: Array<
     | {
         kind: "asset";
@@ -85,6 +86,7 @@ function thumbStatusLabel(asset: AssetListItem, state?: ThumbnailState) {
 
 export function MediaGrid({
   assets,
+  viewMode,
   entries,
   onSelect,
   onHydratePlaceholderPage,
@@ -1120,14 +1122,15 @@ export function MediaGrid({
                 <div className="muted">
                   {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm") : "Unknown date"}
                 </div>
-                <div className="chips">
-                  <span className="chip">{asset.media_kind}</span>
-                  {asset.albums.slice(0, 2).map((album) => (
-                    <span className="chip" key={album}>
-                      {album}
-                    </span>
-                  ))}
-                </div>
+                {viewMode === "timeline" && asset.albums.length > 0 ? (
+                  <div className="chips">
+                    {asset.albums.slice(0, 2).map((album) => (
+                      <span className="chip" key={album}>
+                        {album}
+                      </span>
+                    ))}
+                  </div>
+                ) : null}
               </div>
             </button>
           );

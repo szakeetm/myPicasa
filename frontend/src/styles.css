@@ -269,34 +269,20 @@ button:disabled:hover {
   transform: none;
 }
 
-.button-working::after {
-  content: "";
-  position: absolute;
-  inset: -3px;
-  border-radius: inherit;
-  border: 2px solid color-mix(in srgb, currentColor 24%, transparent);
-  pointer-events: none;
+.button-working {
+  animation: button-working-pulse 1600ms ease-in-out infinite;
 }
 
-.button-working::before {
-  content: "";
-  position: absolute;
-  width: 8px;
-  height: 8px;
-  left: -5px;
-  top: 50%;
-  border-radius: 999px;
-  background: currentColor;
-  transform: translateY(-50%);
-  box-shadow:
-    10px 0 0 color-mix(in srgb, currentColor 72%, transparent),
-    18px 0 0 color-mix(in srgb, currentColor 54%, transparent),
-    26px 0 0 color-mix(in srgb, currentColor 36%, transparent),
-    34px 0 0 color-mix(in srgb, currentColor 20%, transparent),
-    42px 0 0 color-mix(in srgb, currentColor 10%, transparent);
-  animation: button-working-racetrack 1350ms linear infinite;
-  pointer-events: none;
-  z-index: 1;
+.button-primary.button-working {
+  animation-name: button-working-pulse-primary;
+}
+
+.button-secondary.button-working {
+  animation-name: button-working-pulse-secondary;
+}
+
+.button-danger.button-working {
+  animation-name: button-working-pulse-danger;
 }
 
 .sidebar-section,
@@ -692,17 +678,21 @@ button:disabled:hover {
 }
 
 .thumb-log-card {
-  width: min(1100px, 100%);
-  max-height: 86vh;
+  width: min(1600px, calc(100vw - 48px));
+  height: min(86vh, calc(100vh - 48px));
+  max-height: calc(100vh - 48px);
   border-radius: 28px;
   background: rgba(255, 250, 243, 0.98);
   border: 1px solid rgba(255, 255, 255, 0.25);
   box-shadow: 0 24px 80px rgba(0, 0, 0, 0.28);
   overflow: hidden;
+  display: flex;
+  flex-direction: column;
 }
 
 .thumb-log-list {
-  max-height: calc(86vh - 78px);
+  flex: 1;
+  min-height: 0;
   overflow: auto;
   padding: 12px 16px;
   background: rgba(19, 15, 11, 0.97);
@@ -715,15 +705,26 @@ button:disabled:hover {
   display: grid;
   grid-template-columns: 252px minmax(0, 1fr);
   gap: 14px;
-  padding: 3px 0;
+  padding: 6px 12px;
+  margin: 0 -12px;
   color: rgba(255, 248, 239, 0.94);
   white-space: nowrap;
   word-break: normal;
+  min-width: max-content;
 }
 
 .thumb-log-line-detailed {
-  padding: 8px 0;
-  border-bottom: 1px solid rgba(255, 248, 239, 0.08);
+  padding-top: 8px;
+  padding-bottom: 8px;
+  border-bottom: none;
+}
+
+.thumb-log-list .thumb-log-line:nth-child(odd) {
+  background: rgba(12, 12, 12, 0.96);
+}
+
+.thumb-log-list .thumb-log-line:nth-child(even) {
+  background: rgba(44, 44, 44, 0.96);
 }
 
 .thumb-log-timestamp {
@@ -735,9 +736,6 @@ button:disabled:hover {
   min-width: 0;
   display: grid;
   gap: 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  scrollbar-width: thin;
 }
 
 .thumb-log-main-message {
@@ -749,8 +747,6 @@ button:disabled:hover {
   display: flex;
   flex-wrap: nowrap;
   gap: 6px;
-  overflow-x: auto;
-  overflow-y: hidden;
 }
 
 .thumb-log-metric-chip {
@@ -892,105 +888,49 @@ button:disabled:hover {
   color: var(--text-soft);
 }
 
-@keyframes button-working-racetrack {
-  0% {
-    left: -5px;
-    top: 50%;
-    transform: translateY(-50%);
-    box-shadow:
-      0 10px 0 color-mix(in srgb, currentColor 72%, transparent),
-      0 18px 0 color-mix(in srgb, currentColor 54%, transparent),
-      0 26px 0 color-mix(in srgb, currentColor 36%, transparent),
-      0 34px 0 color-mix(in srgb, currentColor 20%, transparent),
-      0 42px 0 color-mix(in srgb, currentColor 10%, transparent);
-  }
-  12.5% {
-    left: 0;
-    top: 0;
-    transform: translate(-30%, -30%);
-    box-shadow:
-      0 10px 0 color-mix(in srgb, currentColor 72%, transparent),
-      0 18px 0 color-mix(in srgb, currentColor 54%, transparent),
-      8px 8px 0 color-mix(in srgb, currentColor 36%, transparent),
-      14px 14px 0 color-mix(in srgb, currentColor 20%, transparent),
-      20px 20px 0 color-mix(in srgb, currentColor 10%, transparent);
-  }
-  25% {
-    left: 50%;
-    top: -5px;
-    transform: translateX(-50%);
-    box-shadow:
-      -10px 0 0 color-mix(in srgb, currentColor 72%, transparent),
-      -18px 0 0 color-mix(in srgb, currentColor 54%, transparent),
-      -26px 0 0 color-mix(in srgb, currentColor 36%, transparent),
-      -34px 0 0 color-mix(in srgb, currentColor 20%, transparent),
-      -42px 0 0 color-mix(in srgb, currentColor 10%, transparent);
-  }
-  37.5% {
-    left: 100%;
-    top: 0;
-    transform: translate(-70%, -30%);
-    box-shadow:
-      -8px 8px 0 color-mix(in srgb, currentColor 72%, transparent),
-      -14px 14px 0 color-mix(in srgb, currentColor 54%, transparent),
-      -20px 20px 0 color-mix(in srgb, currentColor 36%, transparent),
-      -12px 0 0 color-mix(in srgb, currentColor 20%, transparent),
-      -20px 0 0 color-mix(in srgb, currentColor 10%, transparent);
+@keyframes button-working-pulse {
+  0%,
+  100% {
+    filter: none;
   }
   50% {
-    left: calc(100% - 3px);
-    top: 50%;
-    transform: translateY(-50%);
-    box-shadow:
-      0 -10px 0 color-mix(in srgb, currentColor 72%, transparent),
-      0 -18px 0 color-mix(in srgb, currentColor 54%, transparent),
-      0 -26px 0 color-mix(in srgb, currentColor 36%, transparent),
-      0 -34px 0 color-mix(in srgb, currentColor 20%, transparent),
-      0 -42px 0 color-mix(in srgb, currentColor 10%, transparent);
+    filter: none;
   }
-  62.5% {
-    left: 100%;
-    top: 100%;
-    transform: translate(-70%, -70%);
-    box-shadow:
-      0 -10px 0 color-mix(in srgb, currentColor 72%, transparent),
-      0 -18px 0 color-mix(in srgb, currentColor 54%, transparent),
-      -8px -8px 0 color-mix(in srgb, currentColor 36%, transparent),
-      -14px -14px 0 color-mix(in srgb, currentColor 20%, transparent),
-      -20px -20px 0 color-mix(in srgb, currentColor 10%, transparent);
-  }
-  75% {
-    left: 50%;
-    top: calc(100% - 3px);
-    transform: translateX(-50%);
-    box-shadow:
-      10px 0 0 color-mix(in srgb, currentColor 72%, transparent),
-      18px 0 0 color-mix(in srgb, currentColor 54%, transparent),
-      26px 0 0 color-mix(in srgb, currentColor 36%, transparent),
-      34px 0 0 color-mix(in srgb, currentColor 20%, transparent),
-      42px 0 0 color-mix(in srgb, currentColor 10%, transparent);
-  }
-  87.5% {
-    left: 0;
-    top: 100%;
-    transform: translate(-30%, -70%);
-    box-shadow:
-      8px -8px 0 color-mix(in srgb, currentColor 72%, transparent),
-      14px -14px 0 color-mix(in srgb, currentColor 54%, transparent),
-      20px -20px 0 color-mix(in srgb, currentColor 36%, transparent),
-      12px 0 0 color-mix(in srgb, currentColor 20%, transparent),
-      20px 0 0 color-mix(in srgb, currentColor 10%, transparent);
-  }
+}
+
+@keyframes button-working-pulse-primary {
+  0%,
   100% {
-    left: -5px;
-    top: 50%;
-    transform: translateY(-50%);
-    box-shadow:
-      0 10px 0 color-mix(in srgb, currentColor 72%, transparent),
-      0 18px 0 color-mix(in srgb, currentColor 54%, transparent),
-      0 26px 0 color-mix(in srgb, currentColor 36%, transparent),
-      0 34px 0 color-mix(in srgb, currentColor 20%, transparent),
-      0 42px 0 color-mix(in srgb, currentColor 10%, transparent);
+    background: var(--accent);
+    color: white;
+  }
+  50% {
+    background: color-mix(in srgb, var(--accent) 72%, white);
+    color: white;
+  }
+}
+
+@keyframes button-working-pulse-secondary {
+  0%,
+  100% {
+    background: var(--accent-soft);
+    color: var(--accent);
+  }
+  50% {
+    background: color-mix(in srgb, var(--accent-soft) 35%, white);
+    color: var(--accent);
+  }
+}
+
+@keyframes button-working-pulse-danger {
+  0%,
+  100% {
+    background: rgba(161, 55, 26, 0.1);
+    color: var(--danger);
+  }
+  50% {
+    background: rgba(161, 55, 26, 0.22);
+    color: var(--danger);
   }
 }
 
@@ -1024,5 +964,16 @@ button:disabled:hover {
 
   .toolbar {
     grid-template-columns: 1fr;
+  }
+
+  .thumb-log-card {
+    width: calc(100vw - 24px);
+    height: calc(100vh - 24px);
+    max-height: calc(100vh - 24px);
+    border-radius: 18px;
+  }
+
+  .thumb-log-line {
+    grid-template-columns: 212px minmax(0, 1fr);
   }
 }

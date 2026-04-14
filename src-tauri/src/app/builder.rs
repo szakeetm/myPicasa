@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
 use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
-use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 use std::{fs, path::PathBuf};
@@ -12,7 +12,8 @@ use parking_lot::Mutex;
 
 use crate::app::state::{
     AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
-    app_settings_path, load_app_settings, persist_app_settings, preview_cache_replacement_keys,
+    app_settings_path, load_app_settings, persist_app_settings,
+    preview_cache_replacement_keys_for_path,
 };
 use crate::cache::thumb_cache::ThumbnailCache;
 use crate::db::{Database, DatabaseQueries};
@@ -126,14 +127,12 @@ pub fn build_app_state(
         cache_storage_migration_cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
     };
 
-    state
-        .db
-        .insert_log(
-            "info",
-            "bootstrap",
-            &format!("backend initialized thumbnail_workers={worker_count}"),
-            None,
-        )?;
+    state.db.insert_log(
+        "info",
+        "bootstrap",
+        &format!("backend initialized thumbnail_workers={worker_count}"),
+        None,
+    )?;
 
     Ok(state)
 }
@@ -176,10 +175,10 @@ fn process_thumbnail_job(
     generation: &Arc<AtomicU64>,
     working_dir: &PathBuf,
 ) {
-    let result = (|| -> Result<Option<Vec<u8>>, String> {
+    let result = (|| -> Result<Option<(Vec<u8>, Vec<String>)>, String> {
         let db = Database::new(db_path).map_err(|error| error.to_string())?;
-        let detail =
-            query_service::get_asset_detail(&db, job.asset_id).map_err(|error| error.to_string())?;
+        let detail = query_service::get_asset_detail(&db, job.asset_id)
+            .map_err(|error| error.to_string())?;
         let Some(primary_path) = detail.primary_path else {
             return Ok(None);
         };
@@ -189,7 +188,9 @@ fn process_thumbnail_job(
             .and_then(|item| item.to_str())
             .unwrap_or(&primary_path)
             .to_string();
-        let file_size = fs::metadata(&primary_path).map(|meta| meta.len()).unwrap_or(0);
+        let file_size = fs::metadata(&primary_path)
+            .map(|meta| meta.len())
+            .unwrap_or(0);
         let kind = thumb_log_kind(job.use_preview_cache);
         let generator = thumbnail_generator_label(&primary_path_buf);
         let _ = db.insert_log(
@@ -207,15 +208,15 @@ fn process_thumbnail_job(
         );
         preview_debug_log(format!(
             "thumbnail_worker={} asset_id={} filename=\"{}\" file_size={} status=start size={}",
-            worker_index,
-            job.asset_id,
-            filename,
-            file_size,
-            job.size
+            worker_index, job.asset_id, filename, file_size, job.size
         ));
-        let generated =
-            generate_thumbnail(&primary_path_buf, job.size, !job.use_preview_cache, working_dir)
-                .map_err(|error| error.to_string())?;
+        let generated = generate_thumbnail(
+            &primary_path_buf,
+            job.size,
+            !job.use_preview_cache,
+            working_dir,
+        )
+        .map_err(|error| error.to_string())?;
         match &generated.bytes {
             Some(bytes) => {
                 let _ = db.insert_log(
@@ -249,11 +250,18 @@ fn process_thumbnail_job(
                 );
             }
         }
-        Ok(generated.bytes)
+        Ok(generated.bytes.map(|bytes| {
+            let replacement_keys = if job.use_preview_cache {
+                preview_cache_replacement_keys_for_path(&primary_path_buf, job.size)
+            } else {
+                Vec::new()
+            };
+            (bytes, replacement_keys)
+        }))
     })();
 
     match result {
-        Ok(Some(bytes)) => {
+        Ok(Some((bytes, replacement_keys))) => {
             if generation.load(Ordering::SeqCst) == job.generation {
                 let cache = if job.use_preview_cache {
                     preview_cache
@@ -262,7 +270,7 @@ fn process_thumbnail_job(
                 };
                 let mut cache = cache.lock();
                 if job.use_preview_cache {
-                    for replacement_key in preview_cache_replacement_keys(job.asset_id, job.size) {
+                    for replacement_key in replacement_keys {
                         cache.remove(&replacement_key);
                     }
                 }
@@ -313,18 +321,51 @@ fn spawn_thumbnail_worker(
     thumb_backlog: Arc<AtomicUsize>,
     active_thumb_workers: Arc<AtomicUsize>,
 ) {
-    thread::spawn(move || loop {
-        let thumb_job = {
-            let receiver = thumbnail_receiver.lock();
-            match receiver.recv_timeout(Duration::from_millis(40)) {
-                Ok(job) => Some(job),
-                Err(RecvTimeoutError::Timeout) => None,
-                Err(RecvTimeoutError::Disconnected) => break,
-            }
-        };
+    thread::spawn(move || {
+        loop {
+            let thumb_job = {
+                let receiver = thumbnail_receiver.lock();
+                match receiver.recv_timeout(Duration::from_millis(40)) {
+                    Ok(job) => Some(job),
+                    Err(RecvTimeoutError::Timeout) => None,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            };
 
-        if let Some(job) = thumb_job {
-            active_thumb_workers.fetch_add(1, Ordering::SeqCst);
+            if let Some(job) = thumb_job {
+                active_thumb_workers.fetch_add(1, Ordering::SeqCst);
+                process_thumbnail_job(
+                    job,
+                    worker_index,
+                    &db_path,
+                    &thumbnail_cache,
+                    &preview_cache,
+                    &inflight,
+                    &failed,
+                    &generation,
+                    &working_dir,
+                );
+                active_thumb_workers.fetch_sub(1, Ordering::SeqCst);
+                thumb_backlog.fetch_sub(1, Ordering::SeqCst);
+                continue;
+            }
+
+            if thumb_backlog.load(Ordering::SeqCst) > 0
+                || active_thumb_workers.load(Ordering::SeqCst) > 0
+            {
+                thread::sleep(Duration::from_millis(20));
+                continue;
+            }
+
+            let job = {
+                let receiver = preview_receiver.lock();
+                match receiver.recv_timeout(Duration::from_millis(100)) {
+                    Ok(job) => job,
+                    Err(RecvTimeoutError::Timeout) => continue,
+                    Err(RecvTimeoutError::Disconnected) => break,
+                }
+            };
+
             process_thumbnail_job(
                 job,
                 worker_index,
@@ -336,37 +377,6 @@ fn spawn_thumbnail_worker(
                 &generation,
                 &working_dir,
             );
-            active_thumb_workers.fetch_sub(1, Ordering::SeqCst);
-            thumb_backlog.fetch_sub(1, Ordering::SeqCst);
-            continue;
         }
-
-        if thumb_backlog.load(Ordering::SeqCst) > 0
-            || active_thumb_workers.load(Ordering::SeqCst) > 0
-        {
-            thread::sleep(Duration::from_millis(20));
-            continue;
-        }
-
-        let job = {
-            let receiver = preview_receiver.lock();
-            match receiver.recv_timeout(Duration::from_millis(100)) {
-                Ok(job) => job,
-                Err(RecvTimeoutError::Timeout) => continue,
-                Err(RecvTimeoutError::Disconnected) => break,
-            }
-        };
-
-        process_thumbnail_job(
-            job,
-            worker_index,
-            &db_path,
-            &thumbnail_cache,
-            &preview_cache,
-            &inflight,
-            &failed,
-            &generation,
-            &working_dir,
-        );
     });
 }

@@ -10,9 +10,9 @@ type DebugPanelProps = {
   onToggleCollapsed: () => void;
   onOpenThumbLog: () => void;
   onOpenBatchTranscode: () => void;
+  onOpenDiagnostics: () => void;
   onClearThumbnails: () => void;
   onClearViewerRenders: () => void;
-  onClearDiagnostics: () => void;
   onClearLogs: () => void;
 };
 
@@ -26,9 +26,9 @@ export function DebugPanel({
   onToggleCollapsed,
   onOpenThumbLog,
   onOpenBatchTranscode,
+  onOpenDiagnostics,
   onClearThumbnails,
   onClearViewerRenders,
-  onClearDiagnostics,
   onClearLogs,
 }: DebugPanelProps) {
   if (collapsed) {
@@ -100,6 +100,12 @@ export function DebugPanel({
               </div>
             </div>
             <div className="debug-cache-summary">
+              <div className="muted">ingress diagnostics: {diagnostics.length} warnings</div>
+              <button className="button-secondary" onClick={onOpenDiagnostics}>
+                Diagnostics {diagnostics.length}
+              </button>
+            </div>
+            <div className="debug-cache-summary">
               <div className="muted">
                 rendered viewer media: {cacheStats.viewer_render_items} items •{" "}
                 {Math.round((cacheStats.viewer_render_bytes / 1024 / 1024) * 10) / 10} MB
@@ -110,24 +116,6 @@ export function DebugPanel({
             </div>
           </div>
         ) : null}
-      </div>
-      <div className="debug-section">
-        <div className="button-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-          <div className="eyebrow">Ingress diagnostics</div>
-          <button className="button-secondary" onClick={onClearDiagnostics}>
-            Clear
-          </button>
-        </div>
-        {diagnostics.slice(0, 8).map((diagnostic) => (
-          <div key={diagnostic.id} className="diagnostic-item">
-            <strong>{diagnostic.diagnostic_type}</strong>
-            <div className="muted">
-              {diagnostic.severity} • import {diagnostic.import_id}
-            </div>
-            <div>{diagnostic.message}</div>
-            {diagnostic.related_path ? <div className="muted">{diagnostic.related_path}</div> : null}
-          </div>
-        ))}
       </div>
       <div className="debug-section">
         <div className="button-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>

@@ -79,6 +79,10 @@ pub trait DatabaseQueries {
         asset_ids: &[i64],
     ) -> Result<HashMap<i64, String>, AppError>;
     fn clear_viewer_video_transcode_statuses(&self) -> Result<(), AppError>;
+    fn clear_viewer_video_transcode_statuses_for_assets(
+        &self,
+        asset_ids: &[i64],
+    ) -> Result<(), AppError>;
 }
 
 impl DatabaseQueries for super::Database {
@@ -202,7 +206,12 @@ impl DatabaseQueries for super::Database {
         })?;
 
         if should_log_update {
-            self.insert_log("debug", "import.file", &format!("updated {}", scan.path), None)?;
+            self.insert_log(
+                "debug",
+                "import.file",
+                &format!("updated {}", scan.path),
+                None,
+            )?;
         }
 
         Ok(file_id)
@@ -669,7 +678,11 @@ impl DatabaseQueries for super::Database {
     }
 
     fn search_assets(&self, request: AssetListRequest) -> Result<AssetListResponse, AppError> {
-        let query = request.query.clone().unwrap_or_default().replace('\'', "''");
+        let query = request
+            .query
+            .clone()
+            .unwrap_or_default()
+            .replace('\'', "''");
         paged_asset_query(
             self,
             &format!(
@@ -896,6 +909,26 @@ impl DatabaseQueries for super::Database {
     fn clear_viewer_video_transcode_statuses(&self) -> Result<(), AppError> {
         self.with_connection(|conn| {
             conn.execute("DELETE FROM viewer_video_transcodes", [])?;
+            Ok(())
+        })
+    }
+
+    fn clear_viewer_video_transcode_statuses_for_assets(
+        &self,
+        asset_ids: &[i64],
+    ) -> Result<(), AppError> {
+        if asset_ids.is_empty() {
+            return Ok(());
+        }
+        self.with_connection(|conn| {
+            let placeholders = vec!["?"; asset_ids.len()].join(", ");
+            let sql =
+                format!("DELETE FROM viewer_video_transcodes WHERE asset_id IN ({placeholders})");
+            let params = asset_ids
+                .iter()
+                .map(|id| id.to_string())
+                .collect::<Vec<_>>();
+            conn.execute(&sql, rusqlite::params_from_iter(params.iter()))?;
             Ok(())
         })
     }

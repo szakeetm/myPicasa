@@ -6,17 +6,20 @@ use rayon::current_num_threads;
 use tracing::info;
 
 use crate::{
-    app::state::AppState,
+    app::state::{AppState, preview_cache_replacement_keys_for_path, thumbnail_cache_key_for_path},
     db::DatabaseQueries,
     import::{
         scanner::scan_roots_with_cancel,
         sidecar::{parse_sidecar, takeout_match_score},
         validator::validate_import_with_progress,
     },
-    media::thumb::clear_viewer_render_cache,
+    media::thumb::{viewer_image_cache_path, viewer_video_cache_path},
     models::{ImportProgress, ParsedSidecar, RefreshRequest},
     util::errors::AppError,
 };
+
+const GRID_THUMBNAIL_SIZE: u32 = 210;
+const VIEWER_IMAGE_CACHE_SIZE: u32 = 2400;
 
 pub fn refresh_takeout_index(
     state: &AppState,
@@ -134,21 +137,27 @@ pub fn refresh_takeout_index(
 
     cancel_if_requested(state, &mut progress)?;
     progress.files_deleted = state.db.soft_delete_missing_files(import_id, &roots)?;
+    let affected_assets_before_reconcile = collect_assets_with_deleted_primary_files(state)?;
     let (deleted_asset_ids, reindexed_asset_ids) =
         state.db.reconcile_assets_after_file_deletions()?;
     progress.assets_deleted = deleted_asset_ids.len() as u32;
 
-    for asset_id in reindexed_asset_ids {
-        state.db.replace_search_row(asset_id)?;
+    for asset_id in &reindexed_asset_ids {
+        state.db.replace_search_row(*asset_id)?;
     }
 
     if progress.files_deleted > 0 || progress.assets_deleted > 0 {
-        clear_deleted_asset_caches(state)?;
+        invalidate_deleted_asset_caches(
+            state,
+            &affected_assets_before_reconcile,
+            &deleted_asset_ids,
+            &reindexed_asset_ids,
+        )?;
         state.db.insert_log(
             "info",
             "import.cleanup",
             &format!(
-                "removed {} files and {} assets; cleared derived caches",
+                "removed {} files and {} assets; invalidated affected derived caches",
                 progress.files_deleted, progress.assets_deleted
             ),
             None,
@@ -227,10 +236,7 @@ pub fn refresh_takeout_index(
     Ok(progress)
 }
 
-fn cancel_if_requested(
-    state: &AppState,
-    progress: &mut ImportProgress,
-) -> Result<(), AppError> {
+fn cancel_if_requested(state: &AppState, progress: &mut ImportProgress) -> Result<(), AppError> {
     if state.refresh_cancel.load(Ordering::SeqCst) {
         progress.status = "cancelled".to_string();
         progress.phase = "cancelled".to_string();
@@ -252,15 +258,122 @@ fn should_publish_progress(index: usize, total: usize) -> bool {
     index == 0 || index + 1 == total || (index + 1) % 100 == 0
 }
 
-fn clear_deleted_asset_caches(state: &AppState) -> Result<(), AppError> {
+fn collect_assets_with_deleted_primary_files(
+    state: &AppState,
+) -> Result<HashMap<i64, String>, AppError> {
+    state.db.with_connection(|conn| {
+        let mut stmt = conn.prepare(
+            "SELECT a.id, f.path
+             FROM assets a
+             JOIN file_entries f ON f.id = a.primary_file_id
+             WHERE a.is_deleted = 0
+               AND f.is_deleted = 1",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+        Ok(rows.filter_map(Result::ok).collect())
+    })
+}
+
+fn invalidate_deleted_asset_caches(
+    state: &AppState,
+    old_primary_paths: &HashMap<i64, String>,
+    deleted_asset_ids: &[i64],
+    reindexed_asset_ids: &[i64],
+) -> Result<(), AppError> {
     state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
-    state.inflight_thumbnails.lock().clear();
-    state.failed_thumbnails.lock().clear();
-    state.thumbnail_cache.lock().clear();
-    state.preview_cache.lock().clear();
-    state.viewer_video_jobs.lock().clear();
-    state.db.clear_viewer_video_transcode_statuses()?;
-    clear_viewer_render_cache(&state.viewer_cache_dir())?;
+    let mut affected_asset_ids = deleted_asset_ids.to_vec();
+    affected_asset_ids.extend(reindexed_asset_ids.iter().copied());
+    affected_asset_ids.sort_unstable();
+    affected_asset_ids.dedup();
+
+    let mut affected_primary_paths = old_primary_paths
+        .iter()
+        .filter(|(asset_id, _)| affected_asset_ids.contains(asset_id))
+        .map(|(_, path)| path.clone())
+        .collect::<Vec<_>>();
+    for asset_id in reindexed_asset_ids {
+        if let Ok(detail) = state.db.get_asset_detail(*asset_id) {
+            if let Some(primary_path) = detail.primary_path {
+                affected_primary_paths.push(primary_path);
+            }
+        }
+    }
+    affected_primary_paths.sort();
+    affected_primary_paths.dedup();
+
+    let mut affected_thumbnail_keys = HashSet::new();
+    let mut affected_preview_keys = HashSet::new();
+    for path in &affected_primary_paths {
+        let path_buf = std::path::PathBuf::from(path);
+        affected_thumbnail_keys.insert(thumbnail_cache_key_for_path(
+            &path_buf,
+            GRID_THUMBNAIL_SIZE,
+            false,
+        ));
+        affected_preview_keys.insert(thumbnail_cache_key_for_path(
+            &path_buf,
+            state.viewer_preview_size(),
+            true,
+        ));
+        for replacement_key in
+            preview_cache_replacement_keys_for_path(&path_buf, state.viewer_preview_size())
+        {
+            affected_preview_keys.insert(replacement_key);
+        }
+    }
+
+    {
+        let mut inflight = state.inflight_thumbnails.lock();
+        inflight.retain(|key| {
+            !affected_thumbnail_keys.contains(key) && !affected_preview_keys.contains(key)
+        });
+    }
+    {
+        let mut failed = state.failed_thumbnails.lock();
+        failed.retain(|key| {
+            !affected_thumbnail_keys.contains(key) && !affected_preview_keys.contains(key)
+        });
+    }
+    {
+        let mut thumbnail_cache = state.thumbnail_cache.lock();
+        for key in &affected_thumbnail_keys {
+            thumbnail_cache.remove(key);
+        }
+    }
+    {
+        let mut preview_cache = state.preview_cache.lock();
+        for key in &affected_preview_keys {
+            preview_cache.remove(key);
+        }
+    }
+
+    let viewer_cache_dir = state.viewer_cache_dir();
+    for path in affected_primary_paths {
+        let path_buf = std::path::PathBuf::from(path);
+        if let Some(image_cache_path) =
+            viewer_image_cache_path(&path_buf, VIEWER_IMAGE_CACHE_SIZE, &viewer_cache_dir)?
+        {
+            let _ = std::fs::remove_file(image_cache_path);
+        }
+        if let Some(video_cache_path) = viewer_video_cache_path(&path_buf, &viewer_cache_dir)? {
+            let _ = std::fs::remove_file(&video_cache_path);
+            let _ = std::fs::remove_file(video_cache_path.with_extension("tmp.mp4"));
+        }
+    }
+
+    {
+        let mut jobs = state.viewer_video_jobs.lock();
+        jobs.retain(|path, _| {
+            !old_primary_paths
+                .values()
+                .any(|candidate| candidate == path)
+        });
+    }
+    state
+        .db
+        .clear_viewer_video_transcode_statuses_for_assets(&affected_asset_ids)?;
     Ok(())
 }
 
@@ -456,9 +569,7 @@ fn merge_duplicate_assets_by_hash(
         cancel_if_requested(state, progress)?;
         merged_assets += merge_asset_group_for_hash(state, &hash, &media_kind)? as u32;
         processed_groups += 1;
-        if processed_groups == 1
-            || processed_groups == total_groups
-            || processed_groups % 100 == 0
+        if processed_groups == 1 || processed_groups == total_groups || processed_groups % 100 == 0
         {
             progress.message = Some(format!(
                 "ingress cleanup 3/4: checked {processed_groups} / {total_groups} duplicate groups, merged {merged_assets} assets"

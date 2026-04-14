@@ -4,6 +4,7 @@ import { useMemo, useState } from "react";
 
 type SidebarProps = {
   rootsInput: string;
+  indexedRoots?: string[];
   viewerPreviewSize: number;
   cacheStorageDir: string;
   settingsCollapsed: boolean;
@@ -31,6 +32,7 @@ type SidebarProps = {
 
 export function Sidebar({
   rootsInput,
+  indexedRoots = [],
   viewerPreviewSize,
   cacheStorageDir,
   settingsCollapsed,
@@ -250,13 +252,31 @@ export function Sidebar({
               <br />
               {album.asset_count} assets
               <br />
-              <span className="album-path">{album.source_path}</span>
+              <span className="album-path">{formatAlbumPath(album.source_path, indexedRoots)}</span>
             </div>
           </button>
         ))}
       </div>
     </aside>
   );
+}
+
+function formatAlbumPath(sourcePath: string, indexedRoots: string[]) {
+  const normalizedRoots = indexedRoots
+    .map((root) => root.trim())
+    .filter(Boolean)
+    .sort((left, right) => right.length - left.length);
+
+  for (const root of normalizedRoots) {
+    if (sourcePath === root) {
+      return ".";
+    }
+    if (sourcePath.startsWith(`${root}/`)) {
+      return sourcePath.slice(root.length + 1);
+    }
+  }
+
+  return sourcePath;
 }
 
 function formatAlbumDateRange(begin?: string | null, end?: string | null) {

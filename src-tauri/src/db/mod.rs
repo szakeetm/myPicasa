@@ -127,7 +127,10 @@ impl Database {
         }
         let placeholders = vec!["?"; scopes.len()].join(", ");
         let sql = format!("DELETE FROM app_logs WHERE scope IN ({placeholders})");
-        let params = scopes.iter().map(|scope| scope.to_string()).collect::<Vec<_>>();
+        let params = scopes
+            .iter()
+            .map(|scope| scope.to_string())
+            .collect::<Vec<_>>();
         guard.execute(&sql, rusqlite::params_from_iter(params.iter()))?;
         Ok(())
     }

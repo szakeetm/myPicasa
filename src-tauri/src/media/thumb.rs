@@ -11,9 +11,7 @@ use std::{
 use std::os::windows::process::CommandExt;
 
 use image::{
-    DynamicImage, ImageDecoder, ImageReader,
-    codecs::jpeg::JpegEncoder,
-    imageops::FilterType,
+    DynamicImage, ImageDecoder, ImageReader, codecs::jpeg::JpegEncoder, imageops::FilterType,
 };
 
 use crate::util::errors::AppError;
@@ -83,16 +81,24 @@ pub fn generate_thumbnail(
         }
 
         if !use_high_quality_thumbnail_settings(size) {
-            if let Some(bytes) =
-                render_with_sips(path, render_size, allow_upscale, source_quality, working_dir)?
-            {
+            if let Some(bytes) = render_with_sips(
+                path,
+                render_size,
+                allow_upscale,
+                source_quality,
+                working_dir,
+            )? {
                 return Ok(ThumbnailGenerationOutput { bytes: Some(bytes) });
             }
         }
 
-        if let Some(bytes) =
-            render_with_sips(path, render_size, allow_upscale, source_quality, working_dir)?
-        {
+        if let Some(bytes) = render_with_sips(
+            path,
+            render_size,
+            allow_upscale,
+            source_quality,
+            working_dir,
+        )? {
             let normalized =
                 normalize_image_bytes_to_square_jpeg(&bytes, size, allow_upscale, output_quality)?;
             return Ok(ThumbnailGenerationOutput {
@@ -104,12 +110,14 @@ pub fn generate_thumbnail(
     let image = load_image(path, size, allow_upscale, working_dir)?;
     let output_quality = thumbnail_output_quality(size);
     let bytes = encode_square_thumbnail_to_jpeg(&image, size, allow_upscale, output_quality)?;
-    Ok(ThumbnailGenerationOutput {
-        bytes: Some(bytes),
-    })
+    Ok(ThumbnailGenerationOutput { bytes: Some(bytes) })
 }
 
-pub fn generate_viewer_image(path: &Path, max_dimension: u32, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
+pub fn generate_viewer_image(
+    path: &Path,
+    max_dimension: u32,
+    working_dir: &Path,
+) -> Result<Option<Vec<u8>>, AppError> {
     let extension = normalized_extension(path);
     if is_video_extension(&extension) {
         return Ok(None);
@@ -145,6 +153,34 @@ pub fn generate_viewer_image_file(
     cache_dir: &Path,
     working_dir: &Path,
 ) -> Result<Option<PathBuf>, AppError> {
+    let Some(output_path) = viewer_image_cache_path(path, max_dimension, cache_dir)? else {
+        return Ok(None);
+    };
+
+    if output_path.is_file() {
+        return Ok(Some(output_path));
+    }
+
+    let Some(bytes) = generate_viewer_image(path, max_dimension, working_dir)? else {
+        return Ok(None);
+    };
+    let temp_output = output_path.with_extension("tmp.jpg");
+    let _ = fs::remove_file(&temp_output);
+    fs::write(&temp_output, bytes)?;
+    fs::rename(&temp_output, &output_path)?;
+    Ok(Some(output_path))
+}
+
+pub fn viewer_image_cache_path(
+    path: &Path,
+    max_dimension: u32,
+    cache_dir: &Path,
+) -> Result<Option<PathBuf>, AppError> {
+    let extension = normalized_extension(path);
+    if is_video_extension(&extension) {
+        return Ok(None);
+    }
+
     let metadata = fs::metadata(path)?;
     let modified = metadata
         .modified()
@@ -160,23 +196,10 @@ pub fn generate_viewer_image_file(
         modified
     );
     fs::create_dir_all(cache_dir)?;
-    let output_path = cache_dir.join(format!(
+    Ok(Some(cache_dir.join(format!(
         "my-picasa-viewer-{}.jpg",
         blake3::hash(cache_key.as_bytes()).to_hex()
-    ));
-
-    if output_path.is_file() {
-        return Ok(Some(output_path));
-    }
-
-    let Some(bytes) = generate_viewer_image(path, max_dimension, working_dir)? else {
-        return Ok(None);
-    };
-    let temp_output = output_path.with_extension("tmp.jpg");
-    let _ = fs::remove_file(&temp_output);
-    fs::write(&temp_output, bytes)?;
-    fs::rename(&temp_output, &output_path)?;
-    Ok(Some(output_path))
+    ))))
 }
 
 pub fn generate_viewer_video(
@@ -194,7 +217,11 @@ pub fn generate_viewer_video(
     };
 
     if output_path.is_file() {
-        return Ok(Some((output_path, true, "cached_transcoded_mp4".to_string())));
+        return Ok(Some((
+            output_path,
+            true,
+            "cached_transcoded_mp4".to_string(),
+        )));
     }
 
     let temp_output = output_path.with_extension("tmp.mp4");
@@ -204,7 +231,8 @@ pub fn generate_viewer_video(
 
     for encoder in preferred_viewer_video_encoders() {
         let status = wait_for_status_with_timeout(
-            build_viewer_transcode_command(&ffmpeg, path, &temp_output, dimensions, encoder)?.spawn()?,
+            build_viewer_transcode_command(&ffmpeg, path, &temp_output, dimensions, encoder)?
+                .spawn()?,
             timeout,
             "ffmpeg viewer transcode",
         )?;
@@ -373,7 +401,9 @@ pub fn clear_viewer_render_cache(cache_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn viewer_video_bitrate_profile(dimensions: Option<(u32, u32)>) -> (&'static str, &'static str, &'static str) {
+fn viewer_video_bitrate_profile(
+    dimensions: Option<(u32, u32)>,
+) -> (&'static str, &'static str, &'static str) {
     let max_dimension = dimensions
         .map(|(width, height)| width.max(height))
         .unwrap_or(1920);
@@ -501,7 +531,9 @@ pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError
         return Ok(None);
     }
 
-    let codec = String::from_utf8_lossy(&output.stdout).trim().to_ascii_lowercase();
+    let codec = String::from_utf8_lossy(&output.stdout)
+        .trim()
+        .to_ascii_lowercase();
     if codec.is_empty() {
         return Ok(None);
     }
@@ -578,7 +610,9 @@ fn load_image(
                 .unwrap_or_default()
                 .to_lowercase();
             if matches!(extension.as_str(), "heic" | "heif") {
-                if let Some(image) = load_image_with_sips(path, size_hint, allow_upscale, working_dir)? {
+                if let Some(image) =
+                    load_image_with_sips(path, size_hint, allow_upscale, working_dir)?
+                {
                     return Ok(image);
                 }
             }
@@ -719,8 +753,7 @@ fn resolve_windows_command_candidate(candidate: &Path, name: &str) -> Option<Pat
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase());
 
-    if parent_name.as_deref() != Some("bin") || grandparent_name.as_deref() != Some("chocolatey")
-    {
+    if parent_name.as_deref() != Some("bin") || grandparent_name.as_deref() != Some("chocolatey") {
         return None;
     }
 
@@ -775,7 +808,10 @@ fn is_video_path(path: &Path) -> bool {
 }
 
 fn is_video_extension(extension: &str) -> bool {
-    matches!(extension, "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm" | "mpg" | "mpeg")
+    matches!(
+        extension,
+        "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm" | "mpg" | "mpeg"
+    )
 }
 
 fn load_image_with_sips(
@@ -786,13 +822,9 @@ fn load_image_with_sips(
 ) -> Result<Option<image::DynamicImage>, AppError> {
     #[cfg(target_os = "macos")]
     {
-        if let Some(bytes) = render_with_sips(
-            path,
-            size_hint.max(512),
-            allow_upscale,
-            90,
-            working_dir,
-        )? {
+        if let Some(bytes) =
+            render_with_sips(path, size_hint.max(512), allow_upscale, 90, working_dir)?
+        {
             let image = image::load_from_memory(&bytes)?;
             return Ok(Some(image));
         }
@@ -876,12 +908,14 @@ fn probe_image_dimensions_with_sips(path: &Path) -> Result<Option<(u32, u32)>, A
         }
 
         let text = String::from_utf8_lossy(&output.stdout);
-        let width = text
-            .lines()
-            .find_map(|line| line.split_once("pixelWidth: ").and_then(|(_, value)| value.trim().parse::<u32>().ok()));
-        let height = text
-            .lines()
-            .find_map(|line| line.split_once("pixelHeight: ").and_then(|(_, value)| value.trim().parse::<u32>().ok()));
+        let width = text.lines().find_map(|line| {
+            line.split_once("pixelWidth: ")
+                .and_then(|(_, value)| value.trim().parse::<u32>().ok())
+        });
+        let height = text.lines().find_map(|line| {
+            line.split_once("pixelHeight: ")
+                .and_then(|(_, value)| value.trim().parse::<u32>().ok())
+        });
 
         Ok(width.zip(height))
     }
@@ -992,7 +1026,8 @@ fn render_with_sips(
     {
         let width = if allow_upscale {
             width.max(1)
-        } else if let Some((source_width, source_height)) = probe_image_dimensions_with_sips(path)? {
+        } else if let Some((source_width, source_height)) = probe_image_dimensions_with_sips(path)?
+        {
             width.max(1).min(source_width.max(source_height).max(1))
         } else {
             width.max(1)
@@ -1000,20 +1035,20 @@ fn render_with_sips(
         let temp_path = temp_jpeg_path(path, working_dir);
         let status = wait_for_status_with_timeout(
             Command::new("sips")
-            .arg("-s")
-            .arg("format")
-            .arg("jpeg")
-            .arg("-s")
-            .arg("formatOptions")
-            .arg(quality.to_string())
-            .arg("-Z")
-            .arg(width.to_string())
-            .arg(path)
-            .arg("--out")
-            .arg(&temp_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?,
+                .arg("-s")
+                .arg("format")
+                .arg("jpeg")
+                .arg("-s")
+                .arg("formatOptions")
+                .arg(quality.to_string())
+                .arg("-Z")
+                .arg(width.to_string())
+                .arg(path)
+                .arg("--out")
+                .arg(&temp_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
             EXTERNAL_TOOL_TIMEOUT,
             "sips thumbnail render",
         )?;
@@ -1029,24 +1064,28 @@ fn render_with_sips(
     }
 }
 
-fn render_with_sips_original(path: &Path, quality: u8, working_dir: &Path) -> Result<Option<Vec<u8>>, AppError> {
+fn render_with_sips_original(
+    path: &Path,
+    quality: u8,
+    working_dir: &Path,
+) -> Result<Option<Vec<u8>>, AppError> {
     #[cfg(target_os = "macos")]
     {
         let temp_path = temp_jpeg_path(path, working_dir);
         let status = wait_for_status_with_timeout(
             Command::new("sips")
-            .arg("-s")
-            .arg("format")
-            .arg("jpeg")
-            .arg("-s")
-            .arg("formatOptions")
-            .arg(quality.to_string())
-            .arg(path)
-            .arg("--out")
-            .arg(&temp_path)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()?,
+                .arg("-s")
+                .arg("format")
+                .arg("jpeg")
+                .arg("-s")
+                .arg("formatOptions")
+                .arg(quality.to_string())
+                .arg(path)
+                .arg("--out")
+                .arg(&temp_path)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null())
+                .spawn()?,
             EXTERNAL_TOOL_TIMEOUT,
             "sips viewer render",
         )?;

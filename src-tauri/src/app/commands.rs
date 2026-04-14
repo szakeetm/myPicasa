@@ -18,26 +18,26 @@ use std::os::windows::process::CommandExt;
 use crate::{
     app::{
         state::{
-        AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
-        ViewerTranscodeState, preview_cache_replacement_keys,
+            AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
+            ViewerTranscodeState, preview_cache_replacement_keys_for_path,
+            thumbnail_cache_key_for_path,
         },
         sync_asset_protocol_scope,
     },
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
     media::thumb::{
-        clear_viewer_render_cache, generate_thumbnail, generate_viewer_image,
-        generate_viewer_image_file, generate_viewer_video, probe_media_duration_ms,
-        probe_primary_video_codec, probe_video_dimensions,
+        VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT, clear_viewer_render_cache, generate_thumbnail,
+        generate_viewer_image, generate_viewer_image_file, generate_viewer_video,
+        probe_media_duration_ms, probe_primary_video_codec, probe_video_dimensions,
         thumbnail_generator_label, viewer_render_cache_stats, viewer_video_cache_path,
-        VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT,
     },
     models::{
         AlbumSummary, AppBackupManifest, AppBackupSummary, AppSettings, AssetDetail,
-        AssetListRequest, AssetListResponse,
-        BatchThumbnailGenerationStatus, BatchViewerTranscodeStatus, CacheStats,
-        CacheStorageMigrationStatus, DiagnosticEntry, ImportProgress, LogEntry, RefreshRequest,
-        ThumbnailBatchItem, ViewerMediaStatus, ViewerPlaybackHint, ViewerPlaybackSupport,
+        AssetListRequest, AssetListResponse, BatchThumbnailGenerationStatus,
+        BatchViewerTranscodeStatus, CacheStats, CacheStorageMigrationStatus, DiagnosticEntry,
+        ImportProgress, LogEntry, RefreshRequest, ThumbnailBatchItem, ViewerMediaStatus,
+        ViewerPlaybackHint, ViewerPlaybackSupport,
     },
     search::query_service,
     util::time::utc_now,
@@ -45,20 +45,14 @@ use crate::{
 
 type CommandResult<T> = Result<T, InvokeError>;
 const PREVIEW_DEBUG_LOGS: bool = false;
-const THUMBNAIL_CACHE_VERSION: u32 = 2;
-const PREVIEW_CACHE_VERSION: u32 = 2;
 const APP_BACKUP_MANIFEST_FILE: &str = "mypicasa-backup.json";
 const APP_BACKUP_DATABASE_FILE: &str = "my_picasa.sqlite";
 
-fn thumbnail_cache_key(asset_id: i64, size: u32, use_preview_cache: bool) -> String {
-    if use_preview_cache {
-        format!("pv{PREVIEW_CACHE_VERSION}:{asset_id}:{size}")
-    } else {
-        format!("v{THUMBNAIL_CACHE_VERSION}:{asset_id}:{size}")
-    }
-}
-
-fn effective_preview_size_for_asset(state: &AppState, asset_id: i64, requested_size: u32) -> Option<u32> {
+fn effective_preview_size_for_asset(
+    state: &AppState,
+    asset_id: i64,
+    requested_size: u32,
+) -> Option<u32> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).ok()?;
     let width = u32::try_from(detail.width?).ok()?;
     let height = u32::try_from(detail.height?).ok()?;
@@ -90,9 +84,7 @@ fn reveal_path_in_file_manager(path: &Path) -> Result<(), InvokeError> {
         let normalized = normalize_windows_explorer_path(path);
         let mut command = Command::new("explorer.exe");
         command.raw_arg(format!(r#"/select,"{}""#, normalized.to_string_lossy()));
-        let status = command
-            .status()
-            .map_err(map_error)?;
+        let status = command.status().map_err(map_error)?;
         if !status.success() {
             return Err(InvokeError::from(
                 "Failed to reveal asset in Explorer".to_string(),
@@ -326,11 +318,12 @@ fn record_thumb_log(
 fn enqueue_thumbnail_job(
     state: &AppState,
     asset_id: i64,
+    source_path: &Path,
     size: u32,
     use_preview_cache: bool,
     generation: u64,
 ) -> Result<bool, InvokeError> {
-    let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
+    let key = thumbnail_cache_key_for_path(source_path, size, use_preview_cache);
     let cache = if use_preview_cache {
         &state.preview_cache
     } else {
@@ -430,6 +423,7 @@ fn can_stream_original_video_bytes(path: &std::path::Path) -> bool {
 #[derive(Clone)]
 struct BatchThumbnailAsset {
     asset_id: i64,
+    primary_path: String,
     filename: String,
     source_bytes: u64,
     needs_thumb: bool,
@@ -445,11 +439,11 @@ enum ThumbnailBatchOutputState {
 
 fn thumbnail_batch_output_state(
     state: &AppState,
-    asset_id: i64,
+    source_path: &Path,
     size: u32,
     use_preview_cache: bool,
 ) -> ThumbnailBatchOutputState {
-    let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
+    let key = thumbnail_cache_key_for_path(source_path, size, use_preview_cache);
     let cache = if use_preview_cache {
         &state.preview_cache
     } else {
@@ -523,7 +517,8 @@ pub fn export_app_backup(
     let mut cache_bytes = 0_u64;
     for subdir in cache_storage_subdirs() {
         clear_directory_contents(&backup_dir.join(subdir))?;
-        let (files, bytes) = copy_directory_recursive(&cache_root.join(subdir), &backup_dir.join(subdir))?;
+        let (files, bytes) =
+            copy_directory_recursive(&cache_root.join(subdir), &backup_dir.join(subdir))?;
         cache_files += files;
         cache_bytes += bytes;
     }
@@ -644,9 +639,7 @@ pub fn import_app_backup(
     })
 }
 
-fn cache_storage_migration_status_snapshot(
-    state: &AppState,
-) -> CacheStorageMigrationStatus {
+fn cache_storage_migration_status_snapshot(state: &AppState) -> CacheStorageMigrationStatus {
     state.cache_storage_migration.lock().clone()
 }
 
@@ -740,6 +733,8 @@ fn clear_app_derived_storage(state: &AppState) -> CommandResult<()> {
     state.inflight_thumbnails.lock().clear();
     state.failed_thumbnails.lock().clear();
     state.viewer_video_jobs.lock().clear();
+    state.inflight_viewer_playback_hints.lock().clear();
+    state.refreshed_viewer_playback_hints.lock().clear();
     *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
     *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
 
@@ -918,7 +913,9 @@ pub fn start_cache_storage_migration(
                 total_bytes: 0,
                 copied_bytes: 0,
                 current_path: None,
-                message: Some("Switched cache storage. New assets will be rendered there.".to_string()),
+                message: Some(
+                    "Switched cache storage. New assets will be rendered there.".to_string(),
+                ),
             };
         }
         let _ = applied;
@@ -964,16 +961,16 @@ pub fn start_cache_storage_migration(
             }
 
             for (source_path, relative_path, _) in files {
-                if worker_state.cache_storage_migration_cancel.load(Ordering::SeqCst) {
+                if worker_state
+                    .cache_storage_migration_cancel
+                    .load(Ordering::SeqCst)
+                {
                     return Ok(());
                 }
                 {
                     let mut status = worker_state.cache_storage_migration.lock();
                     status.current_path = Some(relative_path.to_string_lossy().to_string());
-                    status.message = Some(format!(
-                        "Copying {}",
-                        relative_path.to_string_lossy()
-                    ));
+                    status.message = Some(format!("Copying {}", relative_path.to_string_lossy()));
                 }
 
                 let destination_path = destination_root.join(&relative_path);
@@ -1011,7 +1008,10 @@ pub fn start_cache_storage_migration(
             Ok(())
         })();
 
-        if worker_state.cache_storage_migration_cancel.load(Ordering::SeqCst) {
+        if worker_state
+            .cache_storage_migration_cancel
+            .load(Ordering::SeqCst)
+        {
             let _ = finish_cache_storage_migration(
                 &worker_state,
                 "cancelled",
@@ -1076,26 +1076,26 @@ fn collect_all_media_assets(state: &AppState) -> Result<Vec<BatchThumbnailAsset>
                 .collect::<Result<Vec<_>, _>>()?;
             Ok(rows
                 .into_iter()
-                .map(|(asset_id, media_kind, path, file_size)| BatchThumbnailAsset {
-                    asset_id,
-                    filename: PathBuf::from(&path)
-                        .file_name()
-                        .and_then(|value| value.to_str())
-                        .unwrap_or(&path)
-                        .to_string(),
-                    source_bytes: file_size.max(0) as u64,
-                    needs_thumb: true,
-                    needs_preview: media_kind != "video",
-                })
+                .map(
+                    |(asset_id, media_kind, path, file_size)| BatchThumbnailAsset {
+                        asset_id,
+                        primary_path: path.clone(),
+                        filename: PathBuf::from(&path)
+                            .file_name()
+                            .and_then(|value| value.to_str())
+                            .unwrap_or(&path)
+                            .to_string(),
+                        source_bytes: file_size.max(0) as u64,
+                        needs_thumb: true,
+                        needs_preview: media_kind != "video",
+                    },
+                )
                 .collect())
         })
         .map_err(map_error)
 }
 
-fn finish_batch_thumbnail_generation(
-    state: &AppState,
-    message: String,
-) {
+fn finish_batch_thumbnail_generation(state: &AppState, message: String) {
     let mut status = state.batch_thumbnail_generation.lock();
     status.running = false;
     status.current_asset_id = None;
@@ -1112,7 +1112,10 @@ fn open_in_system_browser(target: &str) -> Result<(), InvokeError> {
     let status = {
         #[cfg(target_os = "macos")]
         {
-            Command::new("open").arg(target).status().map_err(map_error)?
+            Command::new("open")
+                .arg(target)
+                .status()
+                .map_err(map_error)?
         }
         #[cfg(target_os = "windows")]
         {
@@ -1276,11 +1279,17 @@ fn queue_viewer_video_transcode(
         .and_then(|value| u64::try_from(value).ok())
         .unwrap_or(0);
     let timeout_ms = duration_ms.max(VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT.as_millis() as u64);
-    let source_bytes = fs::metadata(&source_path).map(|meta| meta.len()).unwrap_or(0);
-    let Some(output_path) = viewer_video_cache_path(&source_path, &state.viewer_cache_dir())
-        .map_err(map_error)?
+    let source_bytes = fs::metadata(&source_path)
+        .map(|meta| meta.len())
+        .unwrap_or(0);
+    let Some(output_path) =
+        viewer_video_cache_path(&source_path, &state.viewer_cache_dir()).map_err(map_error)?
     else {
-        return Ok(unavailable_viewer_media_status("Video playback unavailable", codec, None));
+        return Ok(unavailable_viewer_media_status(
+            "Video playback unavailable",
+            codec,
+            None,
+        ));
     };
     let temp_output_path = output_path.with_extension("tmp.mp4");
 
@@ -1319,12 +1328,13 @@ fn queue_viewer_video_transcode(
                     status.output_bytes = Some(output_bytes_for_path(temp_path));
                     return Ok(status);
                 }
-                ViewerTranscodeState::Ready { path, codec, encoder } if path.is_file() => {
-                    let mut status = load_cached_transcoded_video(
-                        path,
-                        codec.clone(),
-                        encoder.clone(),
-                    )?;
+                ViewerTranscodeState::Ready {
+                    path,
+                    codec,
+                    encoder,
+                } if path.is_file() => {
+                    let mut status =
+                        load_cached_transcoded_video(path, codec.clone(), encoder.clone())?;
                     status.source_bytes = Some(source_bytes);
                     status.output_bytes = Some(output_bytes_for_path(path));
                     return Ok(status);
@@ -1335,8 +1345,11 @@ fn queue_viewer_video_transcode(
                     source_bytes,
                     output_bytes,
                 } => {
-                    let mut status =
-                        unavailable_viewer_media_status("Video transcoding unavailable", codec.clone(), encoder.clone());
+                    let mut status = unavailable_viewer_media_status(
+                        "Video transcoding unavailable",
+                        codec.clone(),
+                        encoder.clone(),
+                    );
                     status.source_bytes = Some(*source_bytes);
                     status.output_bytes = Some(*output_bytes);
                     return Ok(status);
@@ -1348,7 +1361,8 @@ fn queue_viewer_video_transcode(
                     source_bytes,
                     output_bytes,
                 } => {
-                    let mut status = unavailable_viewer_media_status(message, codec.clone(), encoder.clone());
+                    let mut status =
+                        unavailable_viewer_media_status(message, codec.clone(), encoder.clone());
                     status.source_bytes = Some(*source_bytes);
                     status.output_bytes = Some(*output_bytes);
                     return Ok(status);
@@ -1358,20 +1372,17 @@ fn queue_viewer_video_transcode(
         }
     }
 
-    state
-        .viewer_video_jobs
-        .lock()
-        .insert(
-            job_key.clone(),
-            ViewerTranscodeState::Pending {
-                started_at: Instant::now(),
-                codec: codec.clone(),
-                encoder: None,
-                timeout_ms,
-                source_bytes,
-                temp_path: temp_output_path.clone(),
-            },
-        );
+    state.viewer_video_jobs.lock().insert(
+        job_key.clone(),
+        ViewerTranscodeState::Pending {
+            started_at: Instant::now(),
+            codec: codec.clone(),
+            encoder: None,
+            timeout_ms,
+            source_bytes,
+            temp_path: temp_output_path.clone(),
+        },
+    );
 
     let state = state.clone();
     let codec_for_job = codec.clone();
@@ -1396,9 +1407,11 @@ fn queue_viewer_video_transcode(
                     },
                 );
                 let path_string = path.to_string_lossy().to_string();
-                let _ = state
-                    .db
-                    .set_viewer_video_transcode_status(asset_id, "ready", Some(&path_string));
+                let _ = state.db.set_viewer_video_transcode_status(
+                    asset_id,
+                    "ready",
+                    Some(&path_string),
+                );
                 let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                 let _ = state.db.insert_log(
                     "info",
@@ -1413,18 +1426,15 @@ fn queue_viewer_video_transcode(
                 );
             }
             Ok(None) => {
-                state
-                    .viewer_video_jobs
-                    .lock()
-                    .insert(
-                        job_key.clone(),
-                        ViewerTranscodeState::Unavailable {
-                            codec: codec_for_job.clone(),
-                            encoder: None,
-                            source_bytes,
-                            output_bytes: output_bytes_for_path(&temp_output_path_for_job),
-                        },
-                    );
+                state.viewer_video_jobs.lock().insert(
+                    job_key.clone(),
+                    ViewerTranscodeState::Unavailable {
+                        codec: codec_for_job.clone(),
+                        encoder: None,
+                        source_bytes,
+                        output_bytes: output_bytes_for_path(&temp_output_path_for_job),
+                    },
+                );
                 let _ = state.db.insert_log(
                     "warning",
                     log_scope,
@@ -1480,7 +1490,9 @@ fn collect_all_video_assets(state: &AppState) -> Result<Vec<(i64, String, u64)>,
         )
         .map_err(map_error)?;
         for asset in response.items {
-            let file_size = fs::metadata(&asset.primary_path).map(|meta| meta.len()).unwrap_or(0);
+            let file_size = fs::metadata(&asset.primary_path)
+                .map(|meta| meta.len())
+                .unwrap_or(0);
             items.push((asset.id, asset.primary_path, file_size));
         }
         if response.next_cursor.is_none() {
@@ -1556,12 +1568,14 @@ fn populate_missing_viewer_playback_statuses(
                     return Ok(None);
                 };
 
-                let codec = probe_primary_video_codec(&PathBuf::from(&primary_path)).map_err(map_error)?;
-                let status = if source_is_natively_playable(&primary_path, codec.as_deref(), &support) {
-                    "native"
-                } else {
-                    "requires_transcode"
-                };
+                let codec =
+                    probe_primary_video_codec(&PathBuf::from(&primary_path)).map_err(map_error)?;
+                let status =
+                    if source_is_natively_playable(&primary_path, codec.as_deref(), &support) {
+                        "native"
+                    } else {
+                        "requires_transcode"
+                    };
                 state
                     .db
                     .set_viewer_video_transcode_status(asset_id, status, None)
@@ -1569,7 +1583,10 @@ fn populate_missing_viewer_playback_statuses(
                 Ok(Some(status.to_string()))
             })();
 
-            state.inflight_viewer_playback_hints.lock().remove(&asset_id);
+            state
+                .inflight_viewer_playback_hints
+                .lock()
+                .remove(&asset_id);
             state
                 .refreshed_viewer_playback_hints
                 .lock()
@@ -1590,7 +1607,10 @@ fn populate_missing_viewer_playback_statuses(
 fn batch_viewer_transcode_status_snapshot(
     state: &BatchViewerTranscodeState,
 ) -> BatchViewerTranscodeStatus {
-    let current_output_bytes = state.current_output_path.as_deref().map(output_bytes_for_path);
+    let current_output_bytes = state
+        .current_output_path
+        .as_deref()
+        .map(output_bytes_for_path);
     let current_elapsed_ms = state
         .current_started_at
         .map(|started_at| started_at.elapsed().as_millis() as u64);
@@ -1792,10 +1812,11 @@ pub fn start_batch_viewer_transcode(
                 .flatten()
                 .and_then(|value| u64::try_from(value).ok())
                 .unwrap_or(0);
-            let temp_output_path = viewer_video_cache_path(&PathBuf::from(&source_path), &viewer_cache_dir)
-                .ok()
-                .flatten()
-                .map(|path| path.with_extension("tmp.mp4"));
+            let temp_output_path =
+                viewer_video_cache_path(&PathBuf::from(&source_path), &viewer_cache_dir)
+                    .ok()
+                    .flatten()
+                    .map(|path| path.with_extension("tmp.mp4"));
             let timeout_ms = duration_ms.max(VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT.as_millis() as u64);
             let transcode_started_at = Instant::now();
             {
@@ -1803,9 +1824,8 @@ pub fn start_batch_viewer_transcode(
                 status.current_duration_ms = Some(duration_ms);
                 status.current_started_at = Some(transcode_started_at);
                 status.current_output_path = temp_output_path.clone();
-                status.current_output_bytes = temp_output_path
-                    .as_deref()
-                    .map(output_bytes_for_path);
+                status.current_output_bytes =
+                    temp_output_path.as_deref().map(output_bytes_for_path);
             }
             match generate_viewer_video(
                 &PathBuf::from(&source_path),
@@ -1814,11 +1834,14 @@ pub fn start_batch_viewer_transcode(
             ) {
                 Ok(Some((path, cache_hit, encoder))) => {
                     let path_string = path.to_string_lossy().to_string();
-                    let _ = worker_state
-                        .db
-                        .set_viewer_video_transcode_status(asset_id, "ready", Some(&path_string));
+                    let _ = worker_state.db.set_viewer_video_transcode_status(
+                        asset_id,
+                        "ready",
+                        Some(&path_string),
+                    );
                     let output_bytes = output_bytes_for_path(&path);
-                    let transcode_elapsed = human_elapsed_ms(transcode_started_at.elapsed().as_millis());
+                    let transcode_elapsed =
+                        human_elapsed_ms(transcode_started_at.elapsed().as_millis());
                     let video_duration = human_duration_ms(duration_ms);
                     let mut status = worker_state.batch_viewer_transcode.lock();
                     status.completed += 1;
@@ -1827,7 +1850,11 @@ pub fn start_batch_viewer_transcode(
                     }
                     status.current_duration_ms = Some(duration_ms);
                     status.current_output_bytes = Some(output_bytes);
-                    let status_label = if cache_hit { "skipped-present" } else { "success" };
+                    let status_label = if cache_hit {
+                        "skipped-present"
+                    } else {
+                        "success"
+                    };
                     let log_message = if cache_hit {
                         format!(
                             "[{status_label}] filename=\"{filename}\" source_codec={} encoder={} resolution={} video_duration={} output_size={}",
@@ -1859,9 +1886,8 @@ pub fn start_batch_viewer_transcode(
                     let mut status = worker_state.batch_viewer_transcode.lock();
                     status.failed += 1;
                     status.current_duration_ms = Some(duration_ms);
-                    status.current_output_bytes = temp_output_path
-                        .as_deref()
-                        .map(output_bytes_for_path);
+                    status.current_output_bytes =
+                        temp_output_path.as_deref().map(output_bytes_for_path);
                     let _ = worker_state.db.insert_log(
                         "warning",
                         "batch_viewer_transcode",
@@ -1877,9 +1903,8 @@ pub fn start_batch_viewer_transcode(
                     let mut status = worker_state.batch_viewer_transcode.lock();
                     status.failed += 1;
                     status.current_duration_ms = Some(duration_ms);
-                    status.current_output_bytes = temp_output_path
-                        .as_deref()
-                        .map(output_bytes_for_path);
+                    status.current_output_bytes =
+                        temp_output_path.as_deref().map(output_bytes_for_path);
                     let _ = worker_state.db.insert_log(
                         "error",
                         "batch_viewer_transcode",
@@ -1912,8 +1937,7 @@ pub fn start_batch_viewer_transcode(
             .map(|started_at| started_at.elapsed().as_millis() as u64);
         status.message = Some(format!(
             "Finished {} videos with {} failures",
-            status.completed,
-            status.failed
+            status.completed, status.failed
         ));
     });
 
@@ -2042,7 +2066,12 @@ pub fn request_thumbnail(
     state: State<AppState>,
 ) -> CommandResult<Option<String>> {
     let use_preview_cache = prefer_preview_cache.unwrap_or(false);
-    let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
+    let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
+    let Some(primary_path) = detail.primary_path.clone() else {
+        return Ok(None);
+    };
+    let primary_path_buf = PathBuf::from(&primary_path);
+    let key = thumbnail_cache_key_for_path(&primary_path_buf, size, use_preview_cache);
     let cache = if use_preview_cache {
         &state.preview_cache
     } else {
@@ -2051,14 +2080,9 @@ pub fn request_thumbnail(
     if let Some(path) = cache.lock().cached_path(&key) {
         return Ok(Some(path.to_string_lossy().to_string()));
     }
-
-    let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
-    let Some(primary_path) = detail.primary_path.clone() else {
-        return Ok(None);
-    };
     let (filename, file_size) = media_debug_info(&primary_path);
     let kind = thumb_log_kind(use_preview_cache);
-    let generator = thumbnail_generator_label(&PathBuf::from(&primary_path));
+    let generator = thumbnail_generator_label(&primary_path_buf);
     record_thumb_log(
         state.inner(),
         "info",
@@ -2070,41 +2094,43 @@ pub fn request_thumbnail(
     )?;
 
     let working_dir = state.working_dir();
-    match generate_thumbnail(&PathBuf::from(primary_path), size, !use_preview_cache, &working_dir) {
+    match generate_thumbnail(&primary_path_buf, size, !use_preview_cache, &working_dir) {
         Ok(result) => {
             let generated = result.bytes;
             if let Some(bytes) = generated {
-            record_thumb_log(
-                state.inner(),
-                "info",
-                asset_id,
-                format!(
-                    "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={}",
-                    human_size(file_size),
-                    human_size(bytes.len() as u64),
-                ),
-            )?;
-            let mut cache = cache.lock();
-            if use_preview_cache {
-                for replacement_key in preview_cache_replacement_keys(asset_id, size) {
-                    cache.remove(&replacement_key);
+                record_thumb_log(
+                    state.inner(),
+                    "info",
+                    asset_id,
+                    format!(
+                        "kind={kind} generator={generator} status=success mode=direct size={size}px filename=\"{filename}\" file_size={} generated_size={}",
+                        human_size(file_size),
+                        human_size(bytes.len() as u64),
+                    ),
+                )?;
+                let mut cache = cache.lock();
+                if use_preview_cache {
+                    for replacement_key in
+                        preview_cache_replacement_keys_for_path(&primary_path_buf, size)
+                    {
+                        cache.remove(&replacement_key);
+                    }
                 }
-            }
-            cache.insert(key.clone(), bytes);
-            Ok(cache
-                .cached_path(&key)
-                .map(|path| path.to_string_lossy().to_string()))
+                cache.insert(key.clone(), bytes);
+                Ok(cache
+                    .cached_path(&key)
+                    .map(|path| path.to_string_lossy().to_string()))
             } else {
-            record_thumb_log(
-                state.inner(),
-                "warning",
-                asset_id,
-                format!(
-                    "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={}",
-                    human_size(file_size),
-                ),
-            )?;
-            Ok(None)
+                record_thumb_log(
+                    state.inner(),
+                    "warning",
+                    asset_id,
+                    format!(
+                        "kind={kind} generator={generator} status=unavailable mode=direct size={size}px filename=\"{filename}\" file_size={}",
+                        human_size(file_size),
+                    ),
+                )?;
+                Ok(None)
             }
         }
         Err(error) => {
@@ -2147,7 +2173,25 @@ pub fn request_thumbnails_batch(
     let items = asset_ids
         .into_iter()
         .map(|asset_id| {
-            let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
+            let detail = match query_service::get_asset_detail(&state.db, asset_id) {
+                Ok(detail) => detail,
+                Err(_) => {
+                    return ThumbnailBatchItem {
+                        asset_id,
+                        status: "unavailable".to_string(),
+                        data_url: None,
+                    };
+                }
+            };
+            let Some(primary_path) = detail.primary_path else {
+                return ThumbnailBatchItem {
+                    asset_id,
+                    status: "unavailable".to_string(),
+                    data_url: None,
+                };
+            };
+            let primary_path_buf = PathBuf::from(primary_path);
+            let key = thumbnail_cache_key_for_path(&primary_path_buf, size, use_preview_cache);
 
             if use_preview_cache {
                 let cached_path = {
@@ -2219,7 +2263,7 @@ pub fn request_thumbnails_batch(
                             .unwrap_or(size);
                     let has_equivalent_variant = {
                         let cache_guard = cache.lock();
-                        preview_cache_replacement_keys(asset_id, size)
+                        preview_cache_replacement_keys_for_path(&primary_path_buf, size)
                             .into_iter()
                             .filter_map(|replacement_key| {
                                 let alt_size = replacement_key.rsplit(':').next()?.parse::<u32>().ok()?;
@@ -2241,7 +2285,7 @@ pub fn request_thumbnails_batch(
 
                     let has_stale_variant = {
                         let cache_guard = cache.lock();
-                        preview_cache_replacement_keys(asset_id, size)
+                        preview_cache_replacement_keys_for_path(&primary_path_buf, size)
                             .into_iter()
                             .any(|replacement_key| cache_guard.cached_path(&replacement_key).is_some())
                     };
@@ -2331,7 +2375,10 @@ pub fn request_thumbnails_batch(
     if use_preview_cache {
         let ready = items.iter().filter(|item| item.status == "ready").count();
         let pending = items.iter().filter(|item| item.status == "pending").count();
-        let unavailable = items.iter().filter(|item| item.status == "unavailable").count();
+        let unavailable = items
+            .iter()
+            .filter(|item| item.status == "unavailable")
+            .count();
         let _ = state.db.insert_log(
             "info",
             "thumbnail_batch",
@@ -2388,7 +2435,10 @@ pub fn start_batch_thumbnail_generation(
         };
     }
 
-    state.db.clear_logs_by_scope(&["thumb_gen"]).map_err(map_error)?;
+    state
+        .db
+        .clear_logs_by_scope(&["thumb_gen"])
+        .map_err(map_error)?;
 
     let worker_state = state.inner().clone();
     thread::spawn(move || {
@@ -2421,17 +2471,21 @@ pub fn start_batch_thumbnail_generation(
         let mut active = HashMap::<i64, BatchThumbnailAsset>::new();
 
         loop {
-            let stop_requested = worker_state.batch_thumbnail_generation.lock().stop_requested;
+            let stop_requested = worker_state
+                .batch_thumbnail_generation
+                .lock()
+                .stop_requested;
 
             while !stop_requested && active.len() < worker_state.thumbnail_worker_count {
                 let Some(asset) = pending.pop_front() else {
                     break;
                 };
+                let primary_path = PathBuf::from(&asset.primary_path);
 
                 let thumb_state =
-                    thumbnail_batch_output_state(&worker_state, asset.asset_id, THUMB_SIZE, false);
+                    thumbnail_batch_output_state(&worker_state, &primary_path, THUMB_SIZE, false);
                 let preview_state = if asset.needs_preview {
-                    thumbnail_batch_output_state(&worker_state, asset.asset_id, preview_size, true)
+                    thumbnail_batch_output_state(&worker_state, &primary_path, preview_size, true)
                 } else {
                     ThumbnailBatchOutputState::Ready
                 };
@@ -2475,12 +2529,11 @@ pub fn start_batch_thumbnail_generation(
                     continue;
                 }
 
-                if asset.needs_thumb
-                    && matches!(thumb_state, ThumbnailBatchOutputState::Missing)
-                {
+                if asset.needs_thumb && matches!(thumb_state, ThumbnailBatchOutputState::Missing) {
                     let _ = enqueue_thumbnail_job(
                         &worker_state,
                         asset.asset_id,
+                        &primary_path,
                         THUMB_SIZE,
                         false,
                         worker_state.thumbnail_generation.load(Ordering::SeqCst),
@@ -2492,6 +2545,7 @@ pub fn start_batch_thumbnail_generation(
                     let _ = enqueue_thumbnail_job(
                         &worker_state,
                         asset.asset_id,
+                        &primary_path,
                         preview_size,
                         true,
                         worker_state.thumbnail_generation.load(Ordering::SeqCst),
@@ -2503,10 +2557,11 @@ pub fn start_batch_thumbnail_generation(
 
             let mut finished_ids = Vec::new();
             for (asset_id, asset) in &active {
+                let primary_path = PathBuf::from(&asset.primary_path);
                 let thumb_state =
-                    thumbnail_batch_output_state(&worker_state, *asset_id, THUMB_SIZE, false);
+                    thumbnail_batch_output_state(&worker_state, &primary_path, THUMB_SIZE, false);
                 let preview_state = if asset.needs_preview {
-                    thumbnail_batch_output_state(&worker_state, *asset_id, preview_size, true)
+                    thumbnail_batch_output_state(&worker_state, &primary_path, preview_size, true)
                 } else {
                     ThumbnailBatchOutputState::Ready
                 };
@@ -2662,18 +2717,12 @@ pub fn load_viewer_frame(
 
     let viewer_cache_dir = state.viewer_cache_dir();
     let working_dir = state.working_dir();
-    match generate_viewer_image_file(
-        &source_path,
-        2400,
-        &viewer_cache_dir,
-        &working_dir,
-    ) {
+    match generate_viewer_image_file(&source_path, 2400, &viewer_cache_dir, &working_dir) {
         Ok(Some(path)) => {
             let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
             preview_debug_log(format!(
                 "viewer asset_id={asset_id} filename=\"{filename}\" file_size={} generated_bytes={}",
-                file_size,
-                generated_bytes
+                file_size, generated_bytes
             ));
             Ok(Some(path.to_string_lossy().to_string()))
         }
@@ -2707,7 +2756,11 @@ pub fn load_viewer_video(
 ) -> CommandResult<ViewerMediaStatus> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(primary_path) = detail.primary_path else {
-        return Ok(unavailable_viewer_media_status("Video playback unavailable", None, None));
+        return Ok(unavailable_viewer_media_status(
+            "Video playback unavailable",
+            None,
+            None,
+        ));
     };
     let (filename, file_size) = media_debug_info(&primary_path);
     let source_path = PathBuf::from(&primary_path);
@@ -2754,7 +2807,11 @@ pub fn load_live_photo_motion(
 ) -> CommandResult<ViewerMediaStatus> {
     let detail = query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
     let Some(motion_path) = detail.live_photo_video_path else {
-        return Ok(unavailable_viewer_media_status("Live photo playback unavailable", None, None));
+        return Ok(unavailable_viewer_media_status(
+            "Live photo playback unavailable",
+            None,
+            None,
+        ));
     };
     let (filename, file_size) = media_debug_info(&motion_path);
     let source_path = PathBuf::from(&motion_path);
@@ -2819,7 +2876,12 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
     *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
     state
         .db
-        .insert_log("info", "thumbnail", "cleared thumbnail and preview caches", None)
+        .insert_log(
+            "info",
+            "thumbnail",
+            "cleared thumbnail and preview caches",
+            None,
+        )
         .map_err(map_error)?;
     Ok(())
 }
@@ -2858,13 +2920,20 @@ pub fn get_batch_viewer_transcode_logs(
     limit: Option<u32>,
     state: State<AppState>,
 ) -> CommandResult<Vec<LogEntry>> {
-    query_service::get_logs_by_scope(&state.db, &["batch_viewer_transcode"], limit.unwrap_or(10_000))
-        .map_err(map_error)
+    query_service::get_logs_by_scope(
+        &state.db,
+        &["batch_viewer_transcode"],
+        limit.unwrap_or(10_000),
+    )
+    .map_err(map_error)
 }
 
 #[tauri::command]
 pub fn clear_thumb_generation_logs(state: State<AppState>) -> CommandResult<()> {
-    state.db.clear_logs_by_scope(&["thumb_gen"]).map_err(map_error)
+    state
+        .db
+        .clear_logs_by_scope(&["thumb_gen"])
+        .map_err(map_error)
 }
 
 #[tauri::command]
@@ -2935,10 +3004,7 @@ pub fn clear_logs(state: State<AppState>) -> CommandResult<()> {
 }
 
 #[tauri::command]
-pub fn reveal_asset_in_file_manager(
-    asset_id: i64,
-    state: State<AppState>,
-) -> CommandResult<()> {
+pub fn reveal_asset_in_file_manager(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
     let path = primary_asset_path(state.inner(), asset_id)?;
     reveal_path_in_file_manager(&path)
 }
