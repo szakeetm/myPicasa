@@ -810,6 +810,7 @@ impl DatabaseQueries for super::Database {
             let mut stmt = conn.prepare(
                 "SELECT id, created_at, level, scope, message, asset_id
                  FROM app_logs
+                 WHERE scope NOT IN ('thumb_gen', 'batch_viewer_transcode')
                  ORDER BY id DESC
                  LIMIT ?1",
             )?;

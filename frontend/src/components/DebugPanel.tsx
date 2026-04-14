@@ -6,14 +6,20 @@ type DebugPanelProps = {
   cacheStats?: CacheStats;
   collapsed?: boolean;
   thumbBatchRunning?: boolean;
+  thumbBatchStopping?: boolean;
   videoBatchRunning?: boolean;
+  videoBatchStopping?: boolean;
   onToggleCollapsed: () => void;
+  onStartThumbBatch: () => void;
+  onStopThumbBatch: () => void;
   onOpenThumbLog: () => void;
+  onStartBatchTranscode: () => void;
+  onStopBatchTranscode: () => void;
   onOpenBatchTranscode: () => void;
   onOpenDiagnostics: () => void;
+  onOpenAppLogs: () => void;
   onClearThumbnails: () => void;
   onClearViewerRenders: () => void;
-  onClearLogs: () => void;
 };
 
 export function DebugPanel({
@@ -22,14 +28,20 @@ export function DebugPanel({
   cacheStats,
   collapsed = false,
   thumbBatchRunning,
+  thumbBatchStopping,
   videoBatchRunning,
+  videoBatchStopping,
   onToggleCollapsed,
+  onStartThumbBatch,
+  onStopThumbBatch,
   onOpenThumbLog,
+  onStartBatchTranscode,
+  onStopBatchTranscode,
   onOpenBatchTranscode,
   onOpenDiagnostics,
+  onOpenAppLogs,
   onClearThumbnails,
   onClearViewerRenders,
-  onClearLogs,
 }: DebugPanelProps) {
   if (collapsed) {
     return (
@@ -77,18 +89,22 @@ export function DebugPanel({
               </div>
               <div className="button-row">
                 <button
-                  className={`button-secondary${thumbBatchRunning ? " button-working" : ""}`}
-                  onClick={onOpenThumbLog}
+                  className={`${
+                    thumbBatchRunning ? "button-danger" : "button-primary"
+                  }${thumbBatchRunning ? " button-working" : ""}`}
+                  onClick={thumbBatchRunning ? onStopThumbBatch : onStartThumbBatch}
+                  disabled={thumbBatchStopping}
                 >
+                  {thumbBatchStopping
+                    ? "Stopping thumb gen"
+                    : thumbBatchRunning
+                      ? "Stop thumb gen"
+                      : "Start thumb gen"}
+                </button>
+                <button className="button-secondary" onClick={onOpenThumbLog}>
                   Thumb gen log
                 </button>
-                <button
-                  className={`button-secondary${videoBatchRunning ? " button-working" : ""}`}
-                  onClick={onOpenBatchTranscode}
-                >
-                  Batch transcode
-                </button>
-                <button className="button-secondary" onClick={onClearThumbnails}>
+                <button className="button-danger" onClick={onClearThumbnails}>
                   Clear thumbnails
                 </button>
               </div>
@@ -100,53 +116,49 @@ export function DebugPanel({
               </div>
             </div>
             <div className="debug-cache-summary">
-              <div className="muted">ingress diagnostics: {diagnostics.length} warnings</div>
-              <button className="button-secondary" onClick={onOpenDiagnostics}>
-                Diagnostics {diagnostics.length}
-              </button>
-            </div>
-            <div className="debug-cache-summary">
               <div className="muted">
-                rendered viewer media: {cacheStats.viewer_render_items} items •{" "}
+                transcoded viewer media: {cacheStats.viewer_render_items} items •{" "}
                 {Math.round((cacheStats.viewer_render_bytes / 1024 / 1024) * 10) / 10} MB
               </div>
-              <button className="button-secondary" onClick={onClearViewerRenders}>
-                Clear rendered
+              <div className="button-row">
+                <button
+                  className={`${
+                    videoBatchRunning ? "button-danger" : "button-primary"
+                  }${videoBatchRunning ? " button-working" : ""}`}
+                  onClick={videoBatchRunning ? onStopBatchTranscode : onStartBatchTranscode}
+                  disabled={videoBatchStopping}
+                >
+                  {videoBatchStopping
+                    ? "Stopping batch transcode"
+                    : videoBatchRunning
+                      ? "Stop batch transcode"
+                      : "Start batch transcode"}
+                </button>
+                <button className="button-secondary" onClick={onOpenBatchTranscode}>
+                  Batch transcode log
+                </button>
+                <button className="button-danger" onClick={onClearViewerRenders}>
+                  Clear transcoded
+                </button>
+              </div>
+            </div>
+            <div className="debug-cache-summary">
+              <div className="muted">ingress report: {diagnostics.length} warnings</div>
+              <button className="button-secondary" onClick={onOpenDiagnostics}>
+                Ingress report {diagnostics.length}
               </button>
             </div>
           </div>
         ) : null}
       </div>
       <div className="debug-section">
-        <div className="button-row" style={{ justifyContent: "space-between", marginBottom: 10 }}>
-          <div className="eyebrow">Recent logs</div>
-          <button className="button-secondary" onClick={onClearLogs}>
-            Clear logs
+        <div className="debug-cache-summary">
+          <div className="muted">app logs: {logs.length} entries</div>
+          <button className="button-secondary" onClick={onOpenAppLogs}>
+            App logs {logs.length}
           </button>
         </div>
-        {logs.slice(0, 20).map((entry) => (
-          <div key={entry.id} className="log-item">
-            <strong>
-              {entry.level} • {entry.scope}
-            </strong>
-            <div>{entry.message}</div>
-            <div className="muted">{formatLocalTimestamp(entry.created_at)}</div>
-          </div>
-        ))}
       </div>
     </aside>
   );
-}
-
-function formatLocalTimestamp(value?: string | null) {
-  if (!value) return "";
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value;
-  const year = parsed.getFullYear();
-  const month = String(parsed.getMonth() + 1).padStart(2, "0");
-  const day = String(parsed.getDate()).padStart(2, "0");
-  const hours = String(parsed.getHours()).padStart(2, "0");
-  const minutes = String(parsed.getMinutes()).padStart(2, "0");
-  const seconds = String(parsed.getSeconds()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
 }

@@ -805,7 +805,6 @@ export function MediaGrid({
         return state?.thumbChecked && (state.status === undefined || state.status === "pending");
       });
 
-      const preloadPendingIds: number[] = [];
       const requestIds = [...new Set([...probedMissingIds, ...visiblePendingIds])].slice(0, THUMB_ENQUEUE_BATCH_SIZE);
       if (requestIds.length === 0) {
         logIdleSnapshot("thumb", "no_thumb_targets");
@@ -816,11 +815,6 @@ export function MediaGrid({
         logIdleSnapshot("thumb", "generation_in_flight");
         return;
       }
-
-      void logClient(
-        "grid",
-        `thumb request visible=${visiblePendingIds.join(",") || "none"} preload=none requested=${requestIds.join(",")}`,
-      );
 
       startTransition(() => {
         setThumbs((current) => {
@@ -841,28 +835,6 @@ export function MediaGrid({
         const batch = await api.requestThumbnailsBatch(requestIds, thumbnailSize);
         if (disposed) {
           return;
-        }
-
-        const readyCount = batch.filter((item) => item.status === "ready").length;
-        const pendingCount = batch.filter((item) => item.status === "pending").length;
-        const unavailableCount = batch.filter((item) => item.status === "unavailable").length;
-        const batchMode =
-          visiblePendingIds.length > 0 && preloadPendingIds.length > 0
-            ? "mixed"
-            : visiblePendingIds.length > 0
-              ? "visible"
-              : "preload";
-        const signature = `${batchMode}:${requestIds.length}:${readyCount}:${pendingCount}:${unavailableCount}:${thumbnailSize}`;
-        const now = Date.now();
-        if (
-          lastBatchLogRef.current.signature !== signature ||
-          now - lastBatchLogRef.current.at > 2000
-        ) {
-          lastBatchLogRef.current = { signature, at: now };
-          void logClient(
-            "grid",
-            `thumb batch mode=${batchMode} size=${thumbnailSize} requested=${requestIds.length} ready=${readyCount} pending=${pendingCount} unavailable=${unavailableCount}`,
-          );
         }
 
         startTransition(() => {

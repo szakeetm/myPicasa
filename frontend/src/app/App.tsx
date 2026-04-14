@@ -85,6 +85,7 @@ export function App() {
   const [viewerPreviewReadyAssetIds, setViewerPreviewReadyAssetIds] = useState<number[]>([]);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [appLogsOpen, setAppLogsOpen] = useState(false);
   const [thumbGenerationLogs, setThumbGenerationLogs] = useState<LogEntry[]>([]);
   const [batchThumbnailStatus, setBatchThumbnailStatus] = useState<BatchThumbnailGenerationStatus>();
   const [batchTranscodeOpen, setBatchTranscodeOpen] = useState(false);
@@ -1112,9 +1113,9 @@ export function App() {
 
   async function handleClearViewerRenders() {
     const accepted = await confirmDestructiveAction(
-      "Clear rendered media?",
-      "This will delete cached rendered viewer media and completed video transcodes. Continue?",
-      "Clear Rendered Media",
+      "Clear transcoded media?",
+      "This will delete cached transcoded viewer media and completed video transcodes. Continue?",
+      "Clear Transcoded Media",
     );
     if (!accepted) {
       return;
@@ -1157,6 +1158,18 @@ export function App() {
       .map(
         (entry) =>
           `${formatLogTimestamp(entry.created_at)} ${entry.message}`,
+      )
+      .join("\n");
+    await navigator.clipboard.writeText(text);
+  }
+
+  async function handleCopyAppLogs() {
+    const text = state.logs
+      .map(
+        (entry) =>
+          `${formatLogTimestamp(entry.created_at)} [${entry.level}] ${entry.scope}${
+            entry.asset_id != null ? ` asset=${entry.asset_id}` : ""
+          } ${entry.message}`,
       )
       .join("\n");
     await navigator.clipboard.writeText(text);
@@ -1241,15 +1254,67 @@ export function App() {
         cacheStats={state.cacheStats}
         collapsed={debugPanelCollapsed}
         thumbBatchRunning={batchThumbnailStatus?.status === "running"}
+        thumbBatchStopping={batchThumbnailStatus?.status === "running" && batchThumbnailStatus?.stop_requested}
         videoBatchRunning={batchTranscodeStatus?.status === "running"}
+        videoBatchStopping={batchTranscodeStatus?.status === "running" && batchTranscodeStatus?.stop_requested}
         onToggleCollapsed={() => setDebugPanelCollapsed((current) => !current)}
+        onStartThumbBatch={() => void handleStartBatchThumbnailGeneration()}
+        onStopThumbBatch={() => void handleStopBatchThumbnailGeneration()}
         onOpenThumbLog={() => void handleOpenThumbLog()}
+        onStartBatchTranscode={() => void handleStartBatchTranscode()}
+        onStopBatchTranscode={() => void handleStopBatchTranscode()}
         onOpenBatchTranscode={() => void handleOpenBatchTranscode()}
         onOpenDiagnostics={() => setDiagnosticsOpen(true)}
+        onOpenAppLogs={() => setAppLogsOpen(true)}
         onClearThumbnails={handleClearThumbnails}
         onClearViewerRenders={handleClearViewerRenders}
-        onClearLogs={handleClearLogs}
       />
+
+      {appLogsOpen ? (
+        <div className="viewer-backdrop" onClick={() => setAppLogsOpen(false)}>
+          <div className="thumb-log-card" onClick={(event) => event.stopPropagation()}>
+            <div className="viewer-toolbar">
+              <div>
+                <div className="title">App Logs</div>
+                <div className="muted">
+                  General app activity, refresh summaries, cache actions, and warnings.
+                </div>
+              </div>
+              <div className="button-row">
+                <button className="button-secondary" onClick={() => void handleCopyAppLogs()}>
+                  Copy
+                </button>
+                <button className="button-danger" onClick={handleClearLogs}>
+                  Clear
+                </button>
+                <button className="button-danger" onClick={() => setAppLogsOpen(false)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <div className="viewer-meta">
+              <div className="status-banner">{state.logs.length} app log entries</div>
+            </div>
+            <div className="thumb-log-list">
+              {state.logs.length > 0 ? (
+                state.logs.map((entry) => (
+                  <div key={entry.id} className="thumb-log-line thumb-log-line-detailed">
+                    <span className="thumb-log-timestamp">{formatLogTimestamp(entry.created_at)}</span>
+                    <span className="thumb-log-message">
+                      <span className="thumb-log-main-message">
+                        [{entry.level}] {entry.scope}
+                        {entry.asset_id != null ? ` • asset ${entry.asset_id}` : ""} • {entry.message}
+                      </span>
+                    </span>
+                  </div>
+                ))
+              ) : (
+                <div className="empty-state">No app log entries recorded.</div>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
       {diagnosticsOpen ? (
         <div className="viewer-backdrop" onClick={() => setDiagnosticsOpen(false)}>
@@ -1262,7 +1327,7 @@ export function App() {
                 </div>
               </div>
               <div className="button-row">
-                <button className="button-secondary" onClick={handleClearDiagnostics}>
+                <button className="button-danger" onClick={handleClearDiagnostics}>
                   Clear
                 </button>
                 <button className="button-danger" onClick={() => setDiagnosticsOpen(false)}>
@@ -1317,7 +1382,7 @@ export function App() {
                   {batchThumbnailStatus?.status === "running" ? "Working" : "Start"}
                 </button>
                 <button
-                  className="button-secondary"
+                  className="button-danger"
                   onClick={() => void handleStopBatchThumbnailGeneration()}
                   disabled={!batchThumbnailStatus?.status || batchThumbnailStatus.status !== "running"}
                 >
@@ -1326,7 +1391,7 @@ export function App() {
                 <button className="button-secondary" onClick={() => void handleCopyThumbLog()}>
                   Copy
                 </button>
-                <button className="button-secondary" onClick={() => void handleClearThumbLog()}>
+                <button className="button-danger" onClick={() => void handleClearThumbLog()}>
                   Clear
                 </button>
                 <button className="button-danger" onClick={() => setThumbLogOpen(false)}>
@@ -1388,7 +1453,7 @@ export function App() {
                   {batchTranscodeStatus?.status === "running" ? "Working" : "Start"}
                 </button>
                 <button
-                  className="button-secondary"
+                  className="button-danger"
                   onClick={() => void handleStopBatchTranscode()}
                   disabled={!batchTranscodeStatus?.status || batchTranscodeStatus.status !== "running"}
                 >
@@ -1397,7 +1462,7 @@ export function App() {
                 <button className="button-secondary" onClick={() => void handleCopyBatchTranscodeLog()}>
                   Copy Log
                 </button>
-                <button className="button-secondary" onClick={() => void handleClearBatchTranscodeLog()}>
+                <button className="button-danger" onClick={() => void handleClearBatchTranscodeLog()}>
                   Clear Log
                 </button>
                 <button className="button-danger" onClick={() => setBatchTranscodeOpen(false)}>

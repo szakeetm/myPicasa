@@ -67,6 +67,26 @@ pub fn refresh_takeout_index(
     *state.import_status.lock() = Some(progress.clone());
 
     let scan_started = Instant::now();
+    let (active_files_before, active_assets_before) = state.db.with_connection(|conn| {
+        use rusqlite::OptionalExtension;
+        let active_files = conn
+            .query_row(
+                "SELECT COUNT(*) FROM file_entries WHERE is_deleted = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let active_assets = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assets WHERE is_deleted = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok((active_files, active_assets))
+    })?;
     let scans = scan_roots_with_cancel(&roots, Some(&state.refresh_cancel))?;
     info!(
         "refresh_takeout_index: scanned {} files in {} ms",
@@ -167,7 +187,13 @@ pub fn refresh_takeout_index(
     progress.message = Some("ingress cleanup 2/4: pairing live photos".to_string());
     *state.import_status.lock() = Some(progress.clone());
     cancel_if_requested(state, &mut progress)?;
-    attach_live_photo_pairs(state, &scans)?;
+    let live_photo_pairs = attach_live_photo_pairs(state, &scans)?;
+    state.db.insert_log(
+        "info",
+        "import.cleanup",
+        &format!("paired {live_photo_pairs} live photo motion files"),
+        None,
+    )?;
 
     progress.message = Some("ingress cleanup 3/4: merging duplicate assets".to_string());
     *state.import_status.lock() = Some(progress.clone());
@@ -188,7 +214,14 @@ pub fn refresh_takeout_index(
         "ingress cleanup 3/4: checked 0 / {duplicate_group_count} duplicate groups, merged 0 assets"
     ));
     *state.import_status.lock() = Some(progress.clone());
-    progress.assets_updated += merge_duplicate_assets_by_hash(state, &scans, &mut progress)?;
+    let merged_duplicates = merge_duplicate_assets_by_hash(state, &scans, &mut progress)?;
+    progress.assets_updated += merged_duplicates;
+    state.db.insert_log(
+        "info",
+        "import.cleanup",
+        &format!("merged {merged_duplicates} duplicate assets"),
+        None,
+    )?;
 
     progress.message = Some(format!(
         "ingress validation 4/4: checked 0 / {} scans",
@@ -205,6 +238,54 @@ pub fn refresh_takeout_index(
         *state.import_status.lock() = Some(progress.clone());
     })?;
     cancel_if_requested(state, &mut progress)?;
+
+    let (active_files_after, active_assets_after) = state.db.with_connection(|conn| {
+        use rusqlite::OptionalExtension;
+        let active_files = conn
+            .query_row(
+                "SELECT COUNT(*) FROM file_entries WHERE is_deleted = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        let active_assets = conn
+            .query_row(
+                "SELECT COUNT(*) FROM assets WHERE is_deleted = 0",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0);
+        Ok((active_files, active_assets))
+    })?;
+    progress.files_added = (active_files_after - active_files_before
+        + i64::from(progress.files_deleted))
+    .max(0) as u32;
+    progress.assets_added = (active_assets_after - active_assets_before
+        + i64::from(progress.assets_deleted))
+    .max(0) as u32;
+    progress.files_updated =
+        active_files_after.saturating_sub(i64::from(progress.files_added)) as u32;
+    let kept_assets = active_assets_after.saturating_sub(i64::from(progress.assets_added));
+    state.db.insert_log(
+        "info",
+        "import.summary",
+        &format!(
+            "scanned={} active_files={} active_assets={} new_files={} new_assets={} kept_assets={} stale_files_removed={} stale_assets_removed={} merged_duplicates={} live_photo_pairs={}",
+            progress.files_scanned,
+            active_files_after,
+            active_assets_after,
+            progress.files_added,
+            progress.assets_added,
+            kept_assets,
+            progress.files_deleted,
+            progress.assets_deleted,
+            merged_duplicates,
+            live_photo_pairs,
+        ),
+        None,
+    )?;
 
     progress.status = "completed".to_string();
     progress.phase = "completed".to_string();
@@ -519,7 +600,8 @@ fn find_still_pair_asset_id(
 fn attach_live_photo_pairs(
     state: &AppState,
     scans: &[crate::models::FileScanRecord],
-) -> Result<(), AppError> {
+) -> Result<u32, AppError> {
+    let mut paired = 0_u32;
     for scan in scans.iter().filter(|scan| is_live_photo_video(scan)) {
         let file_id = state.db.with_connection(|conn| {
             use rusqlite::{OptionalExtension, params};
@@ -540,10 +622,11 @@ fn attach_live_photo_pairs(
             state
                 .db
                 .attach_asset_file(still_asset_id, file_id, "live_photo_video")?;
+            paired += 1;
         }
     }
 
-    Ok(())
+    Ok(paired)
 }
 
 fn merge_duplicate_assets_by_hash(

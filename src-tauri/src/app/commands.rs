@@ -2445,27 +2445,6 @@ pub fn request_thumbnails_batch(
         })
         .collect::<Vec<_>>();
 
-    if use_preview_cache {
-        let ready = items.iter().filter(|item| item.status == "ready").count();
-        let pending = items.iter().filter(|item| item.status == "pending").count();
-        let unavailable = items
-            .iter()
-            .filter(|item| item.status == "unavailable")
-            .count();
-        let _ = state.db.insert_log(
-            "info",
-            "thumbnail_batch",
-            &format!(
-                "kind=preview status=batch requested={} ready={} pending={} unavailable={}",
-                items.len(),
-                ready,
-                pending,
-                unavailable,
-            ),
-            None,
-        );
-    }
-
     Ok(items)
 }
 
