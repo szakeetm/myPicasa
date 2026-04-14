@@ -61,8 +61,18 @@ export const api = {
     invoke<ViewerMediaStatus>("load_viewer_video", { assetId, preferOriginal }),
   loadLivePhotoMotion: (assetId: number, preferOriginal?: boolean) =>
     invoke<ViewerMediaStatus>("load_live_photo_motion", { assetId, preferOriginal }),
-  requestThumbnailsBatch: (assetIds: number[], size: number, preferPreviewCache = false) =>
-    invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", { assetIds, size, preferPreviewCache }),
+  requestThumbnailsBatch: (
+    assetIds: number[],
+    size: number,
+    preferPreviewCache = false,
+    checkCacheOnly = false,
+  ) =>
+    invoke<ThumbnailBatchItem[]>("request_thumbnails_batch", {
+      assetIds,
+      size,
+      preferPreviewCache,
+      checkCacheOnly,
+    }),
   requestThumbnail: (assetId: number, size: number, preferPreviewCache = false) =>
     invoke<string | null>("request_thumbnail", { assetId, size, preferPreviewCache }),
   getBatchThumbnailGenerationStatus: () =>

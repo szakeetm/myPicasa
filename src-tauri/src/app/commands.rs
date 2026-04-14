@@ -58,6 +58,13 @@ fn thumbnail_cache_key(asset_id: i64, size: u32, use_preview_cache: bool) -> Str
     }
 }
 
+fn effective_preview_size_for_asset(state: &AppState, asset_id: i64, requested_size: u32) -> Option<u32> {
+    let detail = query_service::get_asset_detail(&state.db, asset_id).ok()?;
+    let width = u32::try_from(detail.width?).ok()?;
+    let height = u32::try_from(detail.height?).ok()?;
+    Some(requested_size.min(width.min(height).max(1)))
+}
+
 fn map_error<E: std::fmt::Display>(error: E) -> InvokeError {
     InvokeError::from(error.to_string())
 }
@@ -2081,10 +2088,12 @@ pub fn request_thumbnails_batch(
     asset_ids: Vec<i64>,
     size: u32,
     prefer_preview_cache: Option<bool>,
+    check_cache_only: Option<bool>,
     state: State<AppState>,
 ) -> CommandResult<Vec<ThumbnailBatchItem>> {
     let generation = state.thumbnail_generation.load(Ordering::SeqCst);
     let use_preview_cache = prefer_preview_cache.unwrap_or(false);
+    let check_cache_only = check_cache_only.unwrap_or(false);
     let cache = if use_preview_cache {
         state.preview_cache.clone()
     } else {
@@ -2096,24 +2105,43 @@ pub fn request_thumbnails_batch(
         .map(|asset_id| {
             let key = thumbnail_cache_key(asset_id, size, use_preview_cache);
 
-            let cached_path = {
-                let mut cache_guard = cache.lock();
-                cache_guard
-                    .get(&key)
-                    .map(|bytes| (bytes.len(), cache_guard.cached_path(&key)))
-            };
-            if let Some((bytes_len, cached_path)) = cached_path {
-                preview_debug_log(format!(
-                    "thumbnail_batch_item asset_id={} size={} status=ready source=cache bytes={}",
-                    asset_id,
-                    size,
-                    bytes_len
-                ));
-                return ThumbnailBatchItem {
-                    asset_id,
-                    status: "ready".to_string(),
-                    data_url: cached_path.map(|path| path.to_string_lossy().to_string()),
+            if use_preview_cache {
+                let cached_path = {
+                    let cache_guard = cache.lock();
+                    cache_guard.cached_path(&key)
                 };
+                if let Some(cached_path) = cached_path {
+                    preview_debug_log(format!(
+                        "thumbnail_batch_item asset_id={} size={} status=ready source=cache_path_only",
+                        asset_id,
+                        size
+                    ));
+                    return ThumbnailBatchItem {
+                        asset_id,
+                        status: "ready".to_string(),
+                        data_url: Some(cached_path.to_string_lossy().to_string()),
+                    };
+                }
+            } else {
+                let cached_path = {
+                    let mut cache_guard = cache.lock();
+                    cache_guard
+                        .get(&key)
+                        .map(|bytes| (bytes.len(), cache_guard.cached_path(&key)))
+                };
+                if let Some((bytes_len, cached_path)) = cached_path {
+                    preview_debug_log(format!(
+                        "thumbnail_batch_item asset_id={} size={} status=ready source=cache bytes={}",
+                        asset_id,
+                        size,
+                        bytes_len
+                    ));
+                    return ThumbnailBatchItem {
+                        asset_id,
+                        status: "ready".to_string(),
+                        data_url: cached_path.map(|path| path.to_string_lossy().to_string()),
+                    };
+                }
             }
 
             if state.failed_thumbnails.lock().contains(&key) {
@@ -2124,6 +2152,75 @@ pub fn request_thumbnails_batch(
                 return ThumbnailBatchItem {
                     asset_id,
                     status: "unavailable".to_string(),
+                    data_url: None,
+                };
+            }
+
+            if check_cache_only {
+                if state.inflight_thumbnails.lock().contains(&key) {
+                    preview_debug_log(format!(
+                        "thumbnail_batch_item asset_id={} size={} status=pending source=inflight_check_only",
+                        asset_id, size
+                    ));
+                    return ThumbnailBatchItem {
+                        asset_id,
+                        status: "pending".to_string(),
+                        data_url: None,
+                    };
+                }
+
+                if use_preview_cache {
+                    let effective_target_size =
+                        effective_preview_size_for_asset(state.inner(), asset_id, size)
+                            .unwrap_or(size);
+                    let has_equivalent_variant = {
+                        let cache_guard = cache.lock();
+                        preview_cache_replacement_keys(asset_id, size)
+                            .into_iter()
+                            .filter_map(|replacement_key| {
+                                let alt_size = replacement_key.rsplit(':').next()?.parse::<u32>().ok()?;
+                                cache_guard.cached_path(&replacement_key).is_some().then_some(alt_size)
+                            })
+                            .any(|alt_size| alt_size >= effective_target_size)
+                    };
+                    if has_equivalent_variant {
+                        preview_debug_log(format!(
+                            "thumbnail_batch_item asset_id={} size={} status=ready source=equivalent_preview_variant effective_target_size={}",
+                            asset_id, size, effective_target_size
+                        ));
+                        return ThumbnailBatchItem {
+                            asset_id,
+                            status: "ready".to_string(),
+                            data_url: None,
+                        };
+                    }
+
+                    let has_stale_variant = {
+                        let cache_guard = cache.lock();
+                        preview_cache_replacement_keys(asset_id, size)
+                            .into_iter()
+                            .any(|replacement_key| cache_guard.cached_path(&replacement_key).is_some())
+                    };
+                    if has_stale_variant {
+                        preview_debug_log(format!(
+                            "thumbnail_batch_item asset_id={} size={} status=stale source=alternate_preview_variant",
+                            asset_id, size
+                        ));
+                        return ThumbnailBatchItem {
+                            asset_id,
+                            status: "stale".to_string(),
+                            data_url: None,
+                        };
+                    }
+                }
+
+                preview_debug_log(format!(
+                    "thumbnail_batch_item asset_id={} size={} status=missing source=cache_check_only",
+                    asset_id, size
+                ));
+                return ThumbnailBatchItem {
+                    asset_id,
+                    status: "missing".to_string(),
                     data_url: None,
                 };
             }

@@ -141,7 +141,7 @@ export type LogEntry = {
 
 export type ThumbnailBatchItem = {
   asset_id: number;
-  status: "ready" | "pending" | "unavailable";
+  status: "ready" | "pending" | "unavailable" | "missing" | "stale";
   data_url?: string | null;
 };
 

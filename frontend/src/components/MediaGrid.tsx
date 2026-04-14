@@ -9,6 +9,8 @@ import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from ".
 const GRID_TILE_WIDTH = 210;
 const GRID_GAP = 6;
 const GRID_PADDING = 6;
+const PREVIEW_PROBE_BATCH_SIZE = 96;
+const PREVIEW_ENQUEUE_BATCH_SIZE = 24;
 
 type MediaGridProps = {
   assets: AssetListItem[];
@@ -53,6 +55,8 @@ type ThumbnailState = {
   status: "pending" | "ready" | "unavailable";
   src?: string | null;
   previewStatus?: "pending" | "ready" | "unavailable";
+  thumbChecked?: boolean;
+  previewChecked?: boolean;
 };
 
 function columnCount(width: number) {
@@ -61,6 +65,9 @@ function columnCount(width: number) {
 }
 
 function thumbStatusLabel(asset: AssetListItem, state?: ThumbnailState) {
+  if (!state?.thumbChecked) {
+    return asset.media_kind === "video" ? "Video thumb not checked yet" : "Thumb not checked yet";
+  }
   if (state?.status === "unavailable") {
     return asset.media_kind === "video" ? "Video thumb unavailable" : "Thumb unavailable";
   }
@@ -104,7 +111,8 @@ export function MediaGrid({
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
   const requestInFlightRef = useRef(false);
-  const previewRequestInFlightRef = useRef(false);
+  const previewProbeInFlightRef = useRef(false);
+  const previewGenerateInFlightRef = useRef(false);
   const lastBatchLogRef = useRef<{
     signature: string;
     at: number;
@@ -170,7 +178,8 @@ export function MediaGrid({
     setThumbs({});
     setVisibleIds([]);
     requestInFlightRef.current = false;
-    previewRequestInFlightRef.current = false;
+    previewProbeInFlightRef.current = false;
+    previewGenerateInFlightRef.current = false;
     lastBatchLogRef.current = { signature: "", at: 0 };
     lastProgressLogRef.current = {
       thumbsCompleted: -1,
@@ -274,6 +283,7 @@ export function MediaGrid({
           next[asset.id] = {
             ...existing,
             previewStatus: "ready",
+            previewChecked: true,
           };
           changed = true;
         }
@@ -287,9 +297,15 @@ export function MediaGrid({
     let unavailable = 0;
     let pending = 0;
     let missing = 0;
+    let unknown = 0;
 
     for (const asset of assets) {
-      const status = thumbsRef.current[asset.id]?.status;
+      const state = thumbsRef.current[asset.id];
+      if (!state?.thumbChecked) {
+        unknown += 1;
+        continue;
+      }
+      const status = state.status;
       if (status === "ready") {
         ready += 1;
       } else if (status === "unavailable") {
@@ -301,7 +317,7 @@ export function MediaGrid({
       }
     }
 
-    return { ready, unavailable, pending, missing };
+    return { ready, unavailable, pending, missing, unknown };
   }
 
   function summarizePreviewStates() {
@@ -310,9 +326,14 @@ export function MediaGrid({
     let pending = 0;
     let waitingForThumb = 0;
     let missing = 0;
+    let unknown = 0;
 
     for (const asset of assets) {
       const state = thumbsRef.current[asset.id];
+      if (!state?.previewChecked) {
+        unknown += 1;
+        continue;
+      }
       const previewStatus = state?.previewStatus;
       if (previewStatus === "ready") {
         ready += 1;
@@ -327,7 +348,7 @@ export function MediaGrid({
       }
     }
 
-    return { ready, unavailable, pending, waitingForThumb, missing };
+    return { ready, unavailable, pending, waitingForThumb, missing, unknown };
   }
 
   function logIdleSnapshot(kind: "thumb" | "preview", reason: string) {
@@ -337,7 +358,7 @@ export function MediaGrid({
 
     const thumbSummary = summarizeThumbStates();
     const previewSummary = summarizePreviewStates();
-    const signature = `${reason}|t:${thumbSummary.ready}/${thumbSummary.unavailable}/${thumbSummary.pending}/${thumbSummary.missing}|p:${previewSummary.ready}/${previewSummary.unavailable}/${previewSummary.pending}/${previewSummary.waitingForThumb}/${previewSummary.missing}|v:${visibleIds.length}|a:${assets.length}`;
+    const signature = `${reason}|t:${thumbSummary.ready}/${thumbSummary.unavailable}/${thumbSummary.pending}/${thumbSummary.missing}/${thumbSummary.unknown}|p:${previewSummary.ready}/${previewSummary.unavailable}/${previewSummary.pending}/${previewSummary.waitingForThumb}/${previewSummary.missing}/${previewSummary.unknown}|v:${visibleIds.length}|a:${assets.length}`;
     const now = Date.now();
     const previousSignature =
       kind === "thumb" ? lastIdleLogRef.current.thumbSignature : lastIdleLogRef.current.previewSignature;
@@ -356,7 +377,7 @@ export function MediaGrid({
 
     void logClient(
       "grid",
-      `${kind} preload idle reason=${reason} visible=${visibleIds.length}/${assets.length} thumbs ready=${thumbSummary.ready} unavailable=${thumbSummary.unavailable} pending=${thumbSummary.pending} missing=${thumbSummary.missing} previews ready=${previewSummary.ready} unavailable=${previewSummary.unavailable} pending=${previewSummary.pending} waiting_for_thumb=${previewSummary.waitingForThumb} missing=${previewSummary.missing}`,
+      `${kind} preload idle reason=${reason} visible=${visibleIds.length}/${assets.length} thumbs ready=${thumbSummary.ready} unavailable=${thumbSummary.unavailable} pending=${thumbSummary.pending} missing=${thumbSummary.missing} unknown=${thumbSummary.unknown} previews ready=${previewSummary.ready} unavailable=${previewSummary.unavailable} pending=${previewSummary.pending} waiting_for_thumb=${previewSummary.waitingForThumb} missing=${previewSummary.missing} unknown=${previewSummary.unknown}`,
     );
   }
 
@@ -364,26 +385,86 @@ export function MediaGrid({
     let disposed = false;
 
     async function processPreviewPass() {
-      if (previewRequestInFlightRef.current) {
-        logIdleSnapshot("preview", "request_in_flight");
-        return;
-      }
-
-      const visiblePreviewIds = assets
+      const previewEligibleIds = assets
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
           return (
             asset.media_kind !== "video" &&
-            state?.status === "ready" &&
-            (state.previewStatus === undefined || state.previewStatus === "pending")
+            state?.status === "ready"
           );
         })
-        .slice(0, 4)
         .map((asset) => asset.id);
 
-      const targetIds = visiblePreviewIds;
+      const probeIds = previewEligibleIds
+        .filter((assetId) => {
+          const state = thumbsRef.current[assetId];
+          return !state?.previewChecked || state.previewStatus === "pending";
+        })
+        .slice(0, PREVIEW_PROBE_BATCH_SIZE);
+
+      let probedMissingIds: number[] = [];
+
+      if (probeIds.length > 0 && !previewProbeInFlightRef.current) {
+        previewProbeInFlightRef.current = true;
+        try {
+          const probeBatch = await api.requestThumbnailsBatch(probeIds, viewerPreviewSize, true, true);
+          if (disposed) {
+            return;
+          }
+
+          probedMissingIds = probeBatch
+            .filter((item) => item.status === "missing" || item.status === "stale")
+            .map((item) => item.asset_id);
+
+          startTransition(() => {
+            setThumbs((current) => {
+              const next = { ...current };
+              for (const item of probeBatch) {
+                next[item.asset_id] = {
+                  ...next[item.asset_id],
+                  previewChecked: true,
+                  previewStatus:
+                    item.status === "ready"
+                      ? "ready"
+                      : item.status === "unavailable"
+                        ? "unavailable"
+                        : item.status === "pending" || item.status === "stale"
+                          ? "pending"
+                          : undefined,
+                };
+              }
+              return next;
+            });
+          });
+        } catch (error) {
+          if (!disposed) {
+            await logClient("grid", `viewer preview cache probe failed requested=${probeIds.length}: ${String(error)}`, "error");
+          }
+          return;
+        } finally {
+          previewProbeInFlightRef.current = false;
+        }
+      } else if (probeIds.length > 0) {
+        logIdleSnapshot("preview", "probe_in_flight");
+      }
+
+      const visiblePreviewIds = previewEligibleIds
+        .filter((assetId) => {
+          const state = thumbsRef.current[assetId];
+          return (
+            state?.previewChecked &&
+            (state.previewStatus === undefined || state.previewStatus === "pending")
+          );
+        });
+
+      const targetIds = [...new Set([...probedMissingIds, ...visiblePreviewIds])].slice(0, PREVIEW_ENQUEUE_BATCH_SIZE);
       if (targetIds.length === 0) {
         logIdleSnapshot("preview", "no_preview_targets");
+        return;
+      }
+
+      if (previewGenerateInFlightRef.current) {
+        logIdleSnapshot("preview", "generation_in_flight");
         return;
       }
 
@@ -399,13 +480,14 @@ export function MediaGrid({
             next[targetId] = {
               ...next[targetId],
               previewStatus: "pending",
+              previewChecked: true,
             };
           }
           return next;
         });
       });
 
-      previewRequestInFlightRef.current = true;
+      previewGenerateInFlightRef.current = true;
       try {
         const requestStarted = performance.now();
         const batch = await api.requestThumbnailsBatch(targetIds, viewerPreviewSize, true);
@@ -425,6 +507,7 @@ export function MediaGrid({
                     : item.status === "unavailable"
                       ? "unavailable"
                       : "pending",
+                previewChecked: true,
               };
             }
             return next;
@@ -449,6 +532,7 @@ export function MediaGrid({
               next[targetId] = {
                 ...next[targetId],
                 previewStatus: undefined,
+                previewChecked: false,
               };
             }
             return next;
@@ -456,13 +540,13 @@ export function MediaGrid({
         });
         await logClient("grid", `viewer preview batch failed requested=${targetIds.length}: ${String(error)}`, "error");
       } finally {
-        previewRequestInFlightRef.current = false;
+        previewGenerateInFlightRef.current = false;
       }
     }
     void processPreviewPass();
     const handle = window.setInterval(() => {
       void processPreviewPass();
-    }, thumbnailPreload?.active ? 140 : 320);
+    }, thumbnailPreload?.active ? 120 : 180);
 
     return () => {
       disposed = true;
@@ -685,7 +769,13 @@ export function MediaGrid({
           const next = { ...current };
           for (const id of requestIds) {
             if (!next[id]) {
-              next[id] = { status: "pending" };
+              next[id] = { status: "pending", thumbChecked: true };
+            } else {
+              next[id] = {
+                ...next[id],
+                status: "pending",
+                thumbChecked: true,
+              };
             }
           }
           return next;
@@ -730,15 +820,23 @@ export function MediaGrid({
                   ...next[item.asset_id],
                   status: "ready",
                   src: materializeImageSrc(item.data_url) ?? null,
+                  thumbChecked: true,
                 };
               } else if (item.status === "unavailable") {
                 next[item.asset_id] = {
                   ...next[item.asset_id],
                   status: "unavailable",
                   src: null,
+                  thumbChecked: true,
                 };
               } else if (!next[item.asset_id]) {
-                next[item.asset_id] = { status: "pending" };
+                next[item.asset_id] = { status: "pending", thumbChecked: true };
+              } else {
+                next[item.asset_id] = {
+                  ...next[item.asset_id],
+                  status: "pending",
+                  thumbChecked: true,
+                };
               }
             }
             return next;
@@ -791,7 +889,7 @@ export function MediaGrid({
     const previewsTotal = assets.length;
     const previewsCompleted = assets.filter((asset) => {
       const state = thumbs[asset.id];
-      return state?.previewStatus === "ready" || state?.previewStatus === "unavailable";
+      return state?.previewChecked && (state?.previewStatus === "ready" || state?.previewStatus === "unavailable");
     }).length;
 
     const previous = lastProgressLogRef.current;
@@ -886,6 +984,13 @@ export function MediaGrid({
               key={asset.id}
               className={[
                 "tile",
+                thumbs[asset.id]?.previewChecked ? "preview-state-known" : "preview-state-unknown",
+                thumbs[asset.id]?.previewStatus === "pending" ? "preview-state-pending" : "",
+                thumbs[asset.id]?.previewChecked &&
+                thumbs[asset.id]?.previewStatus !== "ready" &&
+                thumbs[asset.id]?.previewStatus !== "pending"
+                  ? "preview-state-known-missing"
+                  : "",
                 thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
                 asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
                   ? "video-ready-native"
@@ -909,6 +1014,9 @@ export function MediaGrid({
               <div
                 className={[
                   "thumb",
+                  thumbs[asset.id]?.thumbChecked ? "thumb-state-known" : "thumb-state-unknown",
+                  thumbs[asset.id]?.previewChecked ? "preview-state-known" : "preview-state-unknown",
+                  thumbs[asset.id]?.previewStatus === "ready" ? "has-viewer-preview" : "",
                   asset.media_kind === "video" && videoPlaybackHints[asset.id] === "native"
                     ? "video-ready-native"
                     : "",

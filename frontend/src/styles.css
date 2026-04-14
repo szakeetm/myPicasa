@@ -414,6 +414,21 @@ button:disabled:hover {
   border-color: rgba(46, 128, 74, 0.32);
 }
 
+.tile.preview-state-unknown {
+  background: rgba(236, 234, 230, 0.96);
+  border-color: rgba(111, 96, 78, 0.12);
+}
+
+.tile.preview-state-known-missing {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(111, 96, 78, 0.08);
+}
+
+.tile.preview-state-pending {
+  background: rgba(233, 238, 246, 0.95);
+  border-color: rgba(116, 137, 170, 0.22);
+}
+
 .tile.video-ready-native {
   background: rgba(214, 239, 224, 0.96);
   border-color: rgba(36, 133, 86, 0.34);
@@ -446,6 +461,13 @@ button:disabled:hover {
   display: grid;
   place-items: center;
   color: var(--text-soft);
+}
+
+.thumb.thumb-state-unknown,
+.thumb.preview-state-unknown {
+  background:
+    linear-gradient(135deg, rgba(138, 132, 124, 0.18), rgba(230, 227, 222, 0.24)),
+    rgba(116, 107, 94, 0.1);
 }
 
 .thumb-placeholder {
