@@ -94,11 +94,11 @@ export const api = {
     invoke<BatchViewerTranscodeStatus>("stop_batch_viewer_transcode"),
   clearThumbnailCache: () => invoke<void>("clear_thumbnail_cache"),
   clearViewerRenderCache: () => invoke<void>("clear_viewer_render_cache_command"),
-  getRecentLogs: (limit = 150) =>
+  getRecentLogs: (limit = 10_000) =>
     invoke<LogEntry[]>("get_recent_logs", { limit }),
-  getThumbGenerationLogs: (limit = 400) =>
+  getThumbGenerationLogs: (limit = 10_000) =>
     invoke<LogEntry[]>("get_thumb_generation_logs", { limit }),
-  getBatchViewerTranscodeLogs: (limit = 400) =>
+  getBatchViewerTranscodeLogs: (limit = 10_000) =>
     invoke<LogEntry[]>("get_batch_viewer_transcode_logs", { limit }),
   clearThumbGenerationLogs: () => invoke<void>("clear_thumb_generation_logs"),
   clearBatchViewerTranscodeLogs: () => invoke<void>("clear_batch_viewer_transcode_logs"),

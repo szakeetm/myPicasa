@@ -590,7 +590,7 @@ impl DatabaseQueries for super::Database {
                  LEFT JOIN assets a ON a.id = aa.asset_id AND a.is_deleted = 0
                  LEFT JOIN file_entries f ON f.id = a.primary_file_id
                  GROUP BY al.id, al.name, al.source_path
-                 ORDER BY MIN(COALESCE(a.taken_at_utc, f.mtime_utc)) DESC, al.name COLLATE NOCASE",
+                 ORDER BY MIN(COALESCE(a.taken_at_utc, f.mtime_utc)) ASC, al.name COLLATE NOCASE",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(AlbumSummary {

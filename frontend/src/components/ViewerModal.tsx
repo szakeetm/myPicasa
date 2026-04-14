@@ -969,6 +969,9 @@ function inferVideoMimeType(src?: string | null) {
       return "video/mp2t";
     case "webm":
       return "video/webm";
+    case "mpg":
+    case "mpeg":
+      return "video/mpeg";
     case "m4v":
     case "mp4":
       return "video/mp4";

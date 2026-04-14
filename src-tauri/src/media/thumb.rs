@@ -775,7 +775,7 @@ fn is_video_path(path: &Path) -> bool {
 }
 
 fn is_video_extension(extension: &str) -> bool {
-    matches!(extension, "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm")
+    matches!(extension, "mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm" | "mpg" | "mpeg")
 }
 
 fn load_image_with_sips(

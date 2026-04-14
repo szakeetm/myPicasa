@@ -47,14 +47,14 @@ button {
 
 .app-shell {
   display: grid;
-  grid-template-columns: 320px 1fr 360px;
+  grid-template-columns: 380px 1fr 360px;
   height: 100%;
   gap: 16px;
   padding: 16px;
 }
 
 .app-shell.debug-collapsed {
-  grid-template-columns: 320px 1fr 64px;
+  grid-template-columns: 380px 1fr 64px;
 }
 
 .panel {
@@ -274,11 +274,29 @@ button:disabled:hover {
   position: absolute;
   inset: -3px;
   border-radius: inherit;
-  border: 2px solid transparent;
-  border-top-color: currentColor;
-  border-right-color: currentColor;
-  animation: button-working-spin 850ms linear infinite;
+  border: 2px solid color-mix(in srgb, currentColor 24%, transparent);
   pointer-events: none;
+}
+
+.button-working::before {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  left: -5px;
+  top: 50%;
+  border-radius: 999px;
+  background: currentColor;
+  transform: translateY(-50%);
+  box-shadow:
+    10px 0 0 color-mix(in srgb, currentColor 72%, transparent),
+    18px 0 0 color-mix(in srgb, currentColor 54%, transparent),
+    26px 0 0 color-mix(in srgb, currentColor 36%, transparent),
+    34px 0 0 color-mix(in srgb, currentColor 20%, transparent),
+    42px 0 0 color-mix(in srgb, currentColor 10%, transparent);
+  animation: button-working-racetrack 1350ms linear infinite;
+  pointer-events: none;
+  z-index: 1;
 }
 
 .sidebar-section,
@@ -319,6 +337,11 @@ button:disabled:hover {
   margin-bottom: 4px;
 }
 
+.album-item {
+  width: 100%;
+  text-align: left;
+}
+
 .album-item.active {
   border-color: var(--accent);
   background: rgba(33, 80, 186, 0.08);
@@ -326,10 +349,15 @@ button:disabled:hover {
 
 .album-title {
   font-weight: 700;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .album-path {
   font-size: 0.9em;
+  display: block;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .content-panel {
@@ -689,8 +717,8 @@ button:disabled:hover {
   gap: 14px;
   padding: 3px 0;
   color: rgba(255, 248, 239, 0.94);
-  white-space: pre-wrap;
-  word-break: break-word;
+  white-space: nowrap;
+  word-break: normal;
 }
 
 .thumb-log-line-detailed {
@@ -707,16 +735,22 @@ button:disabled:hover {
   min-width: 0;
   display: grid;
   gap: 8px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .thumb-log-main-message {
   min-width: 0;
+  white-space: nowrap;
 }
 
 .thumb-log-metrics {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 6px;
+  overflow-x: auto;
+  overflow-y: hidden;
 }
 
 .thumb-log-metric-chip {
@@ -858,19 +892,115 @@ button:disabled:hover {
   color: var(--text-soft);
 }
 
-@keyframes button-working-spin {
-  to {
-    transform: rotate(1turn);
+@keyframes button-working-racetrack {
+  0% {
+    left: -5px;
+    top: 50%;
+    transform: translateY(-50%);
+    box-shadow:
+      0 10px 0 color-mix(in srgb, currentColor 72%, transparent),
+      0 18px 0 color-mix(in srgb, currentColor 54%, transparent),
+      0 26px 0 color-mix(in srgb, currentColor 36%, transparent),
+      0 34px 0 color-mix(in srgb, currentColor 20%, transparent),
+      0 42px 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  12.5% {
+    left: 0;
+    top: 0;
+    transform: translate(-30%, -30%);
+    box-shadow:
+      0 10px 0 color-mix(in srgb, currentColor 72%, transparent),
+      0 18px 0 color-mix(in srgb, currentColor 54%, transparent),
+      8px 8px 0 color-mix(in srgb, currentColor 36%, transparent),
+      14px 14px 0 color-mix(in srgb, currentColor 20%, transparent),
+      20px 20px 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  25% {
+    left: 50%;
+    top: -5px;
+    transform: translateX(-50%);
+    box-shadow:
+      -10px 0 0 color-mix(in srgb, currentColor 72%, transparent),
+      -18px 0 0 color-mix(in srgb, currentColor 54%, transparent),
+      -26px 0 0 color-mix(in srgb, currentColor 36%, transparent),
+      -34px 0 0 color-mix(in srgb, currentColor 20%, transparent),
+      -42px 0 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  37.5% {
+    left: 100%;
+    top: 0;
+    transform: translate(-70%, -30%);
+    box-shadow:
+      -8px 8px 0 color-mix(in srgb, currentColor 72%, transparent),
+      -14px 14px 0 color-mix(in srgb, currentColor 54%, transparent),
+      -20px 20px 0 color-mix(in srgb, currentColor 36%, transparent),
+      -12px 0 0 color-mix(in srgb, currentColor 20%, transparent),
+      -20px 0 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  50% {
+    left: calc(100% - 3px);
+    top: 50%;
+    transform: translateY(-50%);
+    box-shadow:
+      0 -10px 0 color-mix(in srgb, currentColor 72%, transparent),
+      0 -18px 0 color-mix(in srgb, currentColor 54%, transparent),
+      0 -26px 0 color-mix(in srgb, currentColor 36%, transparent),
+      0 -34px 0 color-mix(in srgb, currentColor 20%, transparent),
+      0 -42px 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  62.5% {
+    left: 100%;
+    top: 100%;
+    transform: translate(-70%, -70%);
+    box-shadow:
+      0 -10px 0 color-mix(in srgb, currentColor 72%, transparent),
+      0 -18px 0 color-mix(in srgb, currentColor 54%, transparent),
+      -8px -8px 0 color-mix(in srgb, currentColor 36%, transparent),
+      -14px -14px 0 color-mix(in srgb, currentColor 20%, transparent),
+      -20px -20px 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  75% {
+    left: 50%;
+    top: calc(100% - 3px);
+    transform: translateX(-50%);
+    box-shadow:
+      10px 0 0 color-mix(in srgb, currentColor 72%, transparent),
+      18px 0 0 color-mix(in srgb, currentColor 54%, transparent),
+      26px 0 0 color-mix(in srgb, currentColor 36%, transparent),
+      34px 0 0 color-mix(in srgb, currentColor 20%, transparent),
+      42px 0 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  87.5% {
+    left: 0;
+    top: 100%;
+    transform: translate(-30%, -70%);
+    box-shadow:
+      8px -8px 0 color-mix(in srgb, currentColor 72%, transparent),
+      14px -14px 0 color-mix(in srgb, currentColor 54%, transparent),
+      20px -20px 0 color-mix(in srgb, currentColor 36%, transparent),
+      12px 0 0 color-mix(in srgb, currentColor 20%, transparent),
+      20px 0 0 color-mix(in srgb, currentColor 10%, transparent);
+  }
+  100% {
+    left: -5px;
+    top: 50%;
+    transform: translateY(-50%);
+    box-shadow:
+      0 10px 0 color-mix(in srgb, currentColor 72%, transparent),
+      0 18px 0 color-mix(in srgb, currentColor 54%, transparent),
+      0 26px 0 color-mix(in srgb, currentColor 36%, transparent),
+      0 34px 0 color-mix(in srgb, currentColor 20%, transparent),
+      0 42px 0 color-mix(in srgb, currentColor 10%, transparent);
   }
 }
 
 @media (max-width: 1320px) {
   .app-shell {
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 340px 1fr;
   }
 
   .app-shell.debug-collapsed {
-    grid-template-columns: 280px 1fr;
+    grid-template-columns: 340px 1fr;
   }
 
   .debug-panel {

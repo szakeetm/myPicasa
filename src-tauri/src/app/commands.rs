@@ -1053,8 +1053,16 @@ fn collect_all_media_assets(state: &AppState) -> Result<Vec<BatchThumbnailAsset>
                 "SELECT a.id, a.media_kind, f.path, f.file_size
                  FROM assets a
                  JOIN file_entries f ON f.id = a.primary_file_id
-                 WHERE a.is_deleted = 0 AND f.is_deleted = 0
-                 ORDER BY a.taken_at_utc, a.id",
+                 WHERE a.is_deleted = 0
+                   AND f.is_deleted = 0
+                   AND a.media_kind IN ('photo', 'video', 'live_photo')
+                   AND NOT EXISTS (
+                     SELECT 1
+                     FROM asset_files af_hidden
+                     WHERE af_hidden.file_id = a.primary_file_id
+                       AND af_hidden.role = 'live_photo_video'
+                   )
+                 ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
             )?;
             let rows = stmt
                 .query_map([], |row| {
@@ -1139,6 +1147,7 @@ fn video_mime_type(path: &std::path::Path) -> &'static str {
         .as_deref()
     {
         Some("mov") => "video/quicktime",
+        Some("mpg" | "mpeg") => "video/mpeg",
         Some("webm") => "video/webm",
         _ => "video/mp4",
     }
@@ -2832,7 +2841,7 @@ pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResul
 
 #[tauri::command]
 pub fn get_recent_logs(limit: Option<u32>, state: State<AppState>) -> CommandResult<Vec<LogEntry>> {
-    query_service::get_recent_logs(&state.db, limit.unwrap_or(300)).map_err(map_error)
+    query_service::get_recent_logs(&state.db, limit.unwrap_or(10_000)).map_err(map_error)
 }
 
 #[tauri::command]
@@ -2840,7 +2849,7 @@ pub fn get_thumb_generation_logs(
     limit: Option<u32>,
     state: State<AppState>,
 ) -> CommandResult<Vec<LogEntry>> {
-    query_service::get_logs_by_scope(&state.db, &["thumb_gen"], limit.unwrap_or(400))
+    query_service::get_logs_by_scope(&state.db, &["thumb_gen"], limit.unwrap_or(10_000))
         .map_err(map_error)
 }
 
@@ -2849,7 +2858,7 @@ pub fn get_batch_viewer_transcode_logs(
     limit: Option<u32>,
     state: State<AppState>,
 ) -> CommandResult<Vec<LogEntry>> {
-    query_service::get_logs_by_scope(&state.db, &["batch_viewer_transcode"], limit.unwrap_or(400))
+    query_service::get_logs_by_scope(&state.db, &["batch_viewer_transcode"], limit.unwrap_or(10_000))
         .map_err(map_error)
 }
 

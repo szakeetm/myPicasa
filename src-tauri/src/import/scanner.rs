@@ -133,7 +133,7 @@ pub fn scan_roots_with_cancel(
 fn classify(extension: &Option<String>) -> &'static str {
     match extension.as_deref() {
         Some("jpg" | "jpeg" | "png" | "webp" | "heic" | "heif" | "gif") => "photo",
-        Some("mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm") => "video",
+        Some("mov" | "mp4" | "m4v" | "avi" | "mkv" | "webm" | "mpg" | "mpeg") => "video",
         Some("json") => "json",
         _ => "other",
     }
