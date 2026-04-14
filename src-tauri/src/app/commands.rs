@@ -8,14 +8,17 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use tauri::{State, generate_handler, ipc::InvokeError};
+use tauri::{AppHandle, State, generate_handler, ipc::InvokeError};
 use tracing::{error, info};
 use walkdir::WalkDir;
 
 use crate::{
-    app::state::{
+    app::{
+        state::{
         AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
         ViewerTranscodeState, preview_cache_replacement_keys,
+        },
+        sync_asset_protocol_scope,
     },
     db::DatabaseQueries,
     import::refresher::refresh_takeout_index,
@@ -447,9 +450,12 @@ pub fn get_app_settings(state: State<AppState>) -> CommandResult<AppSettings> {
 #[tauri::command]
 pub fn update_app_settings(
     settings: AppSettings,
+    app: AppHandle,
     state: State<AppState>,
 ) -> CommandResult<AppSettings> {
-    state.update_app_settings(settings).map_err(map_error)
+    let updated = state.update_app_settings(settings).map_err(map_error)?;
+    sync_asset_protocol_scope(&app, state.inner()).map_err(map_error)?;
+    Ok(updated)
 }
 
 #[tauri::command]
@@ -524,6 +530,7 @@ pub fn import_app_backup(
     backup_dir: String,
     takeout_roots: Vec<String>,
     cache_storage_dir: Option<String>,
+    app: AppHandle,
     state: State<AppState>,
 ) -> CommandResult<AppBackupSummary> {
     ensure_cache_storage_change_allowed(state.inner())?;
@@ -553,6 +560,7 @@ pub fn import_app_backup(
     let restored_settings = state
         .apply_app_settings(restored_settings, false)
         .map_err(map_error)?;
+    sync_asset_protocol_scope(&app, state.inner()).map_err(map_error)?;
 
     state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
     state.inflight_thumbnails.lock().clear();
@@ -825,6 +833,7 @@ pub fn cancel_cache_storage_migration(
 pub fn start_cache_storage_migration(
     cache_storage_dir: Option<String>,
     copy_existing: bool,
+    app: AppHandle,
     state: State<AppState>,
 ) -> CommandResult<CacheStorageMigrationStatus> {
     ensure_cache_storage_change_allowed(state.inner())?;
@@ -857,6 +866,7 @@ pub fn start_cache_storage_migration(
         let applied = state
             .apply_app_settings(next_settings, false)
             .map_err(map_error)?;
+        sync_asset_protocol_scope(&app, state.inner()).map_err(map_error)?;
         state
             .db
             .insert_log(
@@ -920,6 +930,7 @@ pub fn start_cache_storage_migration(
 
     let state = state.inner().clone();
     let worker_state = state.clone();
+    let app_handle = app.clone();
     thread::spawn(move || {
         let copy_result = (|| -> CommandResult<()> {
             fs::create_dir_all(&destination_root).map_err(map_error)?;
@@ -958,6 +969,7 @@ pub fn start_cache_storage_migration(
             worker_state
                 .apply_app_settings(next_settings, true)
                 .map_err(map_error)?;
+            sync_asset_protocol_scope(&app_handle, &worker_state).map_err(map_error)?;
             worker_state
                 .db
                 .insert_log(

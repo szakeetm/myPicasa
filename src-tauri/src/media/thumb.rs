@@ -7,6 +7,9 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use image::{
     DynamicImage, ImageDecoder, ImageReader,
     codecs::jpeg::JpegEncoder,
@@ -38,6 +41,13 @@ pub fn thumbnail_generator_label(path: &Path) -> &'static str {
     #[cfg(target_os = "macos")]
     {
         return "sips";
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    if matches!(normalized_extension(path).as_str(), "heic" | "heif")
+        && find_command_binary("ffmpeg").is_some()
+    {
+        return "ffmpeg";
     }
 
     #[allow(unreachable_code)]
@@ -284,6 +294,8 @@ fn build_viewer_transcode_command(
         .stdout(Stdio::null())
         .stderr(Stdio::null());
 
+    configure_external_command(&mut command);
+
     Ok(command)
 }
 
@@ -379,8 +391,9 @@ pub fn probe_video_dimensions(path: &Path) -> Result<Option<(u32, u32)>, AppErro
     let Some(ffprobe) = find_command_binary("ffprobe") else {
         return Ok(None);
     };
-    let output = wait_for_output_with_timeout(
-        Command::new(ffprobe)
+    let mut command = Command::new(ffprobe);
+    configure_external_command(
+        command
             .arg("-v")
             .arg("error")
             .arg("-select_streams")
@@ -391,8 +404,10 @@ pub fn probe_video_dimensions(path: &Path) -> Result<Option<(u32, u32)>, AppErro
             .arg("csv=p=0:s=x")
             .arg(path)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?,
+            .stderr(Stdio::piped()),
+    );
+    let output = wait_for_output_with_timeout(
+        command.spawn()?,
         Duration::from_secs(5),
         "ffprobe dimension probe",
     )?;
@@ -419,18 +434,21 @@ pub fn probe_media_duration_ms(path: &Path) -> Result<Option<i64>, AppError> {
         return Ok(None);
     };
 
+    let mut command = Command::new(ffprobe);
+    configure_external_command(
+        command
+            .arg("-v")
+            .arg("error")
+            .arg("-show_entries")
+            .arg("format=duration")
+            .arg("-of")
+            .arg("default=noprint_wrappers=1:nokey=1")
+            .arg(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    );
     let output = wait_for_output_with_timeout(
-        Command::new(ffprobe)
-        .arg("-v")
-        .arg("error")
-        .arg("-show_entries")
-        .arg("format=duration")
-        .arg("-of")
-        .arg("default=noprint_wrappers=1:nokey=1")
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?,
+        command.spawn()?,
         EXTERNAL_TOOL_TIMEOUT,
         "ffprobe duration probe",
     )?;
@@ -458,20 +476,23 @@ pub fn probe_primary_video_codec(path: &Path) -> Result<Option<String>, AppError
         return Ok(None);
     };
 
+    let mut command = Command::new(ffprobe);
+    configure_external_command(
+        command
+            .arg("-v")
+            .arg("error")
+            .arg("-select_streams")
+            .arg("v:0")
+            .arg("-show_entries")
+            .arg("stream=codec_name")
+            .arg("-of")
+            .arg("default=noprint_wrappers=1:nokey=1")
+            .arg(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null()),
+    );
     let output = wait_for_output_with_timeout(
-        Command::new(ffprobe)
-        .arg("-v")
-        .arg("error")
-        .arg("-select_streams")
-        .arg("v:0")
-        .arg("-show_entries")
-        .arg("stream=codec_name")
-        .arg("-of")
-        .arg("default=noprint_wrappers=1:nokey=1")
-        .arg(path)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()?,
+        command.spawn()?,
         EXTERNAL_TOOL_TIMEOUT,
         "ffprobe codec probe",
     )?;
@@ -502,22 +523,25 @@ fn render_video_thumbnail_with_ffmpeg(
     let seek_time = probe_video_seek_seconds(path).unwrap_or(1.0).max(0.0);
     let temp_output = temp_jpeg_path(path, working_dir);
     let _ = fs::remove_file(&temp_output);
+    let mut command = Command::new(ffmpeg);
+    configure_external_command(
+        command
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-ss")
+            .arg(format!("{seek_time:.3}"))
+            .arg("-i")
+            .arg(path)
+            .arg("-frames:v")
+            .arg("1")
+            .arg("-y")
+            .arg(&temp_output)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    );
     let status = wait_for_status_with_timeout(
-        Command::new(ffmpeg)
-        .arg("-hide_banner")
-        .arg("-loglevel")
-        .arg("error")
-        .arg("-ss")
-        .arg(format!("{seek_time:.3}"))
-        .arg("-i")
-        .arg(path)
-        .arg("-frames:v")
-        .arg("1")
-        .arg("-y")
-        .arg(&temp_output)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()?,
+        command.spawn()?,
         VIDEO_THUMBNAIL_TIMEOUT,
         "ffmpeg thumbnail render",
     )?;
@@ -624,6 +648,10 @@ fn find_command_binary(name: &str) -> Option<PathBuf> {
         for path in std::env::split_paths(&paths) {
             let candidate = path.join(name);
             if candidate.is_file() {
+                #[cfg(target_os = "windows")]
+                if let Some(resolved) = resolve_windows_command_candidate(&candidate, name) {
+                    return Some(resolved);
+                }
                 return Some(candidate);
             }
 
@@ -631,12 +659,81 @@ fn find_command_binary(name: &str) -> Option<PathBuf> {
             {
                 let candidate = path.join(format!("{name}.exe"));
                 if candidate.is_file() {
+                    if let Some(resolved) = resolve_windows_command_candidate(&candidate, name) {
+                        return Some(resolved);
+                    }
                     return Some(candidate);
                 }
             }
         }
     }
     None
+}
+
+#[cfg(target_os = "windows")]
+fn resolve_windows_command_candidate(candidate: &Path, name: &str) -> Option<PathBuf> {
+    let candidate_name = candidate
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase())?;
+    let expected_name = format!("{name}.exe").to_ascii_lowercase();
+    if candidate_name != expected_name {
+        return None;
+    }
+
+    let parent = candidate.parent()?;
+    let parent_name = parent
+        .file_name()
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+    let grandparent_name = parent
+        .parent()
+        .and_then(|value| value.file_name())
+        .and_then(|value| value.to_str())
+        .map(|value| value.to_ascii_lowercase());
+
+    if parent_name.as_deref() != Some("bin") || grandparent_name.as_deref() != Some("chocolatey")
+    {
+        return None;
+    }
+
+    let Some(program_data) = std::env::var_os("ProgramData") else {
+        return None;
+    };
+    let lib_dir = PathBuf::from(program_data).join("chocolatey").join("lib");
+    if !lib_dir.is_dir() {
+        return None;
+    }
+
+    let expected_suffix = ["tools", "ffmpeg", "bin", &expected_name]
+        .iter()
+        .collect::<PathBuf>();
+    let direct_candidate = lib_dir.join(name).join(&expected_suffix);
+    if direct_candidate.is_file() {
+        return Some(direct_candidate);
+    }
+
+    let Ok(entries) = fs::read_dir(&lib_dir) else {
+        return None;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path().join(&expected_suffix);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    None
+}
+
+fn configure_external_command(command: &mut Command) -> &mut Command {
+    #[cfg(target_os = "windows")]
+    {
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    command
 }
 
 fn normalized_extension(path: &Path) -> String {
@@ -677,9 +774,56 @@ fn load_image_with_sips(
 
     #[cfg(not(target_os = "macos"))]
     {
-        let _ = (path, size_hint, allow_upscale, working_dir);
-        Ok(None)
+        render_image_with_ffmpeg(path, size_hint, allow_upscale, working_dir)
     }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn render_image_with_ffmpeg(
+    path: &Path,
+    size_hint: u32,
+    allow_upscale: bool,
+    working_dir: &Path,
+) -> Result<Option<image::DynamicImage>, AppError> {
+    let ffmpeg = match find_command_binary("ffmpeg") {
+        Some(path) => path,
+        None => return Ok(None),
+    };
+
+    let temp_output = temp_jpeg_path(path, working_dir);
+    let _ = fs::remove_file(&temp_output);
+
+    let timeout = if size_hint >= 1600 || allow_upscale {
+        VIDEO_THUMBNAIL_TIMEOUT
+    } else {
+        EXTERNAL_TOOL_TIMEOUT
+    };
+
+    let mut command = Command::new(ffmpeg);
+    configure_external_command(
+        command
+            .arg("-hide_banner")
+            .arg("-loglevel")
+            .arg("error")
+            .arg("-y")
+            .arg("-i")
+            .arg(path)
+            .arg("-frames:v")
+            .arg("1")
+            .arg(&temp_output)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null()),
+    );
+    let status = wait_for_status_with_timeout(command.spawn()?, timeout, "ffmpeg image render")?;
+
+    if !status.success() || !temp_output.is_file() {
+        let _ = fs::remove_file(&temp_output);
+        return Ok(None);
+    }
+
+    let bytes = fs::read(&temp_output)?;
+    let _ = fs::remove_file(&temp_output);
+    Ok(Some(image::load_from_memory(&bytes)?))
 }
 
 #[cfg(target_os = "macos")]

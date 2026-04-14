@@ -1,9 +1,9 @@
 import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
+import { materializeImageSrc } from "../lib/mediaSrc";
 import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from "../lib/types";
 
 const GRID_TILE_WIDTH = 210;
@@ -982,16 +982,6 @@ export function MediaGrid({
       ) : null}
     </div>
   );
-}
-
-function materializeImageSrc(src?: string | null) {
-  if (!src) {
-    return src;
-  }
-  if (src.startsWith("/")) {
-    return convertFileSrc(src);
-  }
-  return src;
 }
 
 function formatDuration(durationMs: number) {

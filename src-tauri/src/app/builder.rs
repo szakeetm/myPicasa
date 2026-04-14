@@ -24,7 +24,14 @@ const PREVIEW_DEBUG_LOGS: bool = false;
 
 pub fn default_worker_count() -> usize {
     std::thread::available_parallelism()
-        .map(|count| count.get().min(4))
+        .map(|count| {
+            let available = count.get();
+            if available <= 4 {
+                available
+            } else {
+                available.saturating_sub(1).min(12)
+            }
+        })
         .unwrap_or(4)
         .max(1)
 }
@@ -119,7 +126,12 @@ pub fn build_app_state(
 
     state
         .db
-        .insert_log("info", "bootstrap", "backend initialized", None)?;
+        .insert_log(
+            "info",
+            "bootstrap",
+            &format!("backend initialized thumbnail_workers={worker_count}"),
+            None,
+        )?;
 
     Ok(state)
 }

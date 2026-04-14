@@ -157,7 +157,7 @@ The backup manifest stores:
 The app depends on a few system tools for media handling:
 
 - `ffmpeg`
-  Used for video thumbnails and video transcoding.
+  Used for video thumbnails, video transcoding, and fallback still-image decoding for formats the Rust image stack cannot read directly on your platform.
 - `ffprobe`
   Used for video probing and metadata extraction.
 - `sips` on macOS
@@ -170,6 +170,14 @@ On macOS, install `ffmpeg` and `ffprobe` with Homebrew:
 ```bash
 brew install ffmpeg
 ```
+
+On Windows, `ffmpeg`/`ffprobe` should be installed as real executables on `PATH`. Chocolatey installs are supported, and the app now prefers the underlying binary over the shim path when possible to avoid launch quirks.
+
+## Format Notes
+
+- HEIC and HEIF still images are handled through native macOS tooling on macOS and through `ffmpeg` fallback decoding on Windows.
+- If `ffmpeg` is missing on Windows, HEIC/HEIF thumbnail and preview generation may fail even if standard JPEG and PNG files work.
+- External media helper processes are launched without visible console windows on Windows.
 
 ## Tech Stack
 

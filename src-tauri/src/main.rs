@@ -12,7 +12,7 @@ mod util;
 
 use std::path::PathBuf;
 
-use app::{builder::build_app_state, commands::command_handlers};
+use app::{builder::build_app_state, commands::command_handlers, sync_asset_protocol_scope};
 use tauri::Manager;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -34,6 +34,7 @@ fn main() {
                 .unwrap_or_else(|_| PathBuf::from(".myPicasa"));
 
             let state = build_app_state(app_data_dir, None)?;
+            sync_asset_protocol_scope(app.handle(), &state)?;
             app.manage(state);
             Ok(())
         })

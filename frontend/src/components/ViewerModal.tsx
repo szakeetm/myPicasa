@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 
 import dayjs from "dayjs";
-import { convertFileSrc } from "@tauri-apps/api/core";
 
 import { logClient } from "../lib/logger";
+import { materializeImageSrc, materializeVideoSrc } from "../lib/mediaSrc";
 import { api } from "../lib/tauri";
 import type { AssetDetail } from "../lib/types";
 
@@ -71,9 +71,7 @@ export function ViewerModal({
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
-  const livePhotoPath = asset?.live_photo_video_path
-    ? convertFileSrc(asset.live_photo_video_path)
-    : undefined;
+  const livePhotoPath = materializeImageSrc(asset?.live_photo_video_path) ?? undefined;
   const shouldPreferOriginalVideoBytes = shouldPreferOriginalVideoBytesForPath(asset?.primary_path);
   const shouldPreferOriginalLivePhotoBytes = shouldPreferOriginalVideoBytesForPath(
     asset?.live_photo_video_path,
@@ -372,7 +370,7 @@ export function ViewerModal({
             `asset ${assetId} loaded ${viewerPreviewSize}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
           );
           onViewerPreviewReady?.(assetId);
-          setImageSrc(materializeImageSrc(src));
+          setImageSrc(materializeImageSrc(src) ?? undefined);
           setImageError(undefined);
           return;
         }
@@ -901,44 +899,6 @@ function summarizeMediaSrc(src?: string) {
     return `${format} data-url`;
   }
   return src;
-}
-
-function materializeImageSrc(src: string) {
-  if (src.startsWith("/")) {
-    return convertFileSrc(src);
-  }
-  return src;
-}
-
-async function materializeVideoSrc(src: string, objectUrlRef: React.MutableRefObject<string | undefined>) {
-  if (objectUrlRef.current) {
-    URL.revokeObjectURL(objectUrlRef.current);
-    objectUrlRef.current = undefined;
-  }
-  if (src.startsWith("/")) {
-    return convertFileSrc(src);
-  }
-  if (!src.startsWith("data:video/")) {
-    return src;
-  }
-  const [header, base64Payload] = src.split(",", 2);
-  const mimeType = header.slice("data:".length).split(";")[0] || "video/mp4";
-  const payload = base64Payload ?? "";
-  const binary = atob(payload);
-  const chunkSize = 1024 * 1024;
-  const chunks: Uint8Array[] = [];
-  for (let offset = 0; offset < binary.length; offset += chunkSize) {
-    const chunk = binary.slice(offset, offset + chunkSize);
-    const bytes = new Uint8Array(chunk.length);
-    for (let index = 0; index < chunk.length; index += 1) {
-      bytes[index] = chunk.charCodeAt(index);
-    }
-    chunks.push(bytes);
-  }
-  const blob = new Blob(chunks as BlobPart[], { type: mimeType });
-  const objectUrl = URL.createObjectURL(blob);
-  objectUrlRef.current = objectUrl;
-  return objectUrl;
 }
 
 function describeVideoSupport(src?: string | null) {
