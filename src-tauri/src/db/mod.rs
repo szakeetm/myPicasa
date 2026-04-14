@@ -100,7 +100,6 @@ impl Database {
             DELETE FROM imports;
             DELETE FROM app_logs;
             DELETE FROM viewer_video_transcodes;
-            DELETE FROM sqlite_sequence;
             PRAGMA foreign_keys = ON;
             ",
         )?;

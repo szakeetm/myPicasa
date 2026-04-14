@@ -1017,24 +1017,28 @@ export function App() {
       await logClient("ui.reset", "local database reset cancelled");
       return;
     }
-
-    state.setAssets([]);
-    state.setSelectedAsset(undefined);
-    state.setAlbums([]);
-    state.setDiagnostics([]);
-    state.setLogs([]);
-    state.setCacheStats(undefined);
-    state.setImportStatus(undefined);
-    state.setSelectedAlbumId(undefined);
-    state.setViewMode("timeline");
-    commitGridPages([]);
-    setViewAssetCount(0);
-    setLoadingPreviousAssets(false);
-    setLoadingMoreAssets(false);
-    setViewerPreviewReadyAssetIds([]);
-
-    await api.resetLocalDatabase();
-    window.location.reload();
+    try {
+      await api.resetLocalDatabase();
+      state.setAssets([]);
+      state.setSelectedAsset(undefined);
+      state.setAlbums([]);
+      state.setDiagnostics([]);
+      state.setLogs([]);
+      state.setCacheStats(undefined);
+      state.setImportStatus(undefined);
+      state.setSelectedAlbumId(undefined);
+      state.setViewMode("timeline");
+      commitGridPages([]);
+      setViewAssetCount(0);
+      setLoadingPreviousAssets(false);
+      setLoadingMoreAssets(false);
+      setViewerPreviewReadyAssetIds([]);
+      window.location.reload();
+    } catch (error) {
+      window.alert(`Clear local database failed: ${String(error)}`);
+      await refreshDebugSurfaces();
+      await refreshAllAssets();
+    }
   }
 
   async function handleClearDiagnostics() {

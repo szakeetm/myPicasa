@@ -720,10 +720,60 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(u64, u
 
 fn clear_directory_contents(path: &Path) -> Result<(), InvokeError> {
     if path.exists() {
-        fs::remove_dir_all(path).map_err(map_error)?;
+        for entry in fs::read_dir(path).map_err(map_error)? {
+            let entry = entry.map_err(map_error)?;
+            let child = entry.path();
+            if child.is_dir() {
+                fs::remove_dir_all(&child).map_err(map_error)?;
+            } else {
+                fs::remove_file(&child).map_err(map_error)?;
+            }
+        }
     }
     fs::create_dir_all(path).map_err(map_error)?;
+    let remaining_files = count_files_in_dir(path);
+    if remaining_files > 0 {
+        return Err(InvokeError::from(format!(
+            "Failed to fully clear {}: {remaining_files} files remain",
+            path.display()
+        )));
+    }
     Ok(())
+}
+
+fn count_files_in_dir(path: &Path) -> u64 {
+    if !path.exists() {
+        return 0;
+    }
+    WalkDir::new(path)
+        .into_iter()
+        .flatten()
+        .filter(|entry| entry.file_type().is_file())
+        .count() as u64
+}
+
+fn all_known_cache_roots(state: &AppState) -> Vec<PathBuf> {
+    let mut cache_roots = vec![state.cache_data_dir(), state.default_cache_data_dir()];
+    let settings = state.app_settings_snapshot();
+    cache_roots.push(state.resolve_cache_data_dir(&settings));
+    if let Some(configured_dir) = settings.cache_storage_dir {
+        let trimmed = configured_dir.trim();
+        if !trimmed.is_empty() {
+            cache_roots.push(PathBuf::from(trimmed));
+        }
+    }
+    if let Ok(persisted_settings) = crate::app::state::load_app_settings(&state.settings_path) {
+        cache_roots.push(state.resolve_cache_data_dir(&persisted_settings));
+        if let Some(configured_dir) = persisted_settings.cache_storage_dir {
+            let trimmed = configured_dir.trim();
+            if !trimmed.is_empty() {
+                cache_roots.push(PathBuf::from(trimmed));
+            }
+        }
+    }
+    cache_roots.sort();
+    cache_roots.dedup();
+    cache_roots
 }
 
 fn clear_app_derived_storage(state: &AppState) -> CommandResult<()> {
@@ -738,10 +788,8 @@ fn clear_app_derived_storage(state: &AppState) -> CommandResult<()> {
     *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
     *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
 
-    let mut cache_roots = vec![state.cache_data_dir(), state.default_cache_data_dir()];
-    cache_roots.sort();
-    cache_roots.dedup();
-    for cache_root in cache_roots {
+    let cache_roots = all_known_cache_roots(state);
+    for cache_root in &cache_roots {
         for subdir in cache_storage_subdirs() {
             clear_directory_contents(&cache_root.join(subdir))?;
         }
@@ -750,6 +798,31 @@ fn clear_app_derived_storage(state: &AppState) -> CommandResult<()> {
     state
         .db
         .clear_viewer_video_transcode_statuses()
+        .map_err(map_error)?;
+    let cleared_roots_summary = cache_roots
+        .iter()
+        .map(|root| {
+            let thumb_files = count_files_in_dir(&root.join("thumbnail-cache"));
+            let preview_files = count_files_in_dir(&root.join("preview-cache"));
+            let viewer_files = count_files_in_dir(&root.join("viewer-cache"));
+            format!(
+                "{} thumbs={} previews={} viewer={}",
+                root.display(),
+                thumb_files,
+                preview_files,
+                viewer_files
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
+    state
+        .db
+        .insert_log(
+            "info",
+            "cache.clear",
+            &format!("cleared derived storage roots: {cleared_roots_summary}"),
+            None,
+        )
         .map_err(map_error)?;
     Ok(())
 }
@@ -2874,12 +2947,31 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
     state.failed_thumbnails.lock().clear();
     state.viewer_video_jobs.lock().clear();
     *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
+    let cache_roots = all_known_cache_roots(state.inner());
+    for cache_root in &cache_roots {
+        clear_directory_contents(&cache_root.join("thumbnail-cache"))?;
+        clear_directory_contents(&cache_root.join("preview-cache"))?;
+    }
+    let cleared_roots_summary = cache_roots
+        .iter()
+        .map(|root| {
+            let thumb_files = count_files_in_dir(&root.join("thumbnail-cache"));
+            let preview_files = count_files_in_dir(&root.join("preview-cache"));
+            format!(
+                "{} thumbs={} previews={}",
+                root.display(),
+                thumb_files,
+                preview_files
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(" | ");
     state
         .db
         .insert_log(
             "info",
             "thumbnail",
-            "cleared thumbnail and preview caches",
+            &format!("cleared thumbnail and preview caches: {cleared_roots_summary}"),
             None,
         )
         .map_err(map_error)?;
@@ -2888,7 +2980,10 @@ pub fn clear_thumbnail_cache(state: State<AppState>) -> CommandResult<()> {
 
 #[tauri::command]
 pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResult<()> {
-    clear_viewer_render_cache(&state.viewer_cache_dir()).map_err(map_error)?;
+    let cache_roots = all_known_cache_roots(state.inner());
+    for cache_root in &cache_roots {
+        clear_viewer_render_cache(&cache_root.join("viewer-cache")).map_err(map_error)?;
+    }
     state.viewer_video_jobs.lock().clear();
     state
         .db
@@ -2896,7 +2991,23 @@ pub fn clear_viewer_render_cache_command(state: State<AppState>) -> CommandResul
         .map_err(map_error)?;
     state
         .db
-        .insert_log("info", "viewer", "cleared viewer render cache", None)
+        .insert_log(
+            "info",
+            "viewer",
+            &format!(
+                "cleared viewer render cache: {}",
+                cache_roots
+                    .iter()
+                    .map(|root| format!(
+                        "{} viewer={}",
+                        root.display(),
+                        count_files_in_dir(&root.join("viewer-cache"))
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(" | ")
+            ),
+            None,
+        )
         .map_err(map_error)?;
     Ok(())
 }
