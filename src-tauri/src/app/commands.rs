@@ -12,6 +12,9 @@ use tauri::{AppHandle, State, generate_handler, ipc::InvokeError};
 use tracing::{error, info};
 use walkdir::WalkDir;
 
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+
 use crate::{
     app::{
         state::{
@@ -77,9 +80,10 @@ fn reveal_path_in_file_manager(path: &Path) -> Result<(), InvokeError> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("explorer")
-            .arg("/select,")
-            .arg(path)
+        let normalized = normalize_windows_explorer_path(path);
+        let mut command = Command::new("explorer.exe");
+        command.raw_arg(format!(r#"/select,"{}""#, normalized.to_string_lossy()));
+        let status = command
             .status()
             .map_err(map_error)?;
         if !status.success() {
@@ -113,18 +117,19 @@ fn open_path_with_default_app(path: &Path) -> Result<(), InvokeError> {
 
     #[cfg(target_os = "windows")]
     {
-        let status = Command::new("cmd")
-            .arg("/C")
-            .arg("start")
-            .arg("")
-            .arg(path)
-            .status()
-            .map_err(map_error)?;
-        if !status.success() {
-            return Err(InvokeError::from(
-                "Failed to open asset with default app".to_string(),
-            ));
-        }
+        let normalized = normalize_windows_explorer_path(path);
+        let mut command = Command::new("powershell.exe");
+        command
+            .arg("-NoProfile")
+            .arg("-NonInteractive")
+            .arg("-WindowStyle")
+            .arg("Hidden")
+            .arg("-Command")
+            .arg("Start-Process -FilePath $env:MYPICASA_TARGET_PATH")
+            .env("MYPICASA_TARGET_PATH", &normalized);
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+        let _child = command.spawn().map_err(map_error)?;
         return Ok(());
     }
 
@@ -184,8 +189,9 @@ fn open_path_with_preview(path: &Path, is_video: bool) -> Result<(), InvokeError
                 "Failed to determine asset folder".to_string(),
             ));
         };
-        let status = Command::new("explorer")
-            .arg(parent)
+        let normalized = normalize_windows_explorer_path(parent);
+        let status = Command::new("explorer.exe")
+            .arg(normalized)
             .status()
             .map_err(map_error)?;
         if !status.success() {
@@ -203,6 +209,18 @@ fn open_path_with_preview(path: &Path, is_video: bool) -> Result<(), InvokeError
             "Preview action is not supported on this platform".to_string(),
         ))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn normalize_windows_explorer_path(path: &Path) -> PathBuf {
+    let normalized = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut value = normalized.to_string_lossy().replace('/', "\\");
+    if let Some(stripped) = value.strip_prefix("\\\\?\\UNC\\") {
+        value = format!("\\\\{stripped}");
+    } else if let Some(stripped) = value.strip_prefix("\\\\?\\") {
+        value = stripped.to_string();
+    }
+    PathBuf::from(value)
 }
 
 fn is_refresh_running(state: &AppState) -> bool {
@@ -2786,8 +2804,30 @@ pub fn reveal_asset_in_file_manager(
 
 #[tauri::command]
 pub fn open_asset_with_default_app(asset_id: i64, state: State<AppState>) -> CommandResult<()> {
+    let started = Instant::now();
     let path = primary_asset_path(state.inner(), asset_id)?;
-    open_path_with_default_app(&path)
+    let lookup_elapsed_ms = started.elapsed().as_millis();
+    let launch_started = Instant::now();
+    let result = open_path_with_default_app(&path);
+    let launch_elapsed_ms = launch_started.elapsed().as_millis();
+    let total_elapsed_ms = started.elapsed().as_millis();
+    let message = match &result {
+        Ok(()) => format!(
+            "open_default_app asset_id={asset_id} status=ok lookup_ms={lookup_elapsed_ms} launch_ms={launch_elapsed_ms} total_ms={total_elapsed_ms} path=\"{}\"",
+            path.display()
+        ),
+        Err(error) => format!(
+            "open_default_app asset_id={asset_id} status=failed lookup_ms={lookup_elapsed_ms} launch_ms={launch_elapsed_ms} total_ms={total_elapsed_ms} path=\"{}\" error={error:?}",
+            path.display()
+        ),
+    };
+    let _ = state.db.insert_log(
+        if result.is_ok() { "info" } else { "error" },
+        "shell",
+        &message,
+        Some(asset_id),
+    );
+    result
 }
 
 #[tauri::command]

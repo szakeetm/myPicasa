@@ -68,6 +68,7 @@ export function ViewerModal({
   const videoSourceLabelRef = useRef<string>("unset");
   const livePhotoSourceLabelRef = useRef<string>("unset");
   const imageSourceLabelRef = useRef<string>("unset");
+  const onViewerPreviewReadyRef = useRef<typeof onViewerPreviewReady>(onViewerPreviewReady);
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
   const isVideo = asset?.media_kind === "video";
@@ -92,6 +93,10 @@ export function ViewerModal({
     asset?.width && asset?.height
       ? { width: asset.width, height: asset.height }
       : naturalSize;
+
+  useEffect(() => {
+    onViewerPreviewReadyRef.current = onViewerPreviewReady;
+  }, [onViewerPreviewReady]);
 
   useEffect(() => {
     setVideoFallbackAttempted(false);
@@ -369,7 +374,7 @@ export function ViewerModal({
             "viewer.image",
             `asset ${assetId} loaded ${viewerPreviewSize}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
           );
-          onViewerPreviewReady?.(assetId);
+          onViewerPreviewReadyRef.current?.(assetId);
           setImageSrc(materializeImageSrc(src) ?? undefined);
           setImageError(undefined);
           return;
@@ -398,7 +403,7 @@ export function ViewerModal({
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.primary_path, isPhoto, onViewerPreviewReady, viewerPreviewSize]);
+  }, [assetId, asset?.primary_path, isPhoto, viewerPreviewSize]);
 
   function pauseModalPlayback() {
     videoElementRef.current?.pause();
