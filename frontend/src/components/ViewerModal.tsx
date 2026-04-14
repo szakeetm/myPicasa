@@ -943,16 +943,15 @@ function shouldPreferOriginalVideoBytesForPath(path?: string | null) {
   if (!path) {
     return false;
   }
-  const extension = path.split(".").pop()?.toLowerCase();
-  switch (extension) {
-    case "mp4":
-    case "m4v":
-    case "mov":
-    case "webm":
-      return true;
-    default:
-      return false;
+  if (typeof document === "undefined") {
+    return false;
   }
+  const mimeType = inferVideoMimeType(path);
+  if (!mimeType) {
+    return false;
+  }
+  const probe = document.createElement("video");
+  return probe.canPlayType(mimeType) !== "";
 }
 
 function inferVideoMimeType(src?: string | null) {

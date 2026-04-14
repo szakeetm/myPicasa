@@ -116,6 +116,8 @@ pub fn build_app_state(
         thumbnail_job_sender,
         preview_job_sender,
         viewer_video_jobs: Arc::new(Mutex::new(HashMap::new())),
+        inflight_viewer_playback_hints: Arc::new(Mutex::new(HashSet::new())),
+        refreshed_viewer_playback_hints: Arc::new(Mutex::new(HashSet::new())),
         batch_viewer_transcode: Arc::new(Mutex::new(BatchViewerTranscodeState::idle())),
         batch_thumbnail_generation: Arc::new(Mutex::new(BatchThumbnailGenerationState::idle())),
         cache_storage_migration: Arc::new(Mutex::new(

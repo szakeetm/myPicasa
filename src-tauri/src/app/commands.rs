@@ -1507,39 +1507,74 @@ fn populate_missing_viewer_playback_statuses(
     state: &AppState,
     known_statuses: &mut HashMap<i64, String>,
 ) {
+    let mut queued_assets = Vec::new();
+
     for asset_id in asset_ids {
-        if known_statuses.contains_key(asset_id) {
+        if matches!(
+            known_statuses.get(asset_id).map(String::as_str),
+            Some("ready" | "native" | "requires_transcode")
+        ) {
             continue;
         }
-
-        let Ok(detail) = query_service::get_asset_detail(&state.db, *asset_id) else {
-            continue;
-        };
-        if detail.media_kind != "video" {
-            continue;
-        }
-        let Some(primary_path) = detail.primary_path else {
-            continue;
-        };
-
-        let codec = match probe_primary_video_codec(&PathBuf::from(&primary_path)) {
-            Ok(codec) => codec,
-            Err(_) => continue,
-        };
-
-        let status = if source_is_natively_playable(&primary_path, codec.as_deref(), support) {
-            "native"
-        } else {
-            "requires_transcode"
-        };
 
         if state
-            .db
-            .set_viewer_video_transcode_status(*asset_id, status, None)
-            .is_ok()
+            .refreshed_viewer_playback_hints
+            .lock()
+            .contains(asset_id)
         {
-            known_statuses.insert(*asset_id, status.to_string());
+            continue;
         }
+
+        let mut inflight = state.inflight_viewer_playback_hints.lock();
+        if !inflight.insert(*asset_id) {
+            continue;
+        }
+        drop(inflight);
+        queued_assets.push(*asset_id);
+    }
+
+    for asset_id in queued_assets {
+        let state = state.clone();
+        let support = support.clone();
+        thread::spawn(move || {
+            let result = (|| -> Result<Option<String>, InvokeError> {
+                let detail =
+                    query_service::get_asset_detail(&state.db, asset_id).map_err(map_error)?;
+                if detail.media_kind != "video" {
+                    return Ok(None);
+                }
+                let Some(primary_path) = detail.primary_path else {
+                    return Ok(None);
+                };
+
+                let codec = probe_primary_video_codec(&PathBuf::from(&primary_path)).map_err(map_error)?;
+                let status = if source_is_natively_playable(&primary_path, codec.as_deref(), &support) {
+                    "native"
+                } else {
+                    "requires_transcode"
+                };
+                state
+                    .db
+                    .set_viewer_video_transcode_status(asset_id, status, None)
+                    .map_err(map_error)?;
+                Ok(Some(status.to_string()))
+            })();
+
+            state.inflight_viewer_playback_hints.lock().remove(&asset_id);
+            state
+                .refreshed_viewer_playback_hints
+                .lock()
+                .insert(asset_id);
+
+            if let Err(error) = result {
+                let _ = state.db.insert_log(
+                    "error",
+                    "viewer_video",
+                    &format!("asset_id={asset_id} playback hint refresh failed: {error:?}"),
+                    Some(asset_id),
+                );
+            }
+        });
     }
 }
 

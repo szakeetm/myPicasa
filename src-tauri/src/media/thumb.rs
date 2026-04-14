@@ -667,7 +667,34 @@ fn find_command_binary(name: &str) -> Option<PathBuf> {
             }
         }
     }
+
+    #[cfg(target_os = "macos")]
+    {
+        for candidate in macos_command_fallbacks(name) {
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
+    }
+
     None
+}
+
+#[cfg(target_os = "macos")]
+fn macos_command_fallbacks(name: &str) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+    let file_name = name.to_string();
+    let common_prefixes = [
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/opt/local/bin",
+        "/opt/homebrew/opt/ffmpeg/bin",
+        "/usr/local/opt/ffmpeg/bin",
+    ];
+    for prefix in common_prefixes {
+        candidates.push(PathBuf::from(prefix).join(&file_name));
+    }
+    candidates
 }
 
 #[cfg(target_os = "windows")]

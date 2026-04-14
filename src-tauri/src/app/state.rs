@@ -161,6 +161,8 @@ pub struct AppState {
     pub thumbnail_job_sender: Sender<ThumbnailJob>,
     pub preview_job_sender: Sender<ThumbnailJob>,
     pub viewer_video_jobs: Arc<Mutex<HashMap<String, ViewerTranscodeState>>>,
+    pub inflight_viewer_playback_hints: Arc<Mutex<HashSet<i64>>>,
+    pub refreshed_viewer_playback_hints: Arc<Mutex<HashSet<i64>>>,
     pub batch_viewer_transcode: Arc<Mutex<BatchViewerTranscodeState>>,
     pub batch_thumbnail_generation: Arc<Mutex<BatchThumbnailGenerationState>>,
     pub cache_storage_migration: Arc<Mutex<CacheStorageMigrationStatus>>,

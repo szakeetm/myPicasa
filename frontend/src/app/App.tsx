@@ -1821,12 +1821,12 @@ function getViewerPlaybackSupport(): ViewerPlaybackSupport {
     };
   }
   const probe = document.createElement("video");
-  const probably = (value: string) => probe.canPlayType(value) === "probably";
+  const playable = (value: string) => probe.canPlayType(value) !== "";
   return {
-    mp4_h264: probably('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
-    mp4_hevc: probably('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
-    mov_h264: probably('video/quicktime; codecs="avc1.42E01E, mp4a.40.2"'),
-    mov_hevc: probably('video/quicktime; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
-    webm: probably("video/webm"),
+    mp4_h264: playable('video/mp4; codecs="avc1.42E01E, mp4a.40.2"'),
+    mp4_hevc: playable('video/mp4; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
+    mov_h264: playable('video/quicktime; codecs="avc1.42E01E, mp4a.40.2"'),
+    mov_hevc: playable('video/quicktime; codecs="hvc1.1.6.L93.B0, mp4a.40.2"'),
+    webm: playable("video/webm"),
   };
 }
