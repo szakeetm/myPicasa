@@ -9,6 +9,9 @@ import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from ".
 const GRID_TILE_WIDTH = 210;
 const GRID_GAP = 6;
 const GRID_PADDING = 6;
+const GRID_THUMBNAIL_SIZE = 210;
+const THUMB_PROBE_BATCH_SIZE = 96;
+const THUMB_ENQUEUE_BATCH_SIZE = 24;
 const PREVIEW_PROBE_BATCH_SIZE = 96;
 const PREVIEW_ENQUEUE_BATCH_SIZE = 24;
 
@@ -52,7 +55,7 @@ type MediaGridProps = {
 };
 
 type ThumbnailState = {
-  status: "pending" | "ready" | "unavailable";
+  status?: "pending" | "ready" | "unavailable";
   src?: string | null;
   previewStatus?: "pending" | "ready" | "unavailable";
   thumbChecked?: boolean;
@@ -110,7 +113,8 @@ export function MediaGrid({
   const [videoPlaybackHints, setVideoPlaybackHints] = useState<Record<number, ViewerPlaybackHint["status"]>>({});
   const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
-  const requestInFlightRef = useRef(false);
+  const thumbProbeInFlightRef = useRef(false);
+  const thumbGenerateInFlightRef = useRef(false);
   const previewProbeInFlightRef = useRef(false);
   const previewGenerateInFlightRef = useRef(false);
   const lastBatchLogRef = useRef<{
@@ -156,9 +160,7 @@ export function MediaGrid({
     }
     return new Set(bootstrapVisibleIds);
   }, [bootstrapVisibleIds, visibleIdSet]);
-  const thumbnailSize = useMemo(() => {
-    return GRID_TILE_WIDTH;
-  }, []);
+  const thumbnailSize = useMemo(() => GRID_THUMBNAIL_SIZE, []);
 
   useEffect(() => {
     const element = parentRef.current;
@@ -177,7 +179,8 @@ export function MediaGrid({
     prependAnchorRef.current = null;
     setThumbs({});
     setVisibleIds([]);
-    requestInFlightRef.current = false;
+    thumbProbeInFlightRef.current = false;
+    thumbGenerateInFlightRef.current = false;
     previewProbeInFlightRef.current = false;
     previewGenerateInFlightRef.current = false;
     lastBatchLogRef.current = { signature: "", at: 0 };
@@ -552,7 +555,7 @@ export function MediaGrid({
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, thumbnailPreload?.active, viewerPreviewSize]);
+  }, [assets, thumbnailPreload?.active, viewerPreviewSize, thumbnailResetKey]);
 
   useEffect(() => {
     const root = parentRef.current;
@@ -739,23 +742,76 @@ export function MediaGrid({
     let disposed = false;
 
     async function processBatch() {
-      if (requestInFlightRef.current) {
-        logIdleSnapshot("thumb", "request_in_flight");
+      const thumbEligibleIds = assets.map((asset) => asset.id);
+      const probeIds = thumbEligibleIds
+        .filter((assetId) => {
+          const state = thumbsRef.current[assetId];
+          return !state?.thumbChecked || state.status === "pending";
+        })
+        .slice(0, THUMB_PROBE_BATCH_SIZE);
+
+      let probedMissingIds: number[] = [];
+
+      if (probeIds.length > 0 && !thumbProbeInFlightRef.current) {
+        thumbProbeInFlightRef.current = true;
+        try {
+          const probeBatch = await api.requestThumbnailsBatch(probeIds, thumbnailSize, false, true);
+          if (disposed) {
+            return;
+          }
+
+          probedMissingIds = probeBatch
+            .filter((item) => item.status === "missing")
+            .map((item) => item.asset_id);
+
+          startTransition(() => {
+            setThumbs((current) => {
+              const next = { ...current };
+              for (const item of probeBatch) {
+                next[item.asset_id] = {
+                  ...next[item.asset_id],
+                  thumbChecked: true,
+                  status:
+                    item.status === "ready"
+                      ? "ready"
+                      : item.status === "unavailable"
+                        ? "unavailable"
+                        : item.status === "pending"
+                          ? "pending"
+                          : undefined,
+                  src:
+                    item.status === "ready"
+                      ? materializeImageSrc(item.data_url) ?? next[item.asset_id]?.src ?? null
+                      : next[item.asset_id]?.src,
+                };
+              }
+              return next;
+            });
+          });
+        } catch (error) {
+          await logClient("grid", `thumbnail cache probe failed requested=${probeIds.length}: ${String(error)}`, "error");
+          return;
+        } finally {
+          thumbProbeInFlightRef.current = false;
+        }
+      } else if (probeIds.length > 0) {
+        logIdleSnapshot("thumb", "probe_in_flight");
+      }
+
+      const visiblePendingIds = thumbEligibleIds.filter((assetId) => {
+        const state = thumbsRef.current[assetId];
+        return state?.thumbChecked && (state.status === undefined || state.status === "pending");
+      });
+
+      const preloadPendingIds: number[] = [];
+      const requestIds = [...new Set([...probedMissingIds, ...visiblePendingIds])].slice(0, THUMB_ENQUEUE_BATCH_SIZE);
+      if (requestIds.length === 0) {
+        logIdleSnapshot("thumb", "no_thumb_targets");
         return;
       }
 
-      const visiblePendingIds = assets
-        .filter((asset) => {
-          const state = thumbsRef.current[asset.id];
-          return !state || state.status === "pending";
-        })
-        .slice(0, 12)
-        .map((asset) => asset.id);
-
-      const preloadPendingIds: number[] = [];
-      const requestIds = visiblePendingIds;
-      if (requestIds.length === 0) {
-        logIdleSnapshot("thumb", "no_thumb_targets");
+      if (thumbGenerateInFlightRef.current) {
+        logIdleSnapshot("thumb", "generation_in_flight");
         return;
       }
 
@@ -768,21 +824,17 @@ export function MediaGrid({
         setThumbs((current) => {
           const next = { ...current };
           for (const id of requestIds) {
-            if (!next[id]) {
-              next[id] = { status: "pending", thumbChecked: true };
-            } else {
-              next[id] = {
-                ...next[id],
-                status: "pending",
-                thumbChecked: true,
-              };
-            }
+            next[id] = {
+              ...next[id],
+              status: "pending",
+              thumbChecked: true,
+            };
           }
           return next;
         });
       });
 
-      requestInFlightRef.current = true;
+      thumbGenerateInFlightRef.current = true;
       try {
         const batch = await api.requestThumbnailsBatch(requestIds, thumbnailSize);
         if (disposed) {
@@ -829,8 +881,6 @@ export function MediaGrid({
                   src: null,
                   thumbChecked: true,
                 };
-              } else if (!next[item.asset_id]) {
-                next[item.asset_id] = { status: "pending", thumbChecked: true };
               } else {
                 next[item.asset_id] = {
                   ...next[item.asset_id],
@@ -848,20 +898,20 @@ export function MediaGrid({
           return;
         }
       } finally {
-        requestInFlightRef.current = false;
+        thumbGenerateInFlightRef.current = false;
       }
     }
 
     void processBatch();
     const handle = window.setInterval(() => {
       void processBatch();
-    }, thumbnailPreload?.active ? 120 : 220);
+    }, thumbnailPreload?.active ? 120 : 180);
 
     return () => {
       disposed = true;
       window.clearInterval(handle);
     };
-  }, [assets, thumbnailPreload?.active, thumbnailSize]);
+  }, [assets, thumbnailPreload?.active, thumbnailSize, thumbnailResetKey]);
 
   useEffect(() => {
     const firstVisibleAsset =

@@ -2348,7 +2348,7 @@ pub fn start_batch_thumbnail_generation(
 
     let worker_state = state.inner().clone();
     thread::spawn(move || {
-        const THUMB_SIZE: u32 = 256;
+        const THUMB_SIZE: u32 = 210;
         let preview_size = worker_state.viewer_preview_size();
         let assets = match collect_all_media_assets(&worker_state) {
             Ok(assets) => assets,
