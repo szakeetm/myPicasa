@@ -87,7 +87,11 @@ pub fn refresh_takeout_index(
             .unwrap_or(0);
         Ok((active_files, active_assets))
     })?;
-    let scans = scan_roots_with_cancel(&roots, Some(&state.refresh_cancel))?;
+    let scans = scan_roots_with_cancel(&roots, Some(&state.refresh_cancel), |scanned_count| {
+        progress.files_scanned = scanned_count;
+        progress.message = Some(format!("scanning files: found {scanned_count} items"));
+        *state.import_status.lock() = Some(progress.clone());
+    })?;
     info!(
         "refresh_takeout_index: scanned {} files in {} ms",
         scans.len(),

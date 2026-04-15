@@ -21,8 +21,10 @@ use crate::{
 pub fn scan_roots_with_cancel(
     roots: &[String],
     cancel_flag: Option<&AtomicBool>,
+    mut on_progress: impl FnMut(u32),
 ) -> Result<Vec<FileScanRecord>, AppError> {
     let mut file_paths = Vec::new();
+    let mut scanned_count = 0_u32;
 
     for root in roots {
         if cancel_flag
@@ -48,8 +50,13 @@ pub fn scan_roots_with_cancel(
                 continue;
             }
             file_paths.push((normalized_root.clone(), path.to_path_buf()));
+            scanned_count = scanned_count.saturating_add(1);
+            if scanned_count == 1 || scanned_count % 200 == 0 {
+                on_progress(scanned_count);
+            }
         }
     }
+    on_progress(scanned_count);
 
     let cancel_flag = cancel_flag.map(Arc::new);
     let records = file_paths
