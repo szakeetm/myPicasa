@@ -89,10 +89,11 @@ export function ViewerModal({
         ? "Open With QuickTime"
         : "Open With Quick Look"
       : "Open Preview";
-  const canonicalImageSize =
+  const originalImageSize =
     asset?.width && asset?.height
       ? { width: asset.width, height: asset.height }
-      : naturalSize;
+      : undefined;
+  const canonicalImageSize = originalImageSize ?? naturalSize;
 
   useEffect(() => {
     onViewerPreviewReadyRef.current = onViewerPreviewReady;
@@ -879,7 +880,7 @@ export function ViewerModal({
         <div className="viewer-meta">
           <p className="muted">
             {asset.taken_at_utc ? dayjs(asset.taken_at_utc).format("YYYY-MM-DD HH:mm:ss") : "Unknown capture time"}
-            {canonicalImageSize ? ` • ${canonicalImageSize.width}x${canonicalImageSize.height}` : ""}
+            {originalImageSize ? ` • ${originalImageSize.width}x${originalImageSize.height}` : ""}
             {asset.file_size ? ` • ${formatFileSize(asset.file_size)}` : ""}
           </p>
           {asset.albums.length > 0 ? (
