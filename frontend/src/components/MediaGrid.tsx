@@ -1058,10 +1058,6 @@ export function MediaGrid({
                 )}
                 {asset.media_kind === "video" ? (
                   <>
-                    <div className="thumb-play-badge" aria-hidden="true">
-                      <span className="thumb-play-icon">▶</span>
-                      <span>Video</span>
-                    </div>
                     {asset.duration_ms ? (
                       <div className="thumb-duration-badge">{formatDuration(asset.duration_ms)}</div>
                     ) : null}
