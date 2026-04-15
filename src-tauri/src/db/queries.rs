@@ -788,7 +788,7 @@ impl DatabaseQueries for super::Database {
                 "SELECT id, import_id, severity, diagnostic_type, related_path, message, created_at
                  FROM ingress_diagnostics
                  ORDER BY id DESC
-                 LIMIT 500",
+                 LIMIT 10000",
             )?;
             let rows = stmt.query_map([], |row| {
                 Ok(DiagnosticEntry {

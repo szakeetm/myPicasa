@@ -1186,6 +1186,18 @@ export function App() {
     await navigator.clipboard.writeText(text);
   }
 
+  async function handleCopyDiagnostics() {
+    const text = state.diagnostics
+      .map(
+        (diagnostic) =>
+          `${formatLogTimestamp(diagnostic.created_at)} [${diagnostic.severity}] ${diagnostic.diagnostic_type} import=${diagnostic.import_id} ${diagnostic.message}${
+            diagnostic.related_path ? `\n${diagnostic.related_path}` : ""
+          }`,
+      )
+      .join("\n");
+    await navigator.clipboard.writeText(text);
+  }
+
   useEffect(() => {
     const targetLogs = [
       ...(thumbLogOpen ? thumbGenerationLogs : []),
@@ -1378,6 +1390,9 @@ export function App() {
                 </div>
               </div>
               <div className="button-row">
+                <button className="button-secondary" onClick={() => void handleCopyDiagnostics()}>
+                  Copy
+                </button>
                 <button className="button-danger" onClick={handleClearDiagnostics}>
                   Clear
                 </button>
