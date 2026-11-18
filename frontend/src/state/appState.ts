@@ -3,8 +3,6 @@ import { createJSONStorage, persist } from "zustand/middleware";
 
 import type {
   AlbumSummary,
-  AssetDetail,
-  AssetListItem,
   CacheStats,
   DiagnosticEntry,
   ImportProgress,
@@ -25,8 +23,6 @@ type AppState = {
   viewMode: ViewMode;
   selectedAlbumId?: number;
   albums: AlbumSummary[];
-  assets: AssetListItem[];
-  selectedAsset?: AssetDetail;
   diagnostics: DiagnosticEntry[];
   logs: LogEntry[];
   cacheStats?: CacheStats;
@@ -41,8 +37,6 @@ type AppState = {
   setViewMode: (value: ViewMode) => void;
   setSelectedAlbumId: (value?: number) => void;
   setAlbums: (value: AlbumSummary[]) => void;
-  setAssets: (value: AssetListItem[]) => void;
-  setSelectedAsset: (value?: AssetDetail) => void;
   setDiagnostics: (value: DiagnosticEntry[]) => void;
   setLogs: (value: LogEntry[]) => void;
   setCacheStats: (value?: CacheStats) => void;
@@ -61,7 +55,6 @@ export const useAppState = create<AppState>()(
       dateTo: "",
       viewMode: "timeline",
       albums: [],
-      assets: [],
       diagnostics: [],
       logs: [],
       setRootsInput: (rootsInput) => set({ rootsInput }),
@@ -74,8 +67,6 @@ export const useAppState = create<AppState>()(
       setViewMode: (viewMode) => set({ viewMode }),
       setSelectedAlbumId: (selectedAlbumId) => set({ selectedAlbumId }),
       setAlbums: (albums) => set({ albums }),
-      setAssets: (assets) => set({ assets }),
-      setSelectedAsset: (selectedAsset) => set({ selectedAsset }),
       setDiagnostics: (diagnostics) => set({ diagnostics }),
       setLogs: (logs) => set({ logs }),
       setCacheStats: (cacheStats) => set({ cacheStats }),

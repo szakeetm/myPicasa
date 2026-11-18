@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react";
 
 import dayjs from "dayjs";
 
@@ -18,7 +18,17 @@ type ViewerModalProps = {
   onViewerPreviewReady?: (assetId: number) => void;
 };
 
-export function ViewerModal({
+export function ViewerModal(props: ViewerModalProps) {
+  if (!props.asset) return null;
+  return (
+    <ViewerSession
+      key={JSON.stringify([props.asset.id, props.asset.primary_path, props.asset.live_photo_video_path, props.viewerPreviewSize])}
+      {...props}
+    />
+  );
+}
+
+function ViewerSession({
   asset,
   viewerPreviewSize,
   hasPrevious,
@@ -36,7 +46,7 @@ export function ViewerModal({
   const [videoError, setVideoError] = useState<string>();
   const [videoFallbackAttempted, setVideoFallbackAttempted] = useState(false);
   const [videoFallbackAvailable, setVideoFallbackAvailable] = useState(false);
-  const [videoTranscoding, setVideoTranscoding] = useState(false);
+  const [videoTranscoding, setVideoTranscoding] = useState(asset?.media_kind === "video");
   const [videoTranscodeStatus, setVideoTranscodeStatus] = useState<{
     codec?: string;
     encoder?: string;
@@ -49,7 +59,7 @@ export function ViewerModal({
   const [livePhotoMotionError, setLivePhotoMotionError] = useState<string>();
   const [livePhotoFallbackAttempted, setLivePhotoFallbackAttempted] = useState(false);
   const [livePhotoFallbackAvailable, setLivePhotoFallbackAvailable] = useState(false);
-  const [livePhotoTranscoding, setLivePhotoTranscoding] = useState(false);
+  const [livePhotoTranscoding, setLivePhotoTranscoding] = useState(Boolean(asset?.live_photo_video_path));
   const [livePhotoTranscodeStatus, setLivePhotoTranscodeStatus] = useState<{
     codec?: string;
     encoder?: string;
@@ -60,14 +70,16 @@ export function ViewerModal({
   }>({});
   const [showLivePhotoMotion, setShowLivePhotoMotion] = useState(false);
   const [naturalSize, setNaturalSize] = useState<{ width: number; height: number }>();
-  const [displaySourceLabel, setDisplaySourceLabel] = useState<string>("Loading");
+  const [videoSource, setVideoSource] = useState("transcoding");
+  const [livePhotoSource, setLivePhotoSource] = useState("transcoding");
+  const [imageSource, setImageSource] = useState("Loading");
+  const mountedRef = useRef(false);
   const videoElementRef = useRef<HTMLVideoElement | null>(null);
   const livePhotoVideoElementRef = useRef<HTMLVideoElement | null>(null);
   const videoObjectUrlRef = useRef<string | undefined>(undefined);
   const livePhotoObjectUrlRef = useRef<string | undefined>(undefined);
-  const videoSourceLabelRef = useRef<string>("unset");
-  const livePhotoSourceLabelRef = useRef<string>("unset");
-  const imageSourceLabelRef = useRef<string>("unset");
+  const videoSourceLabelRef = useRef<string>("transcoding");
+  const livePhotoSourceLabelRef = useRef<string>("transcoding");
   const onViewerPreviewReadyRef = useRef<typeof onViewerPreviewReady>(onViewerPreviewReady);
   const assetId = asset?.id;
   const isPhoto = asset && asset.media_kind !== "video";
@@ -100,71 +112,29 @@ export function ViewerModal({
   }, [onViewerPreviewReady]);
 
   useEffect(() => {
-    setVideoFallbackAttempted(false);
-    setShowLivePhotoMotion(false);
-    setVideoSrc(undefined);
-    setVideoError(undefined);
-    setVideoTranscoding(false);
-    setVideoFallbackAvailable(false);
-    setLivePhotoMotionSrc(undefined);
-    setLivePhotoMotionError(undefined);
-    setLivePhotoFallbackAttempted(false);
-    setLivePhotoTranscoding(false);
-    setLivePhotoFallbackAvailable(false);
-    setVideoTranscodeStatus({});
-    setLivePhotoTranscodeStatus({});
-    setNaturalSize(undefined);
-    setDisplaySourceLabel("Loading");
-    setImageError(undefined);
-    setImageSrc(undefined);
-    if (videoObjectUrlRef.current) {
-      URL.revokeObjectURL(videoObjectUrlRef.current);
-      videoObjectUrlRef.current = undefined;
-    }
-    if (livePhotoObjectUrlRef.current) {
-      URL.revokeObjectURL(livePhotoObjectUrlRef.current);
-      livePhotoObjectUrlRef.current = undefined;
-    }
-  }, [assetId]);
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      for (const source of [videoObjectUrlRef, livePhotoObjectUrlRef]) {
+        if (source.current) URL.revokeObjectURL(source.current);
+        source.current = undefined;
+      }
+    };
+  }, []);
 
-  function setImageSourceLabel(label: string) {
-    imageSourceLabelRef.current = label;
-    if (!showLivePhotoMotion && isPhoto) {
-      setDisplaySourceLabel(label);
-    }
-  }
-
-  function setVideoSourceLabel(label: string) {
+  const setVideoSourceLabel = useCallback((label: string) => {
     videoSourceLabelRef.current = label;
-    if (isVideo) {
-      setDisplaySourceLabel(label);
-    }
-  }
+    setVideoSource(label);
+  }, []);
 
-  function setLivePhotoSourceLabel(label: string) {
+  const setLivePhotoSourceLabel = useCallback((label: string) => {
     livePhotoSourceLabelRef.current = label;
-    if (showLivePhotoMotion) {
-      setDisplaySourceLabel(label);
-    }
-  }
+    setLivePhotoSource(label);
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
-    if (!assetId || !isVideo) {
-      setVideoSrc(undefined);
-      setVideoError(undefined);
-      setVideoFallbackAttempted(false);
-      setVideoTranscoding(false);
-      return;
-    }
-
-    setVideoError(undefined);
-    setVideoSrc(undefined);
-    setVideoFallbackAttempted(false);
-    setVideoFallbackAvailable(false);
-    setVideoTranscoding(true);
-    setVideoTranscodeStatus({});
-    setVideoSourceLabel("transcoding");
+    if (!assetId || !isVideo) return;
     void logClient(
       "viewer.video",
       `viewer-v2 asset ${assetId} loading backend video for ${asset?.primary_path ?? "unknown"} (${describeVideoSupport(asset?.primary_path)} source=${shouldPreferOriginalVideoBytes ? "original_bytes" : "transcode"})`,
@@ -247,25 +217,11 @@ export function ViewerModal({
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.primary_path, isVideo, shouldPreferOriginalVideoBytes]);
+  }, [assetId, asset?.primary_path, isVideo, setVideoSourceLabel, shouldPreferOriginalVideoBytes]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!assetId || !livePhotoPath) {
-      setLivePhotoMotionSrc(undefined);
-      setLivePhotoMotionError(undefined);
-      setLivePhotoFallbackAttempted(false);
-      setLivePhotoTranscoding(false);
-      return;
-    }
-
-    setLivePhotoMotionError(undefined);
-    setLivePhotoMotionSrc(undefined);
-    setLivePhotoFallbackAttempted(false);
-    setLivePhotoFallbackAvailable(false);
-    setLivePhotoTranscoding(true);
-    setLivePhotoTranscodeStatus({});
-    setLivePhotoSourceLabel("transcoding");
+    if (!assetId || !livePhotoPath) return;
     void logClient(
       "viewer.live_photo",
       `viewer-v2 asset ${assetId} loading backend motion for ${asset?.live_photo_video_path ?? "unknown"} (${describeVideoSupport(asset?.live_photo_video_path)} source=${shouldPreferOriginalLivePhotoBytes ? "original_bytes" : "transcode"})`,
@@ -348,18 +304,11 @@ export function ViewerModal({
     return () => {
       cancelled = true;
     };
-  }, [assetId, asset?.live_photo_video_path, livePhotoPath, shouldPreferOriginalLivePhotoBytes]);
+  }, [assetId, asset?.live_photo_video_path, livePhotoPath, setLivePhotoSourceLabel, shouldPreferOriginalLivePhotoBytes]);
 
   useEffect(() => {
     let cancelled = false;
-    if (!assetId || !isPhoto) {
-      setImageSrc(undefined);
-      setImageError(undefined);
-      setNaturalSize(undefined);
-      return;
-    }
-    setImageError(undefined);
-    setDisplaySourceLabel("Loading");
+    if (!assetId || !isPhoto) return;
     void logClient(
       "viewer.image",
       `asset ${assetId} loading backend image source=preview path=${asset?.primary_path ?? "unknown"} (${describeImageSupport(asset?.primary_path)})`,
@@ -370,7 +319,7 @@ export function ViewerModal({
       .then((src) => {
         if (cancelled) return;
         if (src) {
-          setImageSourceLabel("preview");
+          setImageSource("preview");
           void logClient(
             "viewer.image",
             `asset ${assetId} loaded ${viewerPreviewSize}px viewer preview thumbnail path=${asset?.primary_path ?? "unknown"}`,
@@ -455,8 +404,9 @@ export function ViewerModal({
     setVideoSourceLabel("transcoding");
     void logClient("viewer.video", `asset ${assetId} switching to transcoded backend playback after backend-original error`);
     try {
-      while (true) {
+      while (mountedRef.current) {
         const backendMedia = await api.loadViewerVideo(assetId, false);
+        if (!mountedRef.current) return;
         if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
           setVideoTranscoding(false);
           setVideoTranscodeStatus({});
@@ -510,8 +460,9 @@ export function ViewerModal({
     setLivePhotoSourceLabel("transcoding");
     void logClient("viewer.live_photo", `asset ${assetId} switching to transcoded backend motion after backend-original error`);
     try {
-      while (true) {
+      while (mountedRef.current) {
         const backendMedia = await api.loadLivePhotoMotion(assetId, false);
+        if (!mountedRef.current) return;
         if (backendMedia.status === "ready" && backendMedia.src && backendMedia.source) {
           setLivePhotoTranscoding(false);
           setLivePhotoTranscodeStatus({});
@@ -577,56 +528,47 @@ export function ViewerModal({
     );
   }
 
-  useEffect(() => {
+  const onKeyDown = useEffectEvent((event: KeyboardEvent) => {
     if (!asset) return;
-    function onKeyDown(event: KeyboardEvent) {
-      const target = event.target as HTMLElement | null;
-      const tagName = target?.tagName?.toLowerCase();
-      const isEditable =
-        tagName === "input" ||
-        tagName === "textarea" ||
-        tagName === "select" ||
-        target?.isContentEditable;
+    const target = event.target as HTMLElement | null;
+    const tagName = target?.tagName?.toLowerCase();
+    const isEditable =
+      tagName === "input" ||
+      tagName === "textarea" ||
+      tagName === "select" ||
+      target?.isContentEditable;
 
-      if (event.key === "ArrowLeft" && hasPrevious) {
-        event.preventDefault();
-        onPrevious();
-      } else if (event.key === "ArrowRight" && hasNext) {
-        event.preventDefault();
-        onNext();
-      } else if (event.key === "Escape") {
-        event.preventDefault();
-        onClose();
-      } else if ((event.key === "f" || event.key === "F") && asset?.primary_path && !isEditable) {
-        event.preventDefault();
-        void handleRevealInFileManager();
-      } else if ((event.key === "o" || event.key === "O") && asset?.primary_path && !isEditable) {
-        event.preventDefault();
-        void handleOpenInDefaultApp();
-      } else if (event.key === " " && asset?.primary_path) {
-        if (isEditable) {
-          return;
-        }
-        event.preventDefault();
-        void handleOpenAssetPreview();
+    if (event.key === "ArrowLeft" && hasPrevious) {
+      event.preventDefault();
+      onPrevious();
+    } else if (event.key === "ArrowRight" && hasNext) {
+      event.preventDefault();
+      onNext();
+    } else if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+    } else if ((event.key === "f" || event.key === "F") && asset.primary_path && !isEditable) {
+      event.preventDefault();
+      void handleRevealInFileManager();
+    } else if ((event.key === "o" || event.key === "O") && asset.primary_path && !isEditable) {
+      event.preventDefault();
+      void handleOpenInDefaultApp();
+    } else if (event.key === " " && asset.primary_path) {
+      if (isEditable) {
+        return;
       }
+      event.preventDefault();
+      void handleOpenAssetPreview();
     }
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [asset, hasNext, hasPrevious, isPhoto, onClose, onNext, onPrevious]);
+  });
 
   useEffect(() => {
-    if (showLivePhotoMotion) {
-      setDisplaySourceLabel(livePhotoSourceLabelRef.current);
-    } else if (isVideo) {
-      setDisplaySourceLabel(videoSourceLabelRef.current);
-    } else if (isPhoto) {
-      setDisplaySourceLabel(imageSourceLabelRef.current);
-    } else {
-      setDisplaySourceLabel("Loading");
-    }
-  }, [isPhoto, isVideo, showLivePhotoMotion]);
+    const handleKeyDown = (event: KeyboardEvent) => onKeyDown(event);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
+  const displaySourceLabel = showLivePhotoMotion ? livePhotoSource : isVideo ? videoSource : imageSource;
   if (!asset) return null;
 
   return (
@@ -848,7 +790,7 @@ export function ViewerModal({
                 onLoad={(event) => {
                   void logClient(
                     "viewer.image",
-                    `asset ${assetId} image loaded source=${imageSourceLabelRef.current} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
+                    `asset ${assetId} image loaded source=${imageSource} size=${event.currentTarget.naturalWidth}x${event.currentTarget.naturalHeight}`,
                   );
                   setNaturalSize({
                     width: event.currentTarget.naturalWidth,

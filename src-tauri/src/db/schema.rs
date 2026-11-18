@@ -43,6 +43,8 @@ pub fn apply(conn: &Connection) -> Result<(), AppError> {
         CREATE INDEX IF NOT EXISTS idx_file_entries_filename ON file_entries(filename);
         CREATE INDEX IF NOT EXISTS idx_file_entries_mtime ON file_entries(mtime_utc);
         CREATE INDEX IF NOT EXISTS idx_file_entries_last_seen_import_id ON file_entries(last_seen_import_id);
+        CREATE INDEX IF NOT EXISTS idx_file_entries_quick_hash ON file_entries(quick_hash);
+        CREATE INDEX IF NOT EXISTS idx_file_entries_parent_path ON file_entries(parent_path);
         CREATE INDEX IF NOT EXISTS idx_file_entries_full_hash ON file_entries(full_hash);
 
         CREATE TABLE IF NOT EXISTS assets (

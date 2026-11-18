@@ -262,13 +262,13 @@ fn process_thumbnail_job(
 
     match result {
         Ok(Some((bytes, replacement_keys))) => {
+            let cache = if job.use_preview_cache {
+                preview_cache
+            } else {
+                thumbnail_cache
+            };
+            let mut cache = cache.lock();
             if generation.load(Ordering::SeqCst) == job.generation {
-                let cache = if job.use_preview_cache {
-                    preview_cache
-                } else {
-                    thumbnail_cache
-                };
-                let mut cache = cache.lock();
                 if job.use_preview_cache {
                     for replacement_key in replacement_keys {
                         cache.remove(&replacement_key);

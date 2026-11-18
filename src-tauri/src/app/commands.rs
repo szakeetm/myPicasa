@@ -17,6 +17,7 @@ use std::os::windows::process::CommandExt;
 
 use crate::{
     app::{
+        allow_asset_directories,
         state::{
             AppState, BatchThumbnailGenerationState, BatchViewerTranscodeState, ThumbnailJob,
             ViewerTranscodeState, preview_cache_replacement_keys_for_path,
@@ -24,8 +25,8 @@ use crate::{
         },
         sync_asset_protocol_scope,
     },
-    db::DatabaseQueries,
-    import::refresher::refresh_takeout_index,
+    db::{Database, DatabaseQueries},
+    import::refresher::{refresh_takeout_index, reserve_refresh},
     media::thumb::{
         VIEWER_VIDEO_TRANSCODE_MIN_TIMEOUT, clear_viewer_render_cache, generate_thumbnail,
         generate_viewer_image, generate_viewer_image_file, generate_viewer_video,
@@ -231,10 +232,6 @@ fn is_refresh_running(state: &AppState) -> bool {
             .map(|item| item.status.as_str()),
         Some("running")
     )
-}
-
-fn is_refresh_cancelled_message(message: &str) -> bool {
-    message.to_ascii_lowercase().contains("refresh cancelled")
 }
 
 fn wait_for_refresh_shutdown(state: &AppState, timeout: Duration) -> CommandResult<()> {
@@ -487,55 +484,71 @@ pub fn export_app_backup(
     backup_dir: String,
     state: State<AppState>,
 ) -> CommandResult<AppBackupSummary> {
-    ensure_cache_storage_change_allowed(state.inner())?;
+    let import_status = state.import_status.lock();
+    ensure_refresh_has_stopped(import_status.as_ref())?;
+    ensure_cache_workers_have_stopped(state.inner())?;
     let backup_dir = PathBuf::from(backup_dir);
-    fs::create_dir_all(&backup_dir).map_err(map_error)?;
-
+    let cache_root = state.cache_data_dir();
     let settings = state.app_settings_snapshot();
+    ensure_backup_paths_are_disjoint(
+        &backup_dir,
+        &state.app_data_dir,
+        &[&cache_root],
+        &settings.indexed_roots,
+    )?;
+    fs::create_dir_all(&backup_dir).map_err(map_error)?;
+    let mut stage = BackupStage::new(&backup_dir, "export")?;
+
     let manifest = AppBackupManifest {
         format_version: 1,
         exported_at: utc_now(),
         settings: settings.clone(),
     };
     fs::write(
-        backup_manifest_path(&backup_dir),
+        backup_manifest_path(&stage.path),
         serde_json::to_vec_pretty(&manifest).map_err(map_error)?,
     )
     .map_err(map_error)?;
     fs::write(
-        backup_settings_path(&backup_dir),
+        backup_settings_path(&stage.path),
         serde_json::to_vec_pretty(&settings).map_err(map_error)?,
     )
     .map_err(map_error)?;
     state
         .db
-        .export_to(&backup_database_path(&backup_dir))
+        .export_to(&backup_database_path(&stage.path))
         .map_err(map_error)?;
 
-    let cache_root = state.cache_data_dir();
     let mut cache_files = 0_u64;
     let mut cache_bytes = 0_u64;
     for subdir in cache_storage_subdirs() {
-        clear_directory_contents(&backup_dir.join(subdir))?;
         let (files, bytes) =
-            copy_directory_recursive(&cache_root.join(subdir), &backup_dir.join(subdir))?;
+            copy_directory_recursive(&cache_root.join(subdir), &stage.path.join(subdir))?;
         cache_files += files;
         cache_bytes += bytes;
     }
+    let names = [
+        APP_BACKUP_DATABASE_FILE,
+        "settings.json",
+        "thumbnail-cache",
+        "preview-cache",
+        "viewer-cache",
+        APP_BACKUP_MANIFEST_FILE,
+    ];
+    if let Err(error) = stage.install(&backup_dir, names) {
+        return Err(backup_commit_error(error, [stage.rollback()]));
+    }
 
-    state
-        .db
-        .insert_log(
-            "info",
-            "backup",
-            &format!(
-                "exported app backup to {} with {} cache files",
-                backup_dir.display(),
-                cache_files
-            ),
-            None,
-        )
-        .map_err(map_error)?;
+    let _ = state.db.insert_log(
+        "info",
+        "backup",
+        &format!(
+            "exported app backup to {} with {} cache files",
+            backup_dir.display(),
+            cache_files
+        ),
+        None,
+    );
 
     Ok(AppBackupSummary {
         backup_dir: backup_dir.to_string_lossy().to_string(),
@@ -553,7 +566,9 @@ pub fn import_app_backup(
     app: AppHandle,
     state: State<AppState>,
 ) -> CommandResult<AppBackupSummary> {
-    ensure_cache_storage_change_allowed(state.inner())?;
+    let mut import_status = state.import_status.lock();
+    ensure_refresh_has_stopped(import_status.as_ref())?;
+    ensure_cache_workers_have_stopped(state.inner())?;
     let backup_dir = PathBuf::from(backup_dir);
     let manifest = load_backup_manifest(&backup_dir)?;
     let imported_roots = takeout_roots
@@ -577,33 +592,23 @@ pub fn import_app_backup(
     let mut restored_settings = manifest.settings.clone();
     restored_settings.indexed_roots = imported_roots.clone();
     restored_settings.cache_storage_dir = cache_storage_dir;
-    let restored_settings = state
-        .apply_app_settings(restored_settings, false)
-        .map_err(map_error)?;
-    sync_asset_protocol_scope(&app, state.inner()).map_err(map_error)?;
+    let restored_settings = restored_settings.sanitized();
+    let cache_root = state.resolve_cache_data_dir(&restored_settings);
+    let current_cache_root = state.cache_data_dir();
+    let current_settings = state.app_settings_snapshot();
+    let mut takeout_roots = current_settings.indexed_roots;
+    takeout_roots.extend(restored_settings.indexed_roots.iter().cloned());
+    ensure_backup_paths_are_disjoint(
+        &backup_dir,
+        &state.app_data_dir,
+        &[&cache_root, &current_cache_root],
+        &[],
+    )?;
+    ensure_cache_does_not_overlap_takeout(&cache_root, &takeout_roots)?;
 
-    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
-    state.inflight_thumbnails.lock().clear();
-    state.failed_thumbnails.lock().clear();
-    state.viewer_video_jobs.lock().clear();
-    *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
-    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
-    *state.import_status.lock() = None;
-
-    let cache_root = state.cache_data_dir();
-    let mut cache_files = 0_u64;
-    let mut cache_bytes = 0_u64;
-    for subdir in cache_storage_subdirs() {
-        let destination = cache_root.join(subdir);
-        clear_directory_contents(&destination)?;
-        let (files, bytes) = copy_directory_recursive(&backup_dir.join(subdir), &destination)?;
-        cache_files += files;
-        cache_bytes += bytes;
-    }
-
-    state
-        .db
-        .import_from(&backup_database_path(&backup_dir))
+    let mut app_stage = BackupStage::new(&state.app_data_dir, "restore-app")?;
+    let staged_db_path = backup_database_path(&app_stage.path);
+    let staged_db = Database::stage_backup(&backup_database_path(&backup_dir), &staged_db_path)
         .map_err(map_error)?;
     let root_mappings = manifest
         .settings
@@ -612,24 +617,74 @@ pub fn import_app_backup(
         .cloned()
         .zip(imported_roots.iter().cloned())
         .collect::<Vec<_>>();
-    state
-        .db
+    staged_db
         .remap_takeout_roots(&root_mappings)
         .map_err(map_error)?;
+    drop(staged_db);
+    fs::write(
+        backup_settings_path(&app_stage.path),
+        serde_json::to_vec_pretty(&restored_settings).map_err(map_error)?,
+    )
+    .map_err(map_error)?;
 
-    state
-        .db
-        .insert_log(
-            "info",
-            "backup",
-            &format!(
-                "imported app backup from {} with {} cache files",
-                backup_dir.display(),
-                cache_files
-            ),
-            None,
-        )
+    let mut cache_stage = BackupStage::new(&cache_root, "restore-cache")?;
+    let mut cache_files = 0_u64;
+    let mut cache_bytes = 0_u64;
+    for subdir in cache_storage_subdirs() {
+        let destination = cache_stage.path.join(subdir);
+        let (files, bytes) = copy_directory_recursive(&backup_dir.join(subdir), &destination)?;
+        cache_files += files;
+        cache_bytes += bytes;
+    }
+
+    ensure_cache_workers_have_stopped(state.inner())?;
+    if state
+        .viewer_video_jobs
+        .lock()
+        .values()
+        .any(|job| matches!(job, ViewerTranscodeState::Pending { .. }))
+        || !state.inflight_viewer_playback_hints.lock().is_empty()
+    {
+        return Err(map_error(
+            "Wait for viewer media jobs to finish before restoring a backup",
+        ));
+    }
+    allow_asset_directories(&app, cache_root.clone(), &restored_settings.indexed_roots)
         .map_err(map_error)?;
+    state.thumbnail_generation.fetch_add(1, Ordering::SeqCst);
+    {
+        let _thumbnail_cache = state.thumbnail_cache.lock();
+        let _preview_cache = state.preview_cache.lock();
+        let commit = (|| {
+            cache_stage.install(&cache_root, cache_storage_subdirs())?;
+            app_stage.install(&state.app_data_dir, ["settings.json"])?;
+            state.db.import_from(&staged_db_path).map_err(map_error)
+        })();
+        if let Err(error) = commit {
+            return Err(backup_commit_error(
+                error,
+                [app_stage.rollback(), cache_stage.rollback()],
+            ));
+        }
+    }
+
+    state.activate_cache_data_dir(cache_root);
+    *state.app_settings.lock() = restored_settings.clone();
+    state.refreshed_viewer_playback_hints.lock().clear();
+    *state.batch_viewer_transcode.lock() = BatchViewerTranscodeState::idle();
+    *state.batch_thumbnail_generation.lock() = BatchThumbnailGenerationState::idle();
+    *import_status = None;
+
+    let _ = state.db.insert_log(
+        "info",
+        "backup",
+        &format!(
+            "imported app backup from {} with {} cache files",
+            backup_dir.display(),
+            cache_files
+        ),
+        None,
+    );
 
     Ok(AppBackupSummary {
         backup_dir: backup_dir.to_string_lossy().to_string(),
@@ -644,18 +699,20 @@ fn cache_storage_migration_status_snapshot(state: &AppState) -> CacheStorageMigr
 }
 
 fn ensure_cache_storage_change_allowed(state: &AppState) -> CommandResult<()> {
-    if matches!(
-        state
-            .import_status
-            .lock()
-            .as_ref()
-            .map(|item| item.status.as_str()),
-        Some("running")
-    ) {
+    ensure_refresh_has_stopped(state.import_status.lock().as_ref())?;
+    ensure_cache_workers_have_stopped(state)
+}
+
+fn ensure_refresh_has_stopped(progress: Option<&ImportProgress>) -> CommandResult<()> {
+    if progress.is_some_and(|item| item.status == "running") {
         return Err(InvokeError::from(
             "Wait for the current refresh to finish before changing app storage".to_string(),
         ));
     }
+    Ok(())
+}
+
+fn ensure_cache_workers_have_stopped(state: &AppState) -> CommandResult<()> {
     if state.batch_viewer_transcode.lock().running {
         return Err(InvokeError::from(
             "Stop batch video transcoding before changing cache storage".to_string(),
@@ -691,15 +748,229 @@ fn backup_settings_path(backup_dir: &Path) -> PathBuf {
     backup_dir.join("settings.json")
 }
 
+struct BackupStage {
+    path: PathBuf,
+    installed: Vec<BackupReplacement>,
+    keep_for_recovery: bool,
+}
+
+struct BackupReplacement {
+    target: PathBuf,
+    moved_previous: bool,
+    installed: bool,
+}
+
+impl BackupStage {
+    fn new(root: &Path, operation: &str) -> CommandResult<Self> {
+        fs::create_dir_all(root).map_err(map_error)?;
+        for index in 0..1000 {
+            let path = root.join(format!(
+                ".mypicasa-{operation}-{}-{index}",
+                std::process::id()
+            ));
+            match fs::create_dir(&path) {
+                Ok(()) => {
+                    let stage = Self {
+                        path,
+                        installed: Vec::new(),
+                        keep_for_recovery: false,
+                    };
+                    fs::create_dir(stage.path.join("previous")).map_err(map_error)?;
+                    return Ok(stage);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => return Err(map_error(error)),
+            }
+        }
+        Err(map_error("Could not reserve a backup staging directory"))
+    }
+
+    fn install<const N: usize>(
+        &mut self,
+        destination: &Path,
+        names: [&str; N],
+    ) -> CommandResult<()> {
+        for name in names {
+            let target = destination.join(name);
+            let previous = self.path.join("previous").join(name);
+            let moved_previous = match fs::rename(&target, previous) {
+                Ok(()) => true,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+                Err(error) => return Err(map_error(error)),
+            };
+            self.installed.push(BackupReplacement {
+                target: target.clone(),
+                moved_previous,
+                installed: false,
+            });
+            fs::rename(self.path.join(name), target).map_err(map_error)?;
+            self.installed.last_mut().unwrap().installed = true;
+        }
+        Ok(())
+    }
+
+    fn rollback(&mut self) -> Result<(), PathBuf> {
+        for BackupReplacement {
+            target,
+            moved_previous,
+            installed,
+        } in self.installed.drain(..).rev()
+        {
+            let name = target
+                .file_name()
+                .expect("staged artifact must have a name");
+            if installed && fs::rename(&target, self.path.join(name)).is_err() {
+                self.keep_for_recovery = true;
+                continue;
+            }
+            if moved_previous && fs::rename(self.path.join("previous").join(name), &target).is_err()
+            {
+                self.keep_for_recovery = true;
+            }
+        }
+        if self.keep_for_recovery {
+            return Err(self.path.clone());
+        }
+        Ok(())
+    }
+}
+
+impl Drop for BackupStage {
+    fn drop(&mut self) {
+        if !self.keep_for_recovery {
+            let _ = fs::remove_dir_all(&self.path);
+        }
+    }
+}
+
+fn backup_commit_error<const N: usize>(
+    error: InvokeError,
+    rollbacks: [Result<(), PathBuf>; N],
+) -> InvokeError {
+    let recovery_dirs = rollbacks
+        .into_iter()
+        .filter_map(Result::err)
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>();
+    if recovery_dirs.is_empty() {
+        return error;
+    }
+    map_error(format!(
+        "{}. Rollback was incomplete. Previous files are available in {}",
+        error.0,
+        recovery_dirs.join(", ")
+    ))
+}
+
+fn resolve_existing_ancestors(path: &Path) -> std::io::Result<PathBuf> {
+    match path.canonicalize() {
+        Ok(path) => Ok(path),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let name = path
+                .file_name()
+                .ok_or_else(|| std::io::Error::other("Invalid backup path"))?;
+            let parent = path
+                .parent()
+                .ok_or_else(|| std::io::Error::other("Invalid backup path"))?;
+            Ok(resolve_existing_ancestors(parent)?.join(name))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn resolved_backup_path(path: &Path) -> CommandResult<PathBuf> {
+    let absolute = std::path::absolute(path).map_err(map_error)?;
+    resolve_existing_ancestors(&absolute).map_err(map_error)
+}
+
+fn paths_overlap(first: &Path, second: &Path) -> bool {
+    first.starts_with(second) || second.starts_with(first)
+}
+
+fn ensure_backup_paths_are_disjoint(
+    backup_dir: &Path,
+    app_data: &Path,
+    cache_roots: &[&Path],
+    takeout_roots: &[String],
+) -> CommandResult<()> {
+    let backup_dir = resolved_backup_path(backup_dir)?;
+    let data_dir = resolved_backup_path(app_data)?;
+    let mut protected = vec![
+        backup_database_path(&data_dir),
+        backup_settings_path(&data_dir),
+        data_dir.join("working"),
+    ];
+    for root in cache_roots.iter().copied().chain([app_data]) {
+        protected.extend(cache_storage_subdirs().map(|name| root.join(name)));
+    }
+    protected.extend(takeout_roots.iter().map(PathBuf::from));
+    let backup_artifacts = [
+        APP_BACKUP_DATABASE_FILE,
+        APP_BACKUP_MANIFEST_FILE,
+        "settings.json",
+    ]
+    .into_iter()
+    .chain(cache_storage_subdirs())
+    .map(|name| resolved_backup_path(&backup_dir.join(name)))
+    .collect::<Result<Vec<_>, _>>()?;
+    for path in protected {
+        let path = resolved_backup_path(&path)?;
+        if backup_dir.starts_with(&path)
+            || backup_artifacts
+                .iter()
+                .any(|artifact| paths_overlap(&path, artifact))
+        {
+            return Err(map_error(format!(
+                "Backup directory overlaps active app storage or Takeout files at {}",
+                path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn ensure_cache_does_not_overlap_takeout(cache_root: &Path, roots: &[String]) -> CommandResult<()> {
+    let cache_root = resolved_backup_path(cache_root)?;
+    let destinations = cache_storage_subdirs()
+        .into_iter()
+        .map(|name| resolved_backup_path(&cache_root.join(name)))
+        .collect::<Result<Vec<_>, _>>()?;
+    for root in roots {
+        let root = resolved_backup_path(Path::new(root))?;
+        if cache_root.starts_with(&root)
+            || destinations
+                .iter()
+                .any(|destination| paths_overlap(&root, destination))
+        {
+            return Err(map_error(format!(
+                "Cache destination overlaps Takeout files at {}",
+                root.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(u64, u64), InvokeError> {
-    if !source.exists() {
-        fs::create_dir_all(destination).map_err(map_error)?;
-        return Ok((0, 0));
+    match fs::symlink_metadata(source) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            fs::create_dir_all(destination).map_err(map_error)?;
+            return Ok((0, 0));
+        }
+        Err(error) => return Err(map_error(error)),
+        Ok(metadata) if !metadata.is_dir() => {
+            return Err(map_error(format!(
+                "Cache source is not a directory: {}",
+                source.display()
+            )));
+        }
+        Ok(_) => {}
     }
     fs::create_dir_all(destination).map_err(map_error)?;
     let mut files = 0_u64;
     let mut bytes = 0_u64;
-    for entry in WalkDir::new(source).into_iter().flatten() {
+    for entry in WalkDir::new(source) {
+        let entry = entry.map_err(map_error)?;
         let Ok(relative) = entry.path().strip_prefix(source) else {
             continue;
         };
@@ -708,14 +979,107 @@ fn copy_directory_recursive(source: &Path, destination: &Path) -> Result<(u64, u
             fs::create_dir_all(&target).map_err(map_error)?;
             continue;
         }
-        if let Some(parent) = target.parent() {
-            fs::create_dir_all(parent).map_err(map_error)?;
+        if !entry.file_type().is_file() {
+            return Err(map_error(format!(
+                "Invalid cache entry: {}",
+                entry.path().display()
+            )));
         }
-        fs::copy(entry.path(), &target).map_err(map_error)?;
+        bytes += fs::copy(entry.path(), &target).map_err(map_error)?;
         files += 1;
-        bytes += entry.metadata().map(|meta| meta.len()).unwrap_or(0);
     }
     Ok((files, bytes))
+}
+
+#[cfg(test)]
+mod backup_tests {
+    use super::*;
+
+    #[test]
+    fn failed_install_restores_replaced_files() {
+        let fixture = BackupStage::new(&std::env::temp_dir(), "test-backup").unwrap();
+        let mut stage = BackupStage::new(&fixture.path, "restore").unwrap();
+        let settings = backup_settings_path(&fixture.path);
+        let cache = fixture.path.join("thumbnail-cache");
+        fs::write(&settings, "previous settings").unwrap();
+        fs::create_dir(&cache).unwrap();
+        fs::write(cache.join("previous.jpg"), "previous thumbnail").unwrap();
+        fs::write(backup_settings_path(&stage.path), "incoming settings").unwrap();
+
+        assert!(
+            stage
+                .install(&fixture.path, ["settings.json", "thumbnail-cache"])
+                .is_err()
+        );
+        stage.rollback().unwrap();
+        assert_eq!(fs::read_to_string(settings).unwrap(), "previous settings");
+        assert_eq!(
+            fs::read_to_string(cache.join("previous.jpg")).unwrap(),
+            "previous thumbnail"
+        );
+    }
+
+    #[test]
+    fn invalid_database_cannot_replace_live_state() {
+        let fixture = BackupStage::new(&std::env::temp_dir(), "test-backup").unwrap();
+        let source = fixture.path.join("source.sqlite");
+        let live = Database::new(&fixture.path.join("live.sqlite")).unwrap();
+        let stage = fixture.path.join("staged.sqlite");
+        live.insert_log("info", "test", "existing log", None)
+            .unwrap();
+
+        assert!(Database::stage_backup(&source, &stage).is_err());
+        fs::write(&source, "corrupt").unwrap();
+        assert!(Database::stage_backup(&source, &stage).is_err());
+        assert!(!stage.exists());
+        assert_eq!(live.get_recent_logs(10).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn staged_database_can_replace_live_database() {
+        let fixture = BackupStage::new(&std::env::temp_dir(), "test-backup").unwrap();
+        let source = fixture.path.join("source.sqlite");
+        let backup_db = Database::new(&source).unwrap();
+        backup_db
+            .insert_log("info", "test", "backup log", None)
+            .unwrap();
+        let live = Database::new(&fixture.path.join("live.sqlite")).unwrap();
+        live.insert_log("info", "test", "live log", None).unwrap();
+
+        let staged = fixture.path.join("staged.sqlite");
+        drop(Database::stage_backup(&source, &staged).unwrap());
+        live.import_from(&staged).unwrap();
+        let logs = live.get_recent_logs(10).unwrap();
+        assert_eq!(logs.len(), 1);
+        assert_eq!(logs[0].message, "backup log");
+    }
+
+    #[test]
+    fn rejects_backups_that_overlap_managed_storage() {
+        let fixture = BackupStage::new(&std::env::temp_dir(), "test-backup").unwrap();
+        let app_data = fixture.path.join("app");
+        let cache = fixture.path.join("cache");
+        assert!(ensure_backup_paths_are_disjoint(&app_data, &app_data, &[&cache], &[]).is_err());
+        assert!(ensure_backup_paths_are_disjoint(&cache, &app_data, &[&cache], &[]).is_err());
+        assert!(
+            ensure_backup_paths_are_disjoint(
+                &cache.join("viewer-cache").join("nested"),
+                &app_data,
+                &[&cache],
+                &[],
+            )
+            .is_err()
+        );
+        assert!(
+            ensure_backup_paths_are_disjoint(
+                &fixture.path.join("backup"),
+                &app_data,
+                &[&cache],
+                &[]
+            )
+            .is_ok()
+        );
+    }
 }
 
 fn clear_directory_contents(path: &Path) -> Result<(), InvokeError> {
@@ -829,7 +1193,14 @@ fn clear_app_derived_storage(state: &AppState) -> CommandResult<()> {
 
 fn load_backup_manifest(backup_dir: &Path) -> CommandResult<AppBackupManifest> {
     let raw = fs::read_to_string(backup_manifest_path(backup_dir)).map_err(map_error)?;
-    serde_json::from_str::<AppBackupManifest>(&raw).map_err(map_error)
+    let manifest = serde_json::from_str::<AppBackupManifest>(&raw).map_err(map_error)?;
+    if manifest.format_version != 1 {
+        return Err(map_error(format!(
+            "Unsupported backup format version {}",
+            manifest.format_version
+        )));
+    }
+    Ok(manifest)
 }
 
 fn collect_cache_copy_plan(source_root: &std::path::Path) -> Vec<(PathBuf, PathBuf, u64)> {
@@ -1377,7 +1748,7 @@ fn queue_viewer_video_transcode(
         return Ok(status);
     }
 
-    let job_key = source_path.to_string_lossy().to_string();
+    let job_key = output_path.to_string_lossy().to_string();
     {
         let jobs = state.viewer_video_jobs.lock();
         if let Some(job) = jobs.get(&job_key) {
@@ -1471,6 +1842,12 @@ fn queue_viewer_video_transcode(
 
         match result {
             Ok(Some((path, cache_hit, encoder_used))) => {
+                let path_string = path.to_string_lossy().to_string();
+                let _ = state.db.set_viewer_video_transcode_status(
+                    asset_id,
+                    "ready",
+                    Some(&path_string),
+                );
                 state.viewer_video_jobs.lock().insert(
                     job_key.clone(),
                     ViewerTranscodeState::Ready {
@@ -1478,12 +1855,6 @@ fn queue_viewer_video_transcode(
                         codec: codec_for_job.clone(),
                         encoder: Some(encoder_used.clone()),
                     },
-                );
-                let path_string = path.to_string_lossy().to_string();
-                let _ = state.db.set_viewer_video_transcode_status(
-                    asset_id,
-                    "ready",
-                    Some(&path_string),
                 );
                 let generated_bytes = fs::metadata(&path).map(|meta| meta.len()).unwrap_or(0);
                 let _ = state.db.insert_log(
@@ -2037,52 +2408,19 @@ pub fn refresh_index(
     state: State<AppState>,
 ) -> CommandResult<ImportProgress> {
     info!(roots = ?request.roots, "refresh_index");
-    state.refresh_cancel.store(false, Ordering::SeqCst);
-    let progress = refresh_takeout_index(&state, request).map_err(map_error)?;
-    Ok(progress)
+    let progress = reserve_refresh(&state).map_err(map_error)?;
+    refresh_takeout_index(&state, request, progress).map_err(map_error)
 }
 
 #[tauri::command]
 pub fn start_refresh_index(request: RefreshRequest, state: State<AppState>) -> CommandResult<()> {
-    if is_refresh_running(state.inner()) {
-        return Err(map_error("an import is already running"));
-    }
-
+    let progress = reserve_refresh(&state).map_err(map_error)?;
     let state = state.inner().clone();
-    state.refresh_cancel.store(false, Ordering::SeqCst);
     thread::spawn(move || {
-        if let Err(error) = refresh_takeout_index(&state, request) {
-            let message = error.to_string();
-            if is_refresh_cancelled_message(&message) {
-                return;
-            }
-            error!(%message, "background refresh failed");
-            println!("refresh_takeout_index: failed: {message}");
-            *state.import_status.lock() = Some(ImportProgress {
-                import_id: 0,
-                status: "failed".to_string(),
-                phase: "failed".to_string(),
-                files_scanned: 0,
-                processed_files: 0,
-                total_files: 0,
-                files_added: 0,
-                files_updated: 0,
-                files_deleted: 0,
-                assets_added: 0,
-                assets_updated: 0,
-                assets_deleted: 0,
-                worker_count: 0,
-                message: Some(message.clone()),
-            });
-            let _ = state.db.insert_log(
-                "error",
-                "import",
-                &format!("background refresh failed: {message}"),
-                None,
-            );
+        if let Err(error) = refresh_takeout_index(&state, request, progress) {
+            error!(%error, "background refresh ended");
         }
     });
-
     Ok(())
 }
 
@@ -3061,9 +3399,18 @@ pub fn reset_local_database(state: State<AppState>) -> CommandResult<()> {
         wait_for_refresh_shutdown(state.inner(), Duration::from_secs(30))?;
     }
 
+    let mut status = state.import_status.lock();
+    if status
+        .as_ref()
+        .is_some_and(|progress| progress.status == "running")
+    {
+        return Err(map_error(
+            "another refresh started while preparing to clear the database",
+        ));
+    }
     state.db.reset().map_err(map_error)?;
     state.refresh_cancel.store(false, Ordering::SeqCst);
-    *state.import_status.lock() = None;
+    *status = None;
     clear_app_derived_storage(state.inner())?;
     state
         .db

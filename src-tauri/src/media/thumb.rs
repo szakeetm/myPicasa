@@ -186,7 +186,7 @@ pub fn viewer_image_cache_path(
         .modified()
         .ok()
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_secs())
+        .map(|value| value.as_nanos())
         .unwrap_or(0);
     let cache_key = format!(
         "{}:{}:{}:{}",
@@ -347,7 +347,7 @@ pub fn viewer_video_cache_path(path: &Path, cache_dir: &Path) -> Result<Option<P
         .modified()
         .ok()
         .and_then(|value| value.duration_since(UNIX_EPOCH).ok())
-        .map(|value| value.as_secs())
+        .map(|value| value.as_nanos())
         .unwrap_or(0);
     let cache_key = format!("{}:{}:{}", path.display(), metadata.len(), modified);
     fs::create_dir_all(cache_dir)?;

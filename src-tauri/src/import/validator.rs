@@ -1,8 +1,9 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
 use crate::{
-    db::DatabaseQueries, import::sidecar::parse_sidecar, models::FileScanRecord,
+    db::DatabaseQueries,
+    models::{FileScanRecord, ParsedSidecar},
     util::errors::AppError,
 };
 
@@ -10,10 +11,12 @@ pub fn validate_import_with_progress<F>(
     db: &crate::db::Database,
     import_id: i64,
     scans: &[FileScanRecord],
+    sidecars_by_path: &HashMap<&str, &ParsedSidecar>,
+    dirty_folders: &HashSet<&str>,
     mut on_progress: F,
 ) -> Result<(), AppError>
 where
-    F: FnMut(usize, usize),
+    F: FnMut(usize, usize, bool) -> Result<(), AppError>,
 {
     let mut sidecars = 0_usize;
     let mut unmatched = Vec::new();
@@ -21,9 +24,15 @@ where
     let total = scans.len();
 
     for (index, scan) in scans.iter().enumerate() {
-        if scan.candidate_type == "json" {
+        let processed = index + 1;
+        on_progress(
+            processed,
+            total,
+            processed == 1 || processed == total || processed % 100 == 0,
+        )?;
+        if scan.candidate_type == "json" && dirty_folders.contains(scan.parent_path.as_str()) {
             sidecars += 1;
-            let sidecar = parse_sidecar(scan).ok().flatten();
+            let sidecar = sidecars_by_path.get(scan.path.as_str()).copied();
             if sidecar
                 .as_ref()
                 .map(|item| item.json_kind == "album")
@@ -31,7 +40,7 @@ where
             {
                 continue;
             }
-            let candidate_names = build_candidate_names(&scan.path, sidecar.as_ref());
+            let candidate_names = build_candidate_names(&scan.path, sidecar);
             if db
                 .resolve_sidecar_target(&scan.path, &candidate_names)?
                 .is_none()
@@ -55,11 +64,6 @@ where
                     "quick hash collision suggests a duplicate candidate",
                 )?;
             }
-        }
-
-        let processed = index + 1;
-        if processed == 1 || processed == total || processed % 100 == 0 {
-            on_progress(processed, total);
         }
     }
 

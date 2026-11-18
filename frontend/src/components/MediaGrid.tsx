@@ -1,6 +1,7 @@
-import { startTransition, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { startTransition, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
+import { getGridWindow, gridSlots, type GridPage } from "../app/gridPaging";
 import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
 import { materializeImageSrc } from "../lib/mediaSrc";
@@ -9,6 +10,9 @@ import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from ".
 const GRID_TILE_WIDTH = 210;
 const GRID_GAP = 6;
 const GRID_PADDING = 6;
+const GRID_ROW_HEIGHT = GRID_TILE_WIDTH + 56;
+const GRID_ROW_PITCH = GRID_ROW_HEIGHT + GRID_GAP;
+const ROW_OVERSCAN = 3;
 const GRID_THUMBNAIL_SIZE = 210;
 const THUMB_PROBE_BATCH_SIZE = 96;
 const THUMB_ENQUEUE_BATCH_SIZE = 24;
@@ -18,28 +22,14 @@ const PREVIEW_ENQUEUE_BATCH_SIZE = 24;
 type MediaGridProps = {
   assets: AssetListItem[];
   viewMode: "timeline" | "album";
-  entries: Array<
-    | {
-        kind: "asset";
-        asset: AssetListItem;
-      }
-    | {
-        kind: "placeholder";
-        key: string;
-        pageStartCursor: number;
-      hydrationObserverKey: string | null;
-      }
-  >;
-  onSelect: (assetId: number) => void;
+  pages: GridPage[];
+  onSelect: (assetId: number, index: number) => void;
   onHydratePlaceholderPage?: (pageStartCursor: number) => void;
   viewerPreviewReadyAssetIds?: number[];
   onLeadingDateChange?: (value?: string) => void;
   thumbnailResetKey?: number;
-  hasMoreBefore?: boolean;
   hasMoreAfter?: boolean;
-  isLoadingMoreBefore?: boolean;
   isLoadingMore?: boolean;
-  onLoadMoreBefore?: () => void;
   onLoadMore?: () => void;
   thumbnailPreload?: {
     active: boolean;
@@ -87,17 +77,14 @@ function thumbStatusLabel(asset: AssetListItem, state?: ThumbnailState) {
 export function MediaGrid({
   assets,
   viewMode,
-  entries,
+  pages,
   onSelect,
   onHydratePlaceholderPage,
   viewerPreviewReadyAssetIds = [],
   onLeadingDateChange,
   thumbnailResetKey,
-  hasMoreBefore = false,
   hasMoreAfter = false,
-  isLoadingMoreBefore = false,
   isLoadingMore = false,
-  onLoadMoreBefore,
   onLoadMore,
   thumbnailPreload,
   viewerPreviewSize,
@@ -105,15 +92,11 @@ export function MediaGrid({
   viewerPlaybackSupport,
 }: MediaGridProps) {
   const parentRef = useRef<HTMLDivElement | null>(null);
-  const loadPreviousRef = useRef<HTMLDivElement | null>(null);
   const loadMoreRef = useRef<HTMLDivElement | null>(null);
-  const tileRefs = useRef(new Map<number, HTMLButtonElement>());
-  const placeholderRefs = useRef(new Map<string, HTMLDivElement>());
-  const prependAnchorRef = useRef<{ assetId: number; top: number } | null>(null);
-  const [width, setWidth] = useState(1200);
+  const pendingResizeScroll = useRef<number>(null);
+  const [viewport, setViewport] = useState({ columns: 1, height: 0, scrollTop: 0 });
   const [thumbs, setThumbs] = useState<Record<number, ThumbnailState>>({});
   const [videoPlaybackHints, setVideoPlaybackHints] = useState<Record<number, ViewerPlaybackHint["status"]>>({});
-  const [visibleIds, setVisibleIds] = useState<number[]>([]);
   const thumbsRef = useRef<Record<number, ThumbnailState>>({});
   const thumbProbeInFlightRef = useRef(false);
   const thumbGenerateInFlightRef = useRef(false);
@@ -146,41 +129,69 @@ export function MediaGrid({
     previewSignature: "",
     at: 0,
   });
-  const columns = columnCount(width);
-  const visibleIdSet = useMemo(() => new Set(visibleIds), [visibleIds]);
+  const { columns, height, scrollTop } = viewport;
+  const lastPage = pages.at(-1);
+  const slotCount = lastPage ? lastPage.startCursor + lastPage.count : 0;
+  const { firstVisibleRow, endVisibleRow, startRow, endRow, paddingTop, paddingBottom } = getGridWindow(
+    slotCount,
+    scrollTop,
+    { columns, height, rowPitch: GRID_ROW_PITCH, padding: GRID_PADDING, overscan: ROW_OVERSCAN },
+  );
+  const entries = useMemo(
+    () => gridSlots(pages, startRow * columns, endRow * columns),
+    [pages, startRow, endRow, columns],
+  );
+  const visibleSlots = useMemo(
+    () => gridSlots(pages, firstVisibleRow * columns, endVisibleRow * columns),
+    [pages, firstVisibleRow, endVisibleRow, columns],
+  );
+  const effectiveVisibleIdSet = useMemo(
+    () => new Set(visibleSlots.flatMap(({ asset }) => asset ? [asset.id] : [])),
+    [visibleSlots],
+  );
   const viewerPreviewReadySet = useMemo(
     () => new Set(viewerPreviewReadyAssetIds),
     [viewerPreviewReadyAssetIds],
   );
-  const bootstrapVisibleIds = useMemo(
-    () => assets.slice(0, Math.max(columns * 3, 12)).map((asset) => asset.id),
-    [assets, columns],
-  );
-  const effectiveVisibleIdSet = useMemo(() => {
-    if (visibleIdSet.size > 0) {
-      return visibleIdSet;
-    }
-    return new Set(bootstrapVisibleIds);
-  }, [bootstrapVisibleIds, visibleIdSet]);
-  const thumbnailSize = useMemo(() => GRID_THUMBNAIL_SIZE, []);
+  const thumbnailSize = GRID_THUMBNAIL_SIZE;
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = parentRef.current;
     if (!element) return;
-    const observer = new ResizeObserver(() => setWidth(element.clientWidth));
+    let columns = columnCount(element.clientWidth);
+    function measure() {
+      if (!element) return;
+      const nextColumns = columnCount(element.clientWidth);
+      let scrollTop = element.scrollTop;
+      if (nextColumns !== columns) {
+        const row = Math.max(0, Math.floor((element.scrollTop - GRID_PADDING) / GRID_ROW_PITCH));
+        const nextRow = Math.floor(row * columns / nextColumns);
+        scrollTop += (nextRow - row) * GRID_ROW_PITCH;
+        pendingResizeScroll.current = scrollTop;
+        columns = nextColumns;
+      }
+      setViewport({ columns, height: element.clientHeight, scrollTop });
+    }
+    const observer = new ResizeObserver(measure);
     observer.observe(element);
-    setWidth(element.clientWidth);
+    measure();
     return () => observer.disconnect();
   }, []);
 
   useEffect(() => {
+    const missingPages = new Set(visibleSlots.filter(({ asset }) => !asset).map(({ pageStart }) => pageStart));
+    for (const cursor of missingPages) onHydratePlaceholderPage?.(cursor);
+  }, [visibleSlots, onHydratePlaceholderPage]);
+
+  useLayoutEffect(() => {
     const root = parentRef.current;
-    if (root) {
-      root.scrollTop = 0;
-    }
-    prependAnchorRef.current = null;
+    if (!root || pendingResizeScroll.current === null) return;
+    root.scrollTop = pendingResizeScroll.current;
+    pendingResizeScroll.current = null;
+  }, [columns]);
+
+  useEffect(() => {
     setThumbs({});
-    setVisibleIds([]);
     thumbProbeInFlightRef.current = false;
     thumbGenerateInFlightRef.current = false;
     previewProbeInFlightRef.current = false;
@@ -260,7 +271,6 @@ export function MediaGrid({
         }
         return changed ? next : current;
       });
-      setVisibleIds((current) => current.filter((assetId) => assetIds.has(assetId)));
     });
   }, [assets]);
 
@@ -356,14 +366,14 @@ export function MediaGrid({
     return { ready, unavailable, pending, waitingForThumb, missing, unknown };
   }
 
-  function logIdleSnapshot(kind: "thumb" | "preview", reason: string) {
+  const logIdleSnapshot = useEffectEvent((kind: "thumb" | "preview", reason: string) => {
     if (!thumbnailPreload?.active || assets.length === 0) {
       return;
     }
 
     const thumbSummary = summarizeThumbStates();
     const previewSummary = summarizePreviewStates();
-    const signature = `${reason}|t:${thumbSummary.ready}/${thumbSummary.unavailable}/${thumbSummary.pending}/${thumbSummary.missing}/${thumbSummary.unknown}|p:${previewSummary.ready}/${previewSummary.unavailable}/${previewSummary.pending}/${previewSummary.waitingForThumb}/${previewSummary.missing}/${previewSummary.unknown}|v:${visibleIds.length}|a:${assets.length}`;
+    const signature = `${reason}|t:${thumbSummary.ready}/${thumbSummary.unavailable}/${thumbSummary.pending}/${thumbSummary.missing}/${thumbSummary.unknown}|p:${previewSummary.ready}/${previewSummary.unavailable}/${previewSummary.pending}/${previewSummary.waitingForThumb}/${previewSummary.missing}/${previewSummary.unknown}|v:${effectiveVisibleIdSet.size}|a:${assets.length}`;
     const now = Date.now();
     const previousSignature =
       kind === "thumb" ? lastIdleLogRef.current.thumbSignature : lastIdleLogRef.current.previewSignature;
@@ -382,9 +392,9 @@ export function MediaGrid({
 
     void logClient(
       "grid",
-      `${kind} preload idle reason=${reason} visible=${visibleIds.length}/${assets.length} thumbs ready=${thumbSummary.ready} unavailable=${thumbSummary.unavailable} pending=${thumbSummary.pending} missing=${thumbSummary.missing} unknown=${thumbSummary.unknown} previews ready=${previewSummary.ready} unavailable=${previewSummary.unavailable} pending=${previewSummary.pending} waiting_for_thumb=${previewSummary.waitingForThumb} missing=${previewSummary.missing} unknown=${previewSummary.unknown}`,
+      `${kind} preload idle reason=${reason} visible=${effectiveVisibleIdSet.size}/${assets.length} thumbs ready=${thumbSummary.ready} unavailable=${thumbSummary.unavailable} pending=${thumbSummary.pending} missing=${thumbSummary.missing} unknown=${thumbSummary.unknown} previews ready=${previewSummary.ready} unavailable=${previewSummary.unavailable} pending=${previewSummary.pending} waiting_for_thumb=${previewSummary.waitingForThumb} missing=${previewSummary.missing} unknown=${previewSummary.unknown}`,
     );
-  }
+  });
 
   useEffect(() => {
     let disposed = false;
@@ -561,126 +571,6 @@ export function MediaGrid({
 
   useEffect(() => {
     const root = parentRef.current;
-    if (!root) return;
-
-    const nextVisible = new Set<number>();
-    const observer = new IntersectionObserver(
-      (entries) => {
-        let changed = false;
-        for (const entry of entries) {
-          const target = entry.target as HTMLElement;
-          const assetId = Number(target.dataset.assetId);
-          if (!Number.isFinite(assetId)) continue;
-
-          if (entry.isIntersecting) {
-            if (!nextVisible.has(assetId)) {
-              nextVisible.add(assetId);
-              changed = true;
-            }
-          } else if (nextVisible.delete(assetId)) {
-            changed = true;
-          }
-        }
-
-        if (changed) {
-          const nextIds = assets.filter((asset) => nextVisible.has(asset.id)).map((asset) => asset.id);
-          startTransition(() => {
-            setVisibleIds(nextIds);
-          });
-        }
-      },
-      {
-        root,
-        rootMargin: "120px 0px",
-        threshold: 0.01,
-      },
-    );
-    for (const asset of assets) {
-      const element = tileRefs.current.get(asset.id);
-      if (element) {
-        observer.observe(element);
-      }
-    }
-
-    return () => observer.disconnect();
-  }, [assets, columns]);
-
-  useEffect(() => {
-    if (!isLoadingMoreBefore) {
-      return;
-    }
-
-    const root = parentRef.current;
-    if (!root) {
-      return;
-    }
-
-    const anchorAsset = assets.find((asset) => effectiveVisibleIdSet.has(asset.id)) ?? assets[0];
-    if (!anchorAsset) {
-      prependAnchorRef.current = null;
-      return;
-    }
-
-    const element = tileRefs.current.get(anchorAsset.id);
-    if (!element) {
-      prependAnchorRef.current = null;
-      return;
-    }
-
-    prependAnchorRef.current = {
-      assetId: anchorAsset.id,
-      top: element.getBoundingClientRect().top - root.getBoundingClientRect().top,
-    };
-  }, [assets, effectiveVisibleIdSet, isLoadingMoreBefore]);
-
-  useLayoutEffect(() => {
-    if (isLoadingMoreBefore) {
-      return;
-    }
-
-    const anchor = prependAnchorRef.current;
-    const root = parentRef.current;
-    if (!anchor || !root) {
-      return;
-    }
-
-    const element = tileRefs.current.get(anchor.assetId);
-    if (!element) {
-      prependAnchorRef.current = null;
-      return;
-    }
-
-    const nextTop = element.getBoundingClientRect().top - root.getBoundingClientRect().top;
-    root.scrollTop += nextTop - anchor.top;
-    prependAnchorRef.current = null;
-  }, [assets, isLoadingMoreBefore]);
-
-  useEffect(() => {
-    const root = parentRef.current;
-    const sentinel = loadPreviousRef.current;
-    if (!root || !sentinel || !hasMoreBefore) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        if (entries.some((entry) => entry.isIntersecting) && !isLoadingMoreBefore) {
-          onLoadMoreBefore?.();
-        }
-      },
-      {
-        root,
-        rootMargin: "400px 0px",
-        threshold: 0.01,
-      },
-    );
-
-    observer.observe(sentinel);
-    return () => observer.disconnect();
-  }, [hasMoreBefore, isLoadingMoreBefore, onLoadMoreBefore, assets.length]);
-
-  useEffect(() => {
-    const root = parentRef.current;
     const sentinel = loadMoreRef.current;
     if (!root || !sentinel || !hasMoreAfter) {
       return;
@@ -702,43 +592,6 @@ export function MediaGrid({
     observer.observe(sentinel);
     return () => observer.disconnect();
   }, [hasMoreAfter, isLoadingMore, onLoadMore, assets.length]);
-
-  useEffect(() => {
-    const root = parentRef.current;
-    if (!root || !onHydratePlaceholderPage) {
-      return;
-    }
-
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const pendingPageStarts = new Set<number>();
-        for (const entry of entries) {
-          if (!entry.isIntersecting) {
-            continue;
-          }
-          const pageStartCursor = Number((entry.target as HTMLElement).dataset.pageStartCursor);
-          if (Number.isFinite(pageStartCursor)) {
-            pendingPageStarts.add(pageStartCursor);
-          }
-        }
-
-        for (const pageStartCursor of pendingPageStarts) {
-          onHydratePlaceholderPage(pageStartCursor);
-        }
-      },
-      {
-        root,
-        rootMargin: "500px 0px",
-        threshold: 0.01,
-      },
-    );
-
-    for (const element of placeholderRefs.current.values()) {
-      observer.observe(element);
-    }
-
-    return () => observer.disconnect();
-  }, [entries, onHydratePlaceholderPage]);
 
   useEffect(() => {
     let disposed = false;
@@ -888,10 +741,9 @@ export function MediaGrid({
   }, [assets, thumbnailPreload?.active, thumbnailSize, thumbnailResetKey]);
 
   useEffect(() => {
-    const firstVisibleAsset =
-      assets.find((asset) => effectiveVisibleIdSet.has(asset.id)) ?? assets[0];
+    const firstVisibleAsset = visibleSlots.find(({ asset }) => asset)?.asset;
     onLeadingDateChange?.(firstVisibleAsset?.taken_at_utc ?? undefined);
-  }, [assets, effectiveVisibleIdSet, onLeadingDateChange]);
+  }, [visibleSlots, onLeadingDateChange]);
 
   useEffect(() => {
     if (!thumbnailPreload?.active) {
@@ -957,42 +809,29 @@ export function MediaGrid({
     });
   }, [assets, onThumbnailPreloadProgress, thumbnailPreload?.active, thumbs]);
 
-  if (entries.length === 0) {
-    return <div className="empty-state">No indexed assets match the current view.</div>;
-  }
-
   return (
-    <div className="grid-scroller" ref={parentRef}>
-      {hasMoreBefore || isLoadingMoreBefore ? (
-        <div className="grid-load-more grid-load-more-top" ref={loadPreviousRef} aria-live="polite">
-          {isLoadingMoreBefore ? "Loading earlier media..." : "Scroll up to load earlier media"}
-        </div>
-      ) : null}
+    <div
+      className="grid-scroller"
+      ref={parentRef}
+      onScroll={(event) => {
+        const scrollTop = event.currentTarget.scrollTop;
+        setViewport((current) => current.scrollTop === scrollTop ? current : { ...current, scrollTop });
+      }}
+    >
+      {slotCount === 0 ? <div className="empty-state">No indexed assets match the current view.</div> : null}
       <div
         className="media-grid"
         style={{
-          gridTemplateColumns: `repeat(auto-fit, ${GRID_TILE_WIDTH}px)`,
+          gridTemplateColumns: `repeat(${columns}, ${GRID_TILE_WIDTH}px)`,
+          gridAutoRows: GRID_ROW_HEIGHT,
+          paddingTop,
+          paddingBottom,
         }}
       >
-        {entries.map((entry) => {
-          if (entry.kind === "placeholder") {
+        {entries.map(({ index, asset }) => {
+          if (!asset) {
             return (
-              <div
-                key={entry.key}
-                className="tile tile-placeholder"
-                aria-hidden="true"
-                data-page-start-cursor={entry.hydrationObserverKey ? entry.pageStartCursor : undefined}
-                ref={(element) => {
-                  if (!entry.hydrationObserverKey) {
-                    return;
-                  }
-                  if (element) {
-                    placeholderRefs.current.set(entry.hydrationObserverKey, element);
-                  } else {
-                    placeholderRefs.current.delete(entry.hydrationObserverKey);
-                  }
-                }}
-              >
+              <div key={index} className="tile tile-placeholder" aria-hidden="true">
                 <div className="thumb thumb-placeholder" />
                 <div className="tile-body tile-body-placeholder">
                   <div className="placeholder-line placeholder-line-title" />
@@ -1002,7 +841,6 @@ export function MediaGrid({
             );
           }
 
-          const asset = entry.asset;
           return (
             <button
               key={asset.id}
@@ -1025,15 +863,9 @@ export function MediaGrid({
               ]
                 .filter(Boolean)
                 .join(" ")}
+              type="button"
               data-asset-id={asset.id}
-              ref={(element) => {
-                if (element) {
-                  tileRefs.current.set(asset.id, element);
-                } else {
-                  tileRefs.current.delete(asset.id);
-                }
-              }}
-              onClick={() => onSelect(asset.id)}
+              onClick={() => onSelect(asset.id, index)}
             >
               <div
                 className={[
@@ -1069,20 +901,9 @@ export function MediaGrid({
                   </div>
                 ) : null}
                 {asset.media_kind === "video" ? (
-                  <button
-                    className="thumb-player-button"
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      onSelect(asset.id);
-                    }}
-                    aria-label="Play video"
-                    title="Play video"
-                  >
-                    <span className="thumb-player-icon" aria-hidden="true">
-                      ▶
-                    </span>
-                  </button>
+                  <span className="thumb-player-button" aria-hidden="true">
+                    <span className="thumb-player-icon">▶</span>
+                  </span>
                 ) : null}
               </div>
               <div className="tile-body">

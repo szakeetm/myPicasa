@@ -4,7 +4,6 @@ use rusqlite::{OptionalExtension, params};
 
 use crate::{
     import::sidecar::takeout_match_score,
-    media::thumb::probe_media_duration_ms,
     models::{
         AlbumSummary, AssetDetail, AssetListItem, AssetListRequest, AssetListResponse,
         DiagnosticEntry, FileScanRecord, ImportProgress, LogEntry, ParsedSidecar,
@@ -22,7 +21,9 @@ pub trait DatabaseQueries {
     ) -> Result<(), AppError>;
     fn create_import(&self, source_root: &str) -> Result<i64, AppError>;
     fn finish_import(&self, import: &ImportProgress) -> Result<(), AppError>;
-    fn upsert_file_entry(&self, import_id: i64, scan: &FileScanRecord) -> Result<i64, AppError>;
+    fn upsert_files(&self, import_id: i64, scans: &[&FileScanRecord])
+    -> Result<Vec<i64>, AppError>;
+    fn mark_files_seen(&self, import_id: i64, paths: &[&str]) -> Result<(), AppError>;
     fn soft_delete_missing_files(&self, import_id: i64, roots: &[String]) -> Result<u32, AppError>;
     fn reconcile_assets_after_file_deletions(&self) -> Result<(Vec<i64>, Vec<i64>), AppError>;
     fn upsert_album(&self, source_path: &str) -> Result<i64, AppError>;
@@ -31,6 +32,7 @@ pub trait DatabaseQueries {
         file_id: i64,
         scan: &FileScanRecord,
         sidecar: Option<&ParsedSidecar>,
+        duration_ms: Option<i64>,
     ) -> Result<i64, AppError>;
     fn attach_asset_file(&self, asset_id: i64, file_id: i64, role: &str) -> Result<(), AppError>;
     fn attach_album_asset(&self, album_id: i64, asset_id: i64) -> Result<(), AppError>;
@@ -40,7 +42,6 @@ pub trait DatabaseQueries {
         sidecar_file_id: Option<i64>,
         sidecar: &ParsedSidecar,
     ) -> Result<(), AppError>;
-    fn replace_search_row(&self, asset_id: i64) -> Result<(), AppError>;
     fn add_diagnostic(
         &self,
         import_id: i64,
@@ -137,104 +138,89 @@ impl DatabaseQueries for super::Database {
         })
     }
 
-    fn upsert_file_entry(&self, import_id: i64, scan: &FileScanRecord) -> Result<i64, AppError> {
-        let (file_id, should_log_update) = self.with_connection(|conn| {
-            let existing = conn
-                .query_row(
-                    "SELECT id, file_size, mtime_utc FROM file_entries WHERE path = ?1",
-                    params![scan.path],
-                    |row| {
-                        Ok((
-                            row.get::<_, i64>(0)?,
-                            row.get::<_, i64>(1)?,
-                            row.get::<_, String>(2)?,
-                        ))
-                    },
-                )
-                .optional()?;
-
+    fn upsert_files(
+        &self,
+        import_id: i64,
+        scans: &[&FileScanRecord],
+    ) -> Result<Vec<i64>, AppError> {
+        self.with_connection(|conn| {
+            let tx = conn.unchecked_transaction()?;
             let now = utc_now();
-
-            if let Some((id, old_size, old_mtime)) = existing {
-                conn.execute(
-                    "UPDATE file_entries
-                     SET parent_path = ?2, filename = ?3, extension = ?4, detected_format = ?5, mime_type = ?6,
-                         file_size = ?7, mtime_utc = ?8, ctime_utc = ?9, quick_hash = ?10, json_kind = ?11,
-                         is_deleted = 0, last_seen_import_id = ?12, updated_at = ?13
-                     WHERE id = ?1",
-                    params![
-                        id,
-                        scan.parent_path,
-                        scan.filename,
-                        scan.extension,
-                        scan.detected_format,
-                        scan.mime_type,
-                        scan.file_size,
-                        scan.mtime_utc,
-                        scan.ctime_utc,
-                        scan.quick_hash,
-                        scan.json_kind,
-                        import_id,
-                        now
-                    ],
-                )?;
-                Ok((id, old_size != scan.file_size || old_mtime != scan.mtime_utc))
-            } else {
-                conn.execute(
+            let ids = {
+                let mut upsert = tx.prepare(
                     "INSERT INTO file_entries
-                     (path, parent_path, filename, extension, detected_format, mime_type, file_size, mtime_utc, ctime_utc,
-                      quick_hash, full_hash, json_kind, is_deleted, last_seen_import_id, created_at, updated_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, NULL, ?11, 0, ?12, ?13, ?13)",
-                    params![
-                        scan.path,
-                        scan.parent_path,
-                        scan.filename,
-                        scan.extension,
-                        scan.detected_format,
-                        scan.mime_type,
-                        scan.file_size,
-                        scan.mtime_utc,
-                        scan.ctime_utc,
-                        scan.quick_hash,
-                        scan.json_kind,
-                        import_id,
-                        now
-                    ],
+                     (path, parent_path, filename, extension, detected_format, mime_type, file_size,
+                      mtime_utc, ctime_utc, quick_hash, json_kind, last_seen_import_id, created_at, updated_at)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)
+                     ON CONFLICT(path) DO UPDATE SET
+                        parent_path = excluded.parent_path, filename = excluded.filename,
+                        extension = excluded.extension, detected_format = excluded.detected_format,
+                        mime_type = excluded.mime_type, file_size = excluded.file_size,
+                        mtime_utc = excluded.mtime_utc, ctime_utc = excluded.ctime_utc,
+                        quick_hash = excluded.quick_hash, json_kind = excluded.json_kind,
+                        is_deleted = 0, last_seen_import_id = excluded.last_seen_import_id,
+                        updated_at = excluded.updated_at
+                     RETURNING id",
                 )?;
-                Ok((conn.last_insert_rowid(), false))
-            }
-        })?;
+                scans.iter().map(|scan| {
+                    upsert.query_row(
+                        params![
+                            scan.path, scan.parent_path, scan.filename, scan.extension,
+                            scan.detected_format, scan.mime_type, scan.file_size, scan.mtime_utc,
+                            scan.ctime_utc, scan.quick_hash, scan.json_kind, import_id, now
+                        ],
+                        |row| row.get(0),
+                    )
+                }).collect::<Result<Vec<_>, _>>()?
+            };
+            tx.commit()?;
+            Ok(ids)
+        })
+    }
 
-        if should_log_update {
-            self.insert_log(
-                "debug",
-                "import.file",
-                &format!("updated {}", scan.path),
-                None,
-            )?;
+    fn mark_files_seen(&self, import_id: i64, paths: &[&str]) -> Result<(), AppError> {
+        if paths.is_empty() {
+            return Ok(());
         }
-
-        Ok(file_id)
+        self.with_connection(|conn| {
+            let paths = serde_json::to_string(paths)?;
+            conn.execute(
+                "UPDATE file_entries SET last_seen_import_id = ?1
+                 WHERE path IN (SELECT value FROM json_each(?2))",
+                params![import_id, paths],
+            )?;
+            Ok(())
+        })
     }
 
     fn soft_delete_missing_files(&self, import_id: i64, roots: &[String]) -> Result<u32, AppError> {
         self.with_connection(|conn| {
-            let _ = roots;
-            let count = conn.execute(
-                "UPDATE file_entries
-                 SET is_deleted = 1, updated_at = ?1
-                 WHERE last_seen_import_id != ?2
-                   AND is_deleted = 0",
-                params![utc_now(), import_id],
-            )? as u32;
+            let tx = conn.unchecked_transaction()?;
+            let mut count = 0;
+            for root in roots {
+                let root = crate::util::path::normalize_path(Path::new(root));
+                let root = root.trim_end_matches('/');
+                let prefix = format!("{root}/");
+                count += tx.execute(
+                    "UPDATE file_entries
+                     SET is_deleted = 1, updated_at = ?1
+                     WHERE last_seen_import_id != ?2 AND is_deleted = 0
+                       AND substr(path, 1, length(?3)) = ?3",
+                    params![utc_now(), import_id, prefix],
+                )? as u32;
+            }
+            tx.commit()?;
             Ok(count)
         })
     }
 
     fn reconcile_assets_after_file_deletions(&self) -> Result<(Vec<i64>, Vec<i64>), AppError> {
         self.with_connection(|conn| {
-            let mut stmt =
-                conn.prepare("SELECT id, primary_file_id FROM assets WHERE is_deleted = 0")?;
+            let mut stmt = conn.prepare(
+                "SELECT a.id, a.primary_file_id FROM assets a
+                     JOIN file_entries f ON f.id = a.primary_file_id
+                     WHERE a.is_deleted = 0 AND f.is_deleted = 1",
+            )?;
             let assets = stmt
                 .query_map([], |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
@@ -279,10 +265,6 @@ impl DatabaseQueries for super::Database {
                     continue;
                 }
 
-                conn.execute(
-                    "DELETE FROM search_fts WHERE asset_id = ?1",
-                    params![asset_id],
-                )?;
                 conn.execute(
                     "DELETE FROM asset_relationships
                      WHERE src_asset_id = ?1 OR dst_asset_id = ?1",
@@ -331,6 +313,7 @@ impl DatabaseQueries for super::Database {
         file_id: i64,
         scan: &FileScanRecord,
         sidecar: Option<&ParsedSidecar>,
+        duration_ms: Option<i64>,
     ) -> Result<i64, AppError> {
         self.with_connection(|conn| {
             let existing = conn
@@ -345,17 +328,12 @@ impl DatabaseQueries for super::Database {
                 .and_then(|item| item.photo_taken_time_utc.clone())
                 .unwrap_or_else(|| scan.mtime_utc.clone());
             let title = scan.filename.clone();
-            let duration_ms = if scan.candidate_type == "video" {
-                probe_media_duration_ms(Path::new(&scan.path))?
-            } else {
-                None
-            };
-
             if let Some(asset_id) = existing {
                 conn.execute(
                     "UPDATE assets
                      SET primary_file_id = ?2, media_kind = ?3, title = ?4, taken_at_utc = ?5,
-                         duration_ms = ?6, is_deleted = 0, updated_at = ?7
+                         duration_ms = ?6, is_deleted = 0, updated_at = ?7,
+                         gps_lat = ?8, gps_lon = ?9, gps_alt = ?10
                      WHERE id = ?1",
                     params![
                         asset_id,
@@ -364,7 +342,10 @@ impl DatabaseQueries for super::Database {
                         title,
                         taken_at,
                         duration_ms,
-                        utc_now()
+                        utc_now(),
+                        sidecar.and_then(|item| item.geo_lat),
+                        sidecar.and_then(|item| item.geo_lon),
+                        sidecar.and_then(|item| item.geo_alt)
                     ],
                 )?;
                 Ok(asset_id)
@@ -449,40 +430,6 @@ impl DatabaseQueries for super::Database {
                     utc_now()
                 ],
             )?;
-            Ok(())
-        })
-    }
-
-    fn replace_search_row(&self, asset_id: i64) -> Result<(), AppError> {
-        self.with_connection(|conn| {
-            let row = conn.query_row(
-                "SELECT a.id, f.filename, COALESCE(group_concat(DISTINCT al.name), ''), COALESCE(a.camera_model, ''), COALESCE(substr(a.taken_at_utc, 1, 10), '')
-                 FROM assets a
-                 JOIN file_entries f ON f.id = a.primary_file_id
-                 LEFT JOIN album_assets aa ON aa.asset_id = a.id
-                 LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE a.id = ?1
-                 GROUP BY a.id, f.filename, a.camera_model, a.taken_at_utc",
-                params![asset_id],
-                |row| {
-                    Ok((
-                        row.get::<_, i64>(0)?,
-                        row.get::<_, String>(1)?,
-                        row.get::<_, String>(2)?,
-                        row.get::<_, String>(3)?,
-                        row.get::<_, String>(4)?,
-                    ))
-                },
-            );
-
-            if let Ok((id, filename, album_name, camera_model, taken_day)) = row {
-                conn.execute("DELETE FROM search_fts WHERE asset_id = ?1", params![id])?;
-                conn.execute(
-                    "INSERT INTO search_fts (asset_id, filename, album_name, camera_model, taken_day) VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![id, filename, album_name, camera_model, taken_day],
-                )?;
-            }
-
             Ok(())
         })
     }
@@ -619,29 +566,7 @@ impl DatabaseQueries for super::Database {
         &self,
         request: AssetListRequest,
     ) -> Result<AssetListResponse, AppError> {
-        paged_asset_query(
-            self,
-            "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
-                    EXISTS(
-                      SELECT 1 FROM asset_files af_live
-                      WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
-                    ),
-                    f.path, COALESCE(group_concat(DISTINCT al.name), '')
-             FROM assets a
-             JOIN file_entries f ON f.id = a.primary_file_id
-             LEFT JOIN album_assets aa ON aa.asset_id = a.id
-             LEFT JOIN albums al ON al.id = aa.album_id
-             WHERE a.is_deleted = 0
-               AND a.media_kind IN ('photo', 'video', 'live_photo')
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM asset_files af_hidden
-                 WHERE af_hidden.file_id = a.primary_file_id
-                   AND af_hidden.role = 'live_photo_video'
-               )",
-            " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) DESC, a.id DESC",
-            request,
-        )
+        paged_asset_query(self, None, request)
     }
 
     fn list_assets_by_album(
@@ -649,67 +574,11 @@ impl DatabaseQueries for super::Database {
         album_id: i64,
         request: AssetListRequest,
     ) -> Result<AssetListResponse, AppError> {
-        paged_asset_query(
-            self,
-            &format!(
-                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
-                        EXISTS(
-                          SELECT 1 FROM asset_files af_live
-                          WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
-                        ),
-                        f.path, COALESCE(group_concat(DISTINCT al.name), '')
-                 FROM assets a
-                 JOIN album_assets aa_filter ON aa_filter.asset_id = a.id AND aa_filter.album_id = {album_id}
-                 JOIN file_entries f ON f.id = a.primary_file_id
-                 LEFT JOIN album_assets aa ON aa.asset_id = a.id
-                 LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE a.is_deleted = 0
-                   AND a.media_kind IN ('photo', 'video', 'live_photo')
-                   AND NOT EXISTS (
-                     SELECT 1
-                     FROM asset_files af_hidden
-                     WHERE af_hidden.file_id = a.primary_file_id
-                       AND af_hidden.role = 'live_photo_video'
-                   )"
-            ),
-            " ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) ASC, a.id ASC",
-            request,
-        )
+        paged_asset_query(self, Some(album_id), request)
     }
 
     fn search_assets(&self, request: AssetListRequest) -> Result<AssetListResponse, AppError> {
-        let query = request
-            .query
-            .clone()
-            .unwrap_or_default()
-            .replace('\'', "''");
-        paged_asset_query(
-            self,
-            &format!(
-                "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
-                    EXISTS(
-                      SELECT 1 FROM asset_files af_live
-                      WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
-                    ),
-                    f.path, COALESCE(group_concat(DISTINCT al.name), '')
-             FROM search_fts s
-             JOIN assets a ON a.id = s.asset_id
-             JOIN file_entries f ON f.id = a.primary_file_id
-             LEFT JOIN album_assets aa ON aa.asset_id = a.id
-             LEFT JOIN albums al ON al.id = aa.album_id
-             WHERE a.is_deleted = 0
-               AND a.media_kind IN ('photo', 'video', 'live_photo')
-               AND NOT EXISTS (
-                 SELECT 1
-                 FROM asset_files af_hidden
-                 WHERE af_hidden.file_id = a.primary_file_id
-                   AND af_hidden.role = 'live_photo_video'
-               )
-               AND search_fts MATCH '{query}'"
-            ),
-            " ORDER BY rank",
-            request,
-        )
+        self.list_assets_by_date(request)
     }
 
     fn get_asset_detail(&self, asset_id: i64) -> Result<AssetDetail, AppError> {
@@ -937,69 +806,94 @@ impl DatabaseQueries for super::Database {
 
 fn paged_asset_query(
     db: &super::Database,
-    base_sql: &str,
-    order_sql: &str,
+    album_id: Option<i64>,
     request: AssetListRequest,
 ) -> Result<AssetListResponse, AppError> {
+    use rusqlite::{params_from_iter, types::Value};
+
     db.with_connection(|conn| {
         let offset = request.cursor.unwrap_or_default();
-        let limit = request.limit.unwrap_or(200) as i64;
-        let mut sql = format!("{base_sql} ");
-        let mut filters = Vec::<String>::new();
-
-        if let Some(kind) = request.media_kind.as_deref() {
-            filters.push(media_kind_filter_sql(kind));
+        let limit = request.limit.unwrap_or(200);
+        let mut from_sql = String::from("FROM assets a");
+        let mut values = Vec::<Value>::new();
+        if let Some(album_id) = album_id {
+            from_sql.push_str(
+                " JOIN album_assets aa_filter
+                    ON aa_filter.asset_id = a.id AND aa_filter.album_id = ?",
+            );
+            values.push(album_id.into());
         }
-        if let Some(start) = request.date_from.as_deref() {
-            filters.push(format!("a.taken_at_utc >= '{}'", start.replace('\'', "''")));
-        }
-        if let Some(end) = request.date_to.as_deref() {
-            filters.push(format!("a.taken_at_utc <= '{}'", end.replace('\'', "''")));
-        }
-        if let Some(query) = request.query.as_deref() {
-            let escaped = query.replace('\'', "''");
-            filters.push(format!(
-                "(a.title LIKE '%{escaped}%' OR f.filename LIKE '%{escaped}%')"
-            ));
-        }
-        if !filters.is_empty() {
-            sql.push_str(" AND ");
-            sql.push_str(&filters.join(" AND "));
-        }
-        sql.push_str(
-            " GROUP BY a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms, f.path",
+        from_sql.push_str(
+            " JOIN file_entries f ON f.id = a.primary_file_id
+             WHERE a.is_deleted = 0
+               AND a.media_kind IN ('photo', 'video', 'live_photo')
+               AND NOT EXISTS (
+                 SELECT 1 FROM asset_files af_hidden
+                 WHERE af_hidden.file_id = a.primary_file_id
+                   AND af_hidden.role = 'live_photo_video'
+               )",
         );
-        let count_sql = format!("SELECT COUNT(*) FROM ({sql}) counted_assets");
-        sql.push_str(order_sql);
-        sql.push_str(&format!(" LIMIT {limit} OFFSET {offset}"));
+        match request.media_kind.as_deref() {
+            Some("photo") => from_sql.push_str(" AND a.media_kind IN ('photo', 'live_photo')"),
+            Some("live_photo") => from_sql.push_str(&format!(" AND {HAS_LIVE_PHOTO_SQL}")),
+            Some(kind) => {
+                from_sql.push_str(" AND a.media_kind = ?");
+                values.push(Value::Text(kind.to_owned()));
+            }
+            None => {}
+        }
+        if let Some(start) = request.date_from {
+            from_sql.push_str(" AND a.taken_at_utc >= ?");
+            values.push(Value::Text(start));
+        }
+        if let Some(end) = request.date_to {
+            from_sql.push_str(" AND a.taken_at_utc <= ?");
+            values.push(Value::Text(end));
+        }
+        if let Some(query) = request.query.filter(|query| !query.is_empty()) {
+            from_sql.push_str(
+                " AND (instr(lower(a.title), lower(?)) > 0
+                    OR instr(lower(f.filename), lower(?)) > 0)",
+            );
+            values.push(Value::Text(query.clone()));
+            values.push(Value::Text(query));
+        }
 
-        let total_count = conn.query_row(&count_sql, [], |row| row.get::<_, u32>(0))?;
+        let count_sql = format!("SELECT COUNT(*) {from_sql}");
+        let total_count =
+            conn.query_row(&count_sql, params_from_iter(&values), |row| row.get(0))?;
+        let direction = if album_id.is_some() { "ASC" } else { "DESC" };
+        let sql = format!(
+            "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
+                    {HAS_LIVE_PHOTO_SQL}, f.path,
+                    COALESCE((
+                        SELECT group_concat(DISTINCT al.name)
+                        FROM album_assets aa
+                        JOIN albums al ON al.id = aa.album_id
+                        WHERE aa.asset_id = a.id
+                    ), '')
+             {from_sql}
+             ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) {direction}, a.id {direction}
+             LIMIT ? OFFSET ?"
+        );
+        values.extend([i64::from(limit).into(), i64::from(offset).into()]);
         let mut stmt = conn.prepare(&sql)?;
-        let rows = stmt.query_map([], |row| map_asset_list_item(row))?;
-        let items = rows.filter_map(Result::ok).collect::<Vec<_>>();
-        let has_more = items.len() == limit as usize;
+        let items = stmt
+            .query_map(params_from_iter(&values), map_asset_list_item)?
+            .collect::<Result<Vec<_>, _>>()?;
+        let next_offset = offset.saturating_add(items.len() as u32);
         Ok(AssetListResponse {
+            next_cursor: (!items.is_empty() && next_offset < total_count).then_some(next_offset),
             items,
-            next_cursor: has_more.then_some(offset + limit as u32),
             total_count,
         })
     })
 }
 
-fn media_kind_filter_sql(kind: &str) -> String {
-    match kind {
-        "photo" => "a.media_kind IN ('photo', 'live_photo')".to_string(),
-        "live_photo" => "EXISTS (
-            SELECT 1
-            FROM asset_files af_live
-            WHERE af_live.asset_id = a.id
-              AND af_live.role = 'live_photo_video'
-        )"
-        .to_string(),
-        "video" => "a.media_kind = 'video'".to_string(),
-        other => format!("a.media_kind = '{}'", other.replace('\'', "''")),
-    }
-}
+const HAS_LIVE_PHOTO_SQL: &str = "EXISTS (
+    SELECT 1 FROM asset_files af_live
+    WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
+)";
 
 fn map_asset_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetListItem> {
     Ok(AssetListItem {
@@ -1029,4 +923,100 @@ fn file_name(path: &str) -> String {
         .and_then(|item| item.to_str())
         .unwrap_or(path)
         .to_string()
+}
+
+#[cfg(test)]
+mod search_tests {
+    use super::*;
+    use crate::db::Database;
+
+    fn search_fixture() -> Database {
+        let db = Database::new(Path::new(":memory:")).unwrap();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "
+                INSERT INTO file_entries
+                    (id, path, parent_path, filename, file_size, mtime_utc,
+                     last_seen_import_id, created_at, updated_at)
+                VALUES
+                    (1, '/trip/IMG-1234.jpg', '/trip', 'IMG-1234.jpg', 1,
+                     '2024-04-01', 1, '', ''),
+                    (2, '/trip/IMG-1235.jpg', '/trip', 'IMG-1235.jpg', 1,
+                     '2024-04-02', 1, '', ''),
+                    (3, '/other/IMG-1234.jpg', '/other', 'IMG-1234.jpg', 1,
+                     '2024-04-03', 1, '', '');
+                INSERT INTO assets
+                    (id, primary_file_id, media_kind, display_type, title,
+                     taken_at_utc, created_at, updated_at)
+                VALUES
+                    (1, 1, 'photo', 'original', 'Mom''s 50%_Crop', '2024-04-01', '', ''),
+                    (2, 2, 'video', 'original', 'Mom''s 500xCrop', '2024-04-02', '', ''),
+                    (3, 3, 'photo', 'original', 'Outside album', '2024-04-03', '', '');
+                INSERT INTO albums (id, name, source_path, created_at, updated_at)
+                VALUES (1, 'Trip', '/trip', '', '');
+                INSERT INTO album_assets (album_id, asset_id, added_at)
+                VALUES (1, 1, ''), (1, 2, '');
+                ",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+        db
+    }
+
+    fn request(query: &str) -> AssetListRequest {
+        AssetListRequest {
+            cursor: None,
+            limit: None,
+            query: Some(query.into()),
+            media_kind: None,
+            date_from: None,
+            date_to: None,
+        }
+    }
+
+    #[test]
+    fn searches_filename_substrings_in_timeline_and_album() {
+        let db = search_fixture();
+        for query in ["img-1234.jpg", "34.JP"] {
+            let timeline = db.search_assets(request(query)).unwrap();
+            assert_eq!(timeline.total_count, 2);
+            assert_eq!(
+                timeline
+                    .items
+                    .iter()
+                    .map(|item| item.id)
+                    .collect::<Vec<_>>(),
+                vec![3, 1]
+            );
+
+            let album = db.list_assets_by_album(1, request(query)).unwrap();
+            assert_eq!(album.total_count, 1);
+            assert_eq!(album.items[0].id, 1);
+        }
+    }
+
+    #[test]
+    fn searches_titles_literally_and_composes_with_filters() {
+        let db = search_fixture();
+        for query in ["mom's 50%_", "%", "_"] {
+            let timeline = db.search_assets(request(query)).unwrap();
+            assert_eq!(timeline.total_count, 1);
+            assert_eq!(timeline.items[0].id, 1);
+
+            let album = db.list_assets_by_album(1, request(query)).unwrap();
+            assert_eq!(album.total_count, 1);
+            assert_eq!(album.items[0].id, 1);
+        }
+
+        let mut filtered = request("img-123");
+        filtered.media_kind = Some("photo".into());
+        filtered.date_from = Some("2024-04-01".into());
+        filtered.date_to = Some("2024-04-02".into());
+        filtered.limit = Some(1);
+        let timeline = db.search_assets(filtered).unwrap();
+        assert_eq!(timeline.total_count, 1);
+        assert_eq!(timeline.items[0].id, 1);
+        assert_eq!(timeline.next_cursor, None);
+    }
 }

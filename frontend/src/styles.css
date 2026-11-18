@@ -387,6 +387,7 @@ button:disabled:hover {
 .grid-scroller {
   height: 100%;
   overflow: auto;
+  overflow-anchor: none;
   border-radius: 20px;
   border: 1px solid var(--border);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.58), rgba(255, 255, 255, 0.34));
@@ -396,7 +397,7 @@ button:disabled:hover {
   display: grid;
   gap: 6px;
   padding: 6px;
-  align-items: start;
+  align-items: stretch;
   justify-content: start;
 }
 
@@ -407,6 +408,7 @@ button:disabled:hover {
 }
 
 .tile {
+  padding: 0;
   border: 1px solid var(--border);
   border-radius: 20px;
   background: rgba(255, 255, 255, 0.84);
@@ -634,7 +636,7 @@ button:disabled:hover {
 
 .chips {
   display: flex;
-  flex-wrap: wrap;
+  white-space: nowrap;
   gap: 6px;
   margin-top: 4px;
   min-height: 18px;

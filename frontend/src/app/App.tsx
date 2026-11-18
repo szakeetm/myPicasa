@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 import { confirm, open } from "@tauri-apps/plugin-dialog";
 
@@ -11,76 +11,27 @@ import { logClient } from "../lib/logger";
 import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
+import { useAssetPaging } from "./useAssetPaging";
 import type {
   AppBackupManifest,
-  AssetListItem,
-  AssetListRequest,
+  AssetDetail,
   BatchThumbnailGenerationStatus,
   BatchViewerTranscodeStatus,
   CacheStorageMigrationStatus,
+  ImportProgress,
   LogEntry,
   ViewerPlaybackSupport,
 } from "../lib/types";
-
-const ASSET_PAGE_SIZE = 200;
-
-type GridPage = {
-  startCursor: number;
-  count: number;
-  nextCursor: number | null;
-  items: AssetListItem[] | null;
-};
-
-type GridEntry =
-  | {
-      kind: "asset";
-      asset: AssetListItem;
-    }
-  | {
-      kind: "placeholder";
-      key: string;
-      pageStartCursor: number;
-      hydrationObserverKey: string | null;
-    };
-
-function sortGridPages(pages: GridPage[]) {
-  return [...pages].sort((left, right) => left.startCursor - right.startCursor);
-}
-
-function loadedAssetsFromPages(pages: GridPage[]) {
-  return sortGridPages(pages).flatMap((page) => page.items ?? []);
-}
-
-function gridEntriesFromPages(pages: GridPage[]): GridEntry[] {
-  return sortGridPages(pages).flatMap((page) => {
-    if (page.items) {
-      return page.items.map((asset) => ({ kind: "asset" as const, asset }));
-    }
-
-    return Array.from({ length: page.count }, (_, index): GridEntry => ({
-      kind: "placeholder" as const,
-      key: `placeholder-${page.startCursor + index}`,
-      pageStartCursor: page.startCursor,
-      hydrationObserverKey:
-        index === 0
-          ? `start-${page.startCursor}`
-          : index === page.count - 1
-            ? `end-${page.startCursor}`
-            : null,
-    }));
-  });
-}
 
 export function App() {
   const state = useAppState();
   const tauriRuntime = isTauriRuntime();
   const viewerPlaybackSupport = useMemo(() => getViewerPlaybackSupport(), []);
-  const [gridPages, setGridPages] = useState<GridPage[]>([]);
+  const { pages, assets, totalCount, hasMore, loadingMore, refresh, loadMore, hydrate, clear, viewVersion, readAsset } = useAssetPaging();
+  const [selection, setSelection] = useState<{ asset: AssetDetail; index: number; version: number }>();
+  const selectionRequest = useRef(0);
   const [timelineLabel, setTimelineLabel] = useState<string>();
-  const [viewAssetCount, setViewAssetCount] = useState(0);
-  const [loadingPreviousAssets, setLoadingPreviousAssets] = useState(false);
   const [debugPanelCollapsed, setDebugPanelCollapsed] = useState(false);
-  const [loadingMoreAssets, setLoadingMoreAssets] = useState(false);
   const [thumbnailResetKey, setThumbnailResetKey] = useState(0);
   const [viewerPreviewReadyAssetIds, setViewerPreviewReadyAssetIds] = useState<number[]>([]);
   const [thumbLogOpen, setThumbLogOpen] = useState(false);
@@ -109,61 +60,8 @@ export function App() {
   const didInitViewerPreviewSizeEffect = useRef(false);
   const didInitRootsSettingsEffect = useRef(false);
   const cacheStorageMigrationWasRunningRef = useRef(false);
-  const assetQueryGenerationRef = useRef(0);
-  const gridPagesRef = useRef<GridPage[]>([]);
-  const hydratingPageStartsRef = useRef(new Set<number>());
-
-  const loadedGridPages = useMemo(
-    () => sortGridPages(gridPages).filter((page) => page.items !== null),
-    [gridPages],
-  );
-  const hasPreviousAssetPage = loadedGridPages.length > 0 && loadedGridPages[0].startCursor > 0;
-  const hasNextAssetPage =
-    loadedGridPages.length > 0 && loadedGridPages[loadedGridPages.length - 1].nextCursor != null;
-  const gridEntries = useMemo(() => gridEntriesFromPages(gridPages), [gridPages]);
+  const refreshPollRef = useRef<AbortController>(null);
   const refreshRunning = state.importStatus?.status === "running";
-
-  function commitGridPages(nextPages: GridPage[]) {
-    const sortedPages = sortGridPages(nextPages);
-    gridPagesRef.current = sortedPages;
-    setGridPages(sortedPages);
-    state.setAssets(loadedAssetsFromPages(sortedPages));
-  }
-
-  function commitHydratedPage(pageStart: number, items: AssetListItem[], nextCursor: number | null) {
-    const pageMap = new Map(gridPagesRef.current.map((page) => [page.startCursor, page]));
-    pageMap.set(pageStart, {
-      startCursor: pageStart,
-      count: items.length,
-      nextCursor,
-      items,
-    });
-
-    const hydratedPages = sortGridPages(Array.from(pageMap.values())).filter((page) => page.items !== null);
-    const keepStarts = new Set<number>([pageStart]);
-    const nearestNeighbor = hydratedPages
-      .filter((page) => page.startCursor !== pageStart)
-      .sort(
-        (left, right) =>
-          Math.abs(left.startCursor - pageStart) - Math.abs(right.startCursor - pageStart),
-      )[0];
-
-    if (nearestNeighbor) {
-      keepStarts.add(nearestNeighbor.startCursor);
-    }
-
-    for (const [startCursor, page] of pageMap.entries()) {
-      if (page.items !== null && !keepStarts.has(startCursor)) {
-        pageMap.set(startCursor, {
-          ...page,
-          count: page.items.length,
-          items: null,
-        });
-      }
-    }
-
-    commitGridPages(Array.from(pageMap.values()));
-  }
 
   async function confirmDestructiveAction(title: string, message: string, okLabel: string) {
     if (tauriRuntime) {
@@ -177,155 +75,33 @@ export function App() {
     return window.confirm(message);
   }
 
-  function currentIndexedRoots() {
+  const currentIndexedRoots = useCallback(() => {
     return state.rootsInput
       .split(";")
       .map((item) => item.trim())
       .filter(Boolean);
-  }
+  }, [state.rootsInput]);
 
-  function buildAppSettings(overrides?: Partial<{
+  const buildAppSettings = useCallback((overrides?: Partial<{
     viewerPreviewSize: number;
     cacheStorageDir: string | null;
     indexedRoots: string[];
-  }>) {
+  }>) => {
     return {
       viewer_preview_size: overrides?.viewerPreviewSize ?? state.viewerPreviewSize,
       cache_storage_dir:
         overrides?.cacheStorageDir !== undefined ? overrides.cacheStorageDir : cacheStorageDir || null,
       indexed_roots: overrides?.indexedRoots ?? currentIndexedRoots(),
     };
-  }
+  }, [cacheStorageDir, currentIndexedRoots, state.viewerPreviewSize]);
 
-  async function fetchAssetsPage(
-    options: {
-      viewMode?: "timeline" | "album";
-      selectedAlbumId?: number;
-      query?: string;
-      mediaKind?: string;
-    },
-    cursor?: number,
-  ) {
-    const viewMode = options.viewMode ?? state.viewMode;
-    const selectedAlbumId =
-      "selectedAlbumId" in options ? options.selectedAlbumId : state.selectedAlbumId;
-    const query = options.query ?? state.query;
-    const mediaKind = options.mediaKind ?? state.mediaKind;
-    const request: AssetListRequest = {
-      cursor,
-      limit: ASSET_PAGE_SIZE,
-      query: query || undefined,
-      media_kind: mediaKind || undefined,
-    };
-
-    const response =
-      viewMode === "album" && selectedAlbumId
-        ? await api.listAssetsByAlbum(selectedAlbumId, request)
-        : query
-          ? await api.searchAssets(request)
-          : await api.listAssetsByDate(request);
-
-    return {
-      response,
-      viewMode,
-    };
-  }
-
-  async function refreshAllAssets(options?: {
-    viewMode?: "timeline" | "album";
-    selectedAlbumId?: number;
-    query?: string;
-    mediaKind?: string;
-  }) {
-    const generation = ++assetQueryGenerationRef.current;
-    setLoadingPreviousAssets(false);
-    setLoadingMoreAssets(false);
-    const { response, viewMode } = await fetchAssetsPage(options ?? {}, undefined);
-    if (generation !== assetQueryGenerationRef.current) {
-      return;
-    }
-    commitGridPages([
-      {
-        startCursor: 0,
-        count: response.items.length,
-        nextCursor: response.next_cursor ?? null,
-        items: response.items,
-      },
-    ]);
-    setViewAssetCount(response.total_count);
+  const refreshAllAssets = useCallback(async (options?: Parameters<typeof refresh>[0]) => {
+    const response = await refresh(options);
+    if (!response) return;
     setThumbnailResetKey((value) => value + 1);
     setViewerPreviewReadyAssetIds([]);
     setTimelineLabel(formatTimelineLabel(response.items[0]?.taken_at_utc));
-    await logClient(
-      "ui.refresh",
-      `loaded ${response.items.length} assets in ${viewMode} mode start_cursor=0 next_cursor=${response.next_cursor ?? "end"}`,
-    );
-  }
-
-  async function loadMoreAssets() {
-    if (loadingMoreAssets || !hasNextAssetPage) {
-      return;
-    }
-
-    const generation = assetQueryGenerationRef.current;
-    setLoadingMoreAssets(true);
-    try {
-      const loadedPages = sortGridPages(gridPagesRef.current).filter((page) => page.items !== null);
-      const lastLoadedPage = loadedPages[loadedPages.length - 1];
-      const nextCursor = lastLoadedPage?.nextCursor;
-      if (nextCursor == null) {
-        return;
-      }
-      const { response, viewMode } = await fetchAssetsPage({}, nextCursor);
-      if (generation !== assetQueryGenerationRef.current) {
-        return;
-      }
-
-      setViewAssetCount(response.total_count);
-      const pageStart = nextCursor;
-      commitHydratedPage(pageStart, response.items, response.next_cursor ?? null);
-      await logClient(
-        "ui.refresh",
-        `loaded page start=${pageStart} count=${response.items.length} in ${viewMode} mode next_cursor=${response.next_cursor ?? "end"}`,
-      );
-    } finally {
-      if (generation === assetQueryGenerationRef.current) {
-        setLoadingMoreAssets(false);
-      }
-    }
-  }
-
-  async function loadPreviousAssets() {
-    if (loadingPreviousAssets || !hasPreviousAssetPage) {
-      return;
-    }
-
-    const generation = assetQueryGenerationRef.current;
-    setLoadingPreviousAssets(true);
-    try {
-      const loadedPages = sortGridPages(gridPagesRef.current).filter((page) => page.items !== null);
-      const firstLoadedPage = loadedPages[0];
-      if (!firstLoadedPage) {
-        return;
-      }
-      const previousCursor = Math.max(0, firstLoadedPage.startCursor - ASSET_PAGE_SIZE);
-      const { response, viewMode } = await fetchAssetsPage({}, previousCursor);
-      if (generation !== assetQueryGenerationRef.current) {
-        return;
-      }
-
-      setViewAssetCount(response.total_count);
-      commitHydratedPage(previousCursor, response.items, response.next_cursor ?? null);
-      await logClient(
-        "ui.refresh",
-        `loaded page start=${previousCursor} count=${response.items.length} in ${viewMode} mode direction=up`,
-      );
-    } finally {
-      if (generation === assetQueryGenerationRef.current) {
-        setLoadingPreviousAssets(false);
-      }
-    }
-  }
+  }, [refresh]);
 
   async function refreshDebugSurfaces() {
     const [albums, diagnostics, logs, cacheStats, importStatus] = await Promise.all([
@@ -520,10 +296,12 @@ export function App() {
       return;
     }
     const timer = window.setTimeout(() => {
-      void refreshAllAssets();
+      void refreshAllAssets().catch((error) => {
+        void logClient("ui.refresh", `failed to load filtered media: ${String(error)}`, "error");
+      });
     }, 150);
     return () => window.clearTimeout(timer);
-  }, [state.mediaKind, state.query]);
+  }, [refreshAllAssets, state.mediaKind, state.query]);
 
   useEffect(() => {
     if (!didInitViewerPreviewSizeEffect.current) {
@@ -562,15 +340,19 @@ export function App() {
   }, [
     backupTransferWorking,
     cacheStorageMigrationStatus?.running,
-    cacheStorageDir,
-    state.rootsInput,
-    state.viewerPreviewSize,
+    buildAppSettings,
+    currentIndexedRoots,
     tauriRuntime,
   ]);
 
+  useEffect(() => () => refreshPollRef.current?.abort(), []);
+
   async function startRefreshForRoots(roots: string[]) {
-    await logClient("ui.import", `refresh requested for ${roots.length} roots`);
-    state.setImportStatus({
+    if (refreshPollRef.current && !refreshPollRef.current.signal.aborted) return;
+    const controller = new AbortController();
+    refreshPollRef.current = controller;
+    const { signal } = controller;
+    const starting: ImportProgress = {
       import_id: 0,
       status: "running",
       phase: "starting",
@@ -585,51 +367,65 @@ export function App() {
       assets_deleted: 0,
       worker_count: 0,
       message: "starting refresh",
-    });
-
-    const poll = window.setInterval(async () => {
-      try {
-        const status = await api.getImportStatus();
-        if (status) {
-          state.setImportStatus(status);
-          if (
-            status.status === "completed" ||
-            status.status === "failed" ||
-            status.status === "cancelled"
-          ) {
-            window.clearInterval(poll);
-            await refreshDebugSurfaces();
-            await refreshAllAssets();
-          }
-        }
-      } catch (error) {
-        console.error("failed to poll import status", error);
-      }
-    }, 400);
+    };
+    state.setImportStatus(starting);
 
     try {
+      await logClient("ui.import", `refresh requested for ${roots.length} roots`);
+      if (signal.aborted) return;
       if (tauriRuntime) {
         const settings = await api.updateAppSettings(buildAppSettings({ indexedRoots: roots }));
+        if (signal.aborted) return;
         state.setViewerPreviewSize(settings.viewer_preview_size);
         setCacheStorageDir(settings.cache_storage_dir ?? "");
         setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
         state.setRootsInput(settings.indexed_roots.join(";"));
       }
       await api.startRefreshIndex({ roots });
-    } finally {
-      window.setTimeout(() => {
-        void api.getImportStatus().then((status) => {
-          if (status) {
-            state.setImportStatus(status);
-          }
-        });
-      }, 50);
+    } catch (error) {
+      if (!signal.aborted) {
+        controller.abort();
+        state.setImportStatus({ ...starting, status: "failed", phase: "failed", message: String(error) });
+      }
+      throw error;
     }
+
+    let timer: number | undefined;
+    signal.addEventListener("abort", () => window.clearTimeout(timer), { once: true });
+    async function poll() {
+      if (signal.aborted) return;
+      try {
+        const status = await api.getImportStatus();
+        if (signal.aborted) return;
+        if (status) {
+          state.setImportStatus(status);
+          if (["completed", "failed", "cancelled"].includes(status.status)) {
+            try {
+              await refreshDebugSurfaces();
+              if (!signal.aborted) await refreshAllAssets();
+            } catch (error) {
+              console.error("failed to reload the refreshed index", error);
+            } finally {
+              if (refreshPollRef.current === controller) refreshPollRef.current = null;
+            }
+            return;
+          }
+        }
+      } catch (error) {
+        console.error("failed to poll import status", error);
+      }
+      if (!signal.aborted) timer = window.setTimeout(() => void poll(), 400);
+    }
+
+    void poll();
   }
 
   async function handleRefreshIndex() {
-    const roots = currentIndexedRoots();
-    await startRefreshForRoots(roots);
+    try {
+      await startRefreshForRoots(currentIndexedRoots());
+    } catch (error) {
+      window.alert(`Failed to start refresh: ${String(error)}`);
+    }
   }
 
   async function handleBrowseRoot() {
@@ -961,47 +757,29 @@ export function App() {
     });
   }
 
-  async function handleSelectAsset(assetId: number) {
-    const detail = await api.getAssetDetail(assetId);
-    state.setSelectedAsset(detail);
-    await logClient("ui.viewer", `opened asset ${assetId}`);
+  function closeViewer() {
+    selectionRequest.current += 1;
+    setSelection(undefined);
   }
 
-  async function handleStepAsset(direction: -1 | 1) {
-    const currentId = state.selectedAsset?.id;
-    if (!currentId) return;
-    const currentIndex = state.assets.findIndex((asset) => asset.id === currentId);
-    if (currentIndex < 0) return;
-    const nextAsset = state.assets[currentIndex + direction];
-    if (!nextAsset) return;
-    await handleSelectAsset(nextAsset.id);
-  }
-
-  async function hydratePlaceholderPage(pageStartCursor: number) {
-    const existingPage = gridPagesRef.current.find((page) => page.startCursor === pageStartCursor);
-    if (!existingPage || existingPage.items !== null) {
-      return;
-    }
-    if (hydratingPageStartsRef.current.has(pageStartCursor)) {
-      return;
-    }
-
-    hydratingPageStartsRef.current.add(pageStartCursor);
-    const generation = assetQueryGenerationRef.current;
+  async function selectAsset(index: number, assetId?: number) {
+    const request = ++selectionRequest.current;
     try {
-      const { response, viewMode } = await fetchAssetsPage({}, pageStartCursor);
-      if (generation !== assetQueryGenerationRef.current) {
-        return;
-      }
-      setViewAssetCount(response.total_count);
-      commitHydratedPage(pageStartCursor, response.items, response.next_cursor ?? null);
-      await logClient(
-        "ui.refresh",
-        `hydrated placeholder page start=${pageStartCursor} count=${response.items.length} in ${viewMode} mode`,
-      );
-    } finally {
-      hydratingPageStartsRef.current.delete(pageStartCursor);
+      const id = assetId ?? (await readAsset(index))?.id;
+      if (id == null || request !== selectionRequest.current) return;
+      const asset = await api.getAssetDetail(id);
+      if (request !== selectionRequest.current) return;
+      setSelection({ asset, index, version: viewVersion });
+      void logClient("ui.viewer", `opened asset ${id}`);
+    } catch (error) {
+      void logClient("ui.viewer", `failed to open media at position ${index}: ${String(error)}`, "error");
     }
+  }
+
+  function handleStepAsset(direction: -1 | 1) {
+    if (!selection || selection.version !== viewVersion) return;
+    const next = selection.index + direction;
+    if (next >= 0 && next < totalCount) void selectAsset(next);
   }
 
   async function handleResetDatabase() {
@@ -1021,8 +799,7 @@ export function App() {
     }
     try {
       await api.resetLocalDatabase();
-      state.setAssets([]);
-      state.setSelectedAsset(undefined);
+      closeViewer();
       state.setAlbums([]);
       state.setDiagnostics([]);
       state.setLogs([]);
@@ -1030,10 +807,7 @@ export function App() {
       state.setImportStatus(undefined);
       state.setSelectedAlbumId(undefined);
       state.setViewMode("timeline");
-      commitGridPages([]);
-      setViewAssetCount(0);
-      setLoadingPreviousAssets(false);
-      setLoadingMoreAssets(false);
+      clear();
       setViewerPreviewReadyAssetIds([]);
       window.location.reload();
     } catch (error) {
@@ -1236,7 +1010,7 @@ export function App() {
     return () => {
       cancelled = true;
     };
-  }, [batchTranscodeLogs, batchTranscodeOpen, logAssetPaths, state.rootsInput, thumbGenerationLogs, thumbLogOpen]);
+  }, [batchTranscodeLogs, batchTranscodeOpen, logAssetPaths, currentIndexedRoots, thumbGenerationLogs, thumbLogOpen]);
 
   function handleViewerPreviewReady(assetId: number) {
     setViewerPreviewReadyAssetIds((current) =>
@@ -1244,9 +1018,11 @@ export function App() {
     );
   }
 
-  const selectedAssetIndex = state.selectedAsset
-    ? state.assets.findIndex((asset) => asset.id === state.selectedAsset?.id)
-    : -1;
+  const handleLeadingDateChange = useCallback((value?: string) => {
+    setTimelineLabel(formatTimelineLabel(value));
+  }, []);
+
+  const selectedAssetIndex = selection?.version === viewVersion ? selection.index : -1;
 
   return (
     <div className={`app-shell${debugPanelCollapsed ? " debug-collapsed" : ""}`}>
@@ -1283,30 +1059,26 @@ export function App() {
           query={state.query}
           mediaKind={state.mediaKind}
           timelineLabel={timelineLabel}
-          assetCount={viewAssetCount}
+          assetCount={totalCount}
           onQueryChange={state.setQuery}
           onMediaKindChange={state.setMediaKind}
         />
         <div className="grid-frame">
           <MediaGrid
-            assets={state.assets}
+            key={viewVersion}
+            assets={assets}
             viewMode={state.viewMode}
-            entries={gridEntries}
+            pages={pages}
             viewerPreviewSize={state.viewerPreviewSize}
-            onSelect={handleSelectAsset}
-            onHydratePlaceholderPage={hydratePlaceholderPage}
+            onSelect={(assetId, index) => void selectAsset(index, assetId)}
+            onHydratePlaceholderPage={hydrate}
             viewerPlaybackSupport={viewerPlaybackSupport}
             viewerPreviewReadyAssetIds={viewerPreviewReadyAssetIds}
             thumbnailResetKey={thumbnailResetKey}
-            hasMoreBefore={hasPreviousAssetPage}
-            hasMoreAfter={hasNextAssetPage}
-            isLoadingMoreBefore={loadingPreviousAssets}
-            isLoadingMore={loadingMoreAssets}
-            onLoadMoreBefore={loadPreviousAssets}
-            onLoadMore={loadMoreAssets}
-            onLeadingDateChange={(value) => {
-              setTimelineLabel(formatTimelineLabel(value));
-            }}
+            hasMoreAfter={hasMore}
+            isLoadingMore={loadingMore}
+            onLoadMore={loadMore}
+            onLeadingDateChange={handleLeadingDateChange}
           />
         </div>
       </main>
@@ -1841,13 +1613,13 @@ export function App() {
       ) : null}
 
       <ViewerModal
-        asset={state.selectedAsset}
+        asset={selection?.asset}
         viewerPreviewSize={state.viewerPreviewSize}
         hasPrevious={selectedAssetIndex > 0}
-        hasNext={selectedAssetIndex >= 0 && selectedAssetIndex < state.assets.length - 1}
+        hasNext={selectedAssetIndex >= 0 && selectedAssetIndex < totalCount - 1}
         onPrevious={() => void handleStepAsset(-1)}
         onNext={() => void handleStepAsset(1)}
-        onClose={() => state.setSelectedAsset(undefined)}
+        onClose={closeViewer}
         onViewerPreviewReady={handleViewerPreviewReady}
       />
     </div>

@@ -2,6 +2,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error("refresh cancelled")]
+    RefreshCancelled,
     #[error("{0}")]
     Message(String),
     #[error(transparent)]

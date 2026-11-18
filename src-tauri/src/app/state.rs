@@ -235,9 +235,19 @@ pub fn persist_app_settings(settings_path: &Path, settings: &AppSettings) -> Res
     Ok(())
 }
 
-pub fn source_cache_namespace(path: &Path) -> String {
+fn source_cache_namespace(path: &Path) -> String {
     let normalized = path.to_string_lossy().replace('\\', "/");
-    blake3::hash(normalized.as_bytes()).to_hex().to_string()
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(normalized.as_bytes());
+    if let Ok(metadata) = fs::metadata(path) {
+        hasher.update(&metadata.len().to_le_bytes());
+        if let Ok(modified) = metadata.modified() {
+            let modified = chrono::DateTime::<chrono::Utc>::from(modified);
+            hasher.update(&modified.timestamp().to_le_bytes());
+            hasher.update(&modified.timestamp_subsec_nanos().to_le_bytes());
+        }
+    }
+    hasher.finalize().to_hex().to_string()
 }
 
 pub fn thumbnail_cache_key_for_path(path: &Path, size: u32, use_preview_cache: bool) -> String {
@@ -300,7 +310,15 @@ impl AppState {
         fs::create_dir_all(cache_data_dir.join("thumbnail-cache"))?;
         fs::create_dir_all(cache_data_dir.join("preview-cache"))?;
         fs::create_dir_all(cache_data_dir.join("viewer-cache"))?;
+        if !copied_existing_assets {
+            self.db.clear_viewer_video_transcode_statuses()?;
+        }
 
+        self.activate_cache_data_dir(cache_data_dir);
+        Ok(())
+    }
+
+    pub(super) fn activate_cache_data_dir(&self, cache_data_dir: PathBuf) {
         self.thumbnail_generation
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.inflight_thumbnails.lock().clear();
@@ -310,11 +328,7 @@ impl AppState {
         *self.preview_cache.lock() =
             ThumbnailCache::new(cache_data_dir.join("preview-cache"), 512 * 1024 * 1024);
         self.viewer_video_jobs.lock().clear();
-        if !copied_existing_assets {
-            self.db.clear_viewer_video_transcode_statuses()?;
-        }
         *self.cache_data_dir.lock() = cache_data_dir;
-        Ok(())
     }
 
     pub fn apply_app_settings(
