@@ -20,7 +20,6 @@ where
 {
     let mut sidecars = 0_usize;
     let mut unmatched = Vec::new();
-    let mut duplicate_hashes = HashSet::new();
     let total = scans.len();
 
     for (index, scan) in scans.iter().enumerate() {
@@ -52,19 +51,6 @@ where
                 unmatched.push((scan.path.clone(), describe_target_guess(&candidate_names)));
             }
         }
-        if let Some(hash) = &scan.quick_hash {
-            if !duplicate_hashes.insert(hex(hash))
-                && has_unmerged_duplicate_hash(db, hash, &scan.candidate_type)?
-            {
-                db.add_diagnostic(
-                    import_id,
-                    "info",
-                    "unmerged_duplicate_candidate",
-                    Some(&scan.path),
-                    "quick hash collision suggests a duplicate candidate",
-                )?;
-            }
-        }
     }
 
     for (path, target_name) in unmatched {
@@ -85,31 +71,6 @@ where
     )?;
 
     Ok(())
-}
-
-fn has_unmerged_duplicate_hash(
-    db: &crate::db::Database,
-    hash: &[u8],
-    media_kind: &str,
-) -> Result<bool, AppError> {
-    db.with_connection(|conn| {
-        use rusqlite::params;
-        let count = conn.query_row(
-            "SELECT COUNT(DISTINCT a.id)
-             FROM assets a
-             JOIN file_entries f ON f.id = a.primary_file_id
-             WHERE a.is_deleted = 0
-               AND a.media_kind = ?2
-               AND f.quick_hash = ?1",
-            params![hash, media_kind],
-            |row| row.get::<_, i64>(0),
-        )?;
-        Ok(count > 1)
-    })
-}
-
-fn hex(bytes: &[u8]) -> String {
-    bytes.iter().map(|item| format!("{item:02x}")).collect()
 }
 
 fn guessed_target_name(path: &str) -> String {

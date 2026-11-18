@@ -155,17 +155,19 @@ fn run_refresh(
     *state.import_status.lock() = Some(progress.clone());
 
     let dirty_folders = dirty_folders(&scans, &indexed, &roots);
-    let mut sidecars_by_parent = HashMap::<String, Vec<(String, ParsedSidecar)>>::new();
+    let mut sidecars_by_parent = HashMap::<&str, HashMap<&str, ParsedSidecar>>::new();
     for scan in &scans {
         cancel_if_requested(state)?;
         if !dirty_folders.contains(scan.parent_path.as_str()) {
             continue;
         }
         match parse_sidecar(scan) {
-            Ok(Some(sidecar)) => sidecars_by_parent
-                .entry(scan.parent_path.clone())
-                .or_default()
-                .push((scan.path.clone(), sidecar)),
+            Ok(Some(sidecar)) => {
+                sidecars_by_parent
+                    .entry(scan.parent_path.as_str())
+                    .or_default()
+                    .insert(scan.path.as_str(), sidecar);
+            }
             Ok(None) | Err(AppError::Json(_)) => {}
             Err(error) => return Err(error),
         }
@@ -271,7 +273,7 @@ fn run_refresh(
     progress.message = Some("ingress cleanup 2/4: pairing live photos".to_string());
     *state.import_status.lock() = Some(progress.clone());
     cancel_if_requested(state)?;
-    let live_photo_pairs = attach_live_photo_pairs(state, &scans, &dirty_folders)?;
+    let live_photo_pairs = attach_live_photo_pairs(state, &dirty_folders)?;
     state.db.insert_log(
         "info",
         "import.cleanup",
@@ -299,7 +301,7 @@ fn run_refresh(
     let parsed_sidecars = sidecars_by_parent
         .values()
         .flatten()
-        .map(|(path, sidecar)| (path.as_str(), sidecar))
+        .map(|(&path, sidecar)| (path, sidecar))
         .collect();
     validate_import_with_progress(
         &state.db,
@@ -584,34 +586,28 @@ fn progress_message(progress: &ImportProgress) -> String {
 }
 
 fn find_sidecar_for<'a>(
-    scan: &crate::models::FileScanRecord,
-    sidecars_by_parent: &'a HashMap<String, Vec<(String, ParsedSidecar)>>,
+    scan: &FileScanRecord,
+    sidecars_by_parent: &'a HashMap<&str, HashMap<&str, ParsedSidecar>>,
 ) -> Option<&'a ParsedSidecar> {
-    let parent = scan.parent_path.as_str();
-    let folder_sidecars = sidecars_by_parent.get(parent)?;
+    let parent = std::path::Path::new(&scan.parent_path);
+    let folder_sidecars = sidecars_by_parent.get(scan.parent_path.as_str())?;
 
-    for candidate_filename in sidecar_candidate_filenames(&scan.filename) {
-        let candidate_path = format!("{parent}/{candidate_filename}");
-        let json_path = format!("{candidate_path}.json");
-        if let Some((_, sidecar)) = folder_sidecars.iter().find(|(path, _)| path == &json_path) {
-            return Some(sidecar);
-        }
-
-        let supplemental = format!("{candidate_path}.supplemental-metadata.json");
-        if let Some((_, sidecar)) = folder_sidecars
-            .iter()
-            .find(|(path, _)| path == &supplemental)
-        {
-            return Some(sidecar);
+    for filename in sidecar_candidate_filenames(&scan.filename) {
+        for suffix in [".json", ".supplemental-metadata.json"] {
+            let path =
+                crate::util::path::normalize_path(&parent.join(format!("{filename}{suffix}")));
+            if let Some(sidecar) = folder_sidecars.get(path.as_str()) {
+                return Some(sidecar);
+            }
         }
     }
 
     folder_sidecars
         .iter()
-        .filter_map(|(_, sidecar)| {
-            score_sidecar_match(&scan.filename, sidecar).map(|score| (score, sidecar))
+        .filter_map(|(&path, sidecar)| {
+            score_sidecar_match(&scan.filename, sidecar).map(|score| ((score, path), sidecar))
         })
-        .max_by_key(|(score, _)| *score)
+        .max_by_key(|(rank, _)| *rank)
         .map(|(_, sidecar)| sidecar)
 }
 
@@ -671,96 +667,116 @@ fn score_sidecar_match(filename: &str, sidecar: &ParsedSidecar) -> Option<usize>
     best
 }
 
-fn is_live_photo_video(scan: &crate::models::FileScanRecord) -> bool {
-    scan.candidate_type == "video"
-}
-
-fn find_still_pair_asset_id(
-    state: &AppState,
-    scan: &crate::models::FileScanRecord,
-) -> Result<Option<i64>, AppError> {
-    let still_stems = still_pair_stems(&scan.filename);
-    state.db.with_connection(|conn| {
-        use rusqlite::{OptionalExtension, params};
-        for still_stem in still_stems {
-            let result = conn
-                .query_row(
-                    "SELECT a.id
-                     FROM assets a
-                     JOIN file_entries f ON f.id = a.primary_file_id
-                     WHERE f.parent_path = ?1
-                       AND a.is_deleted = 0 AND f.is_deleted = 0
-                       AND a.media_kind IN ('photo', 'live_photo')
-                       AND (
-                         f.filename LIKE ?2
-                         OR f.filename LIKE ?3
-                       )
-                     LIMIT 1",
-                    params![
-                        scan.parent_path,
-                        format!("{still_stem}.%"),
-                        format!("{still_stem}(%).%"),
-                    ],
-                    |row| row.get::<_, i64>(0),
-                )
-                .optional()?;
-            if result.is_some() {
-                return Ok(result);
-            }
-        }
-        Ok(None)
-    })
+#[derive(Default)]
+struct StillPhotos {
+    exact: HashMap<String, i64>,
+    variants: HashMap<String, i64>,
 }
 
 fn attach_live_photo_pairs(
     state: &AppState,
-    scans: &[FileScanRecord],
     dirty_folders: &HashSet<&str>,
 ) -> Result<u32, AppError> {
     if dirty_folders.is_empty() {
         return Ok(0);
     }
+    let folders = serde_json::to_string(dirty_folders)?;
     state.db.with_connection(|conn| {
-        let folders = serde_json::to_string(dirty_folders)?;
-        conn.execute(
+        let tx = conn.unchecked_transaction()?;
+        tx.execute(
             "DELETE FROM asset_files
              WHERE role = 'live_photo_video' AND file_id IN (
                 SELECT id FROM file_entries
                 WHERE is_deleted = 1 OR parent_path IN (SELECT value FROM json_each(?1))
              )",
-            [folders],
+            [&folders],
         )?;
-        Ok(())
-    })?;
-    let mut paired = 0_u32;
-    for scan in scans.iter().filter(|scan| {
-        is_live_photo_video(scan) && dirty_folders.contains(scan.parent_path.as_str())
-    }) {
-        cancel_if_requested(state)?;
-        let file_id = state.db.with_connection(|conn| {
-            use rusqlite::{OptionalExtension, params};
-            conn.query_row(
-                "SELECT id FROM file_entries WHERE path = ?1 LIMIT 1",
-                params![scan.path],
-                |row| row.get::<_, i64>(0),
-            )
-            .optional()
-            .map_err(AppError::from)
-        })?;
 
-        let Some(file_id) = file_id else {
-            continue;
-        };
-
-        if let Some(still_asset_id) = find_still_pair_asset_id(state, scan)? {
-            state
-                .db
-                .attach_asset_file(still_asset_id, file_id, "live_photo_video")?;
-            paired += 1;
+        let mut stills_by_folder = HashMap::<String, StillPhotos>::new();
+        {
+            let mut stmt = tx.prepare(
+                "SELECT f.parent_path, f.filename, a.id
+                 FROM file_entries f
+                 JOIN assets a ON a.primary_file_id = f.id
+                 WHERE f.parent_path IN (SELECT value FROM json_each(?1))
+                   AND f.is_deleted = 0 AND a.is_deleted = 0
+                   AND a.media_kind IN ('photo', 'live_photo')
+                 ORDER BY a.id",
+            )?;
+            let rows = stmt.query_map([&folders], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })?;
+            for row in rows {
+                cancel_if_requested(state)?;
+                let (folder, filename, id) = row?;
+                let Some(stem) = media_stem(&filename) else {
+                    continue;
+                };
+                let stills = stills_by_folder.entry(folder).or_default();
+                stills.exact.entry(stem.clone()).or_insert(id);
+                if let Some((base, copy_number)) = stem
+                    .strip_suffix(')')
+                    .and_then(|stem| stem.rsplit_once('('))
+                    && !copy_number.is_empty()
+                    && copy_number.bytes().all(|byte| byte.is_ascii_digit())
+                {
+                    stills.variants.entry(base.to_owned()).or_insert(id);
+                }
+            }
         }
-    }
 
-    Ok(paired)
+        let paired = {
+            let mut videos = tx.prepare(
+                "SELECT DISTINCT f.id, f.parent_path, f.filename
+                 FROM file_entries f
+                 JOIN assets a ON a.primary_file_id = f.id
+                 WHERE f.parent_path IN (SELECT value FROM json_each(?1))
+                   AND f.is_deleted = 0 AND a.is_deleted = 0 AND a.media_kind = 'video'",
+            )?;
+            let mut attach = tx.prepare(
+                "INSERT OR IGNORE INTO asset_files (asset_id, file_id, role)
+                 VALUES (?1, ?2, 'live_photo_video')",
+            )?;
+            let mut rows = videos.query([&folders])?;
+            let mut paired = 0;
+            while let Some(row) = rows.next()? {
+                cancel_if_requested(state)?;
+                let folder = row.get::<_, String>(1)?;
+                let filename = row.get::<_, String>(2)?;
+                let (Some(stills), Some(stem)) =
+                    (stills_by_folder.get(&folder), media_stem(&filename))
+                else {
+                    continue;
+                };
+                let base = stem
+                    .strip_suffix("-motion")
+                    .or_else(|| stem.strip_suffix("-live"));
+                let id = stills
+                    .exact
+                    .get(&stem)
+                    .or_else(|| base.and_then(|base| stills.exact.get(base)))
+                    .or_else(|| stills.variants.get(&stem))
+                    .or_else(|| base.and_then(|base| stills.variants.get(base)));
+                if let Some(id) = id {
+                    paired += attach.execute(rusqlite::params![id, row.get::<_, i64>(0)?])? as u32;
+                }
+            }
+            paired
+        };
+        tx.commit()?;
+        Ok(paired)
+    })
+}
+
+fn media_stem(filename: &str) -> Option<String> {
+    std::path::Path::new(filename)
+        .file_stem()?
+        .to_str()
+        .map(str::to_ascii_lowercase)
 }
 
 fn merge_duplicate_assets_by_hash(
@@ -802,6 +818,8 @@ fn merge_duplicate_assets_by_hash(
     let total = groups.len();
     let mut merged = 0;
     for (index, ((_, media_kind), assets)) in groups.into_iter().enumerate() {
+        let candidate_count = assets.len();
+        let diagnostic_path = assets[0].1.clone();
         let mut verified = HashMap::<_, Vec<_>>::new();
         for (id, path) in assets {
             cancel_if_requested(state)?;
@@ -815,9 +833,20 @@ fn merge_duplicate_assets_by_hash(
             };
             verified.entry(digest).or_default().push((id, path));
         }
+        let mut group_merges = 0;
         for assets in verified.values().filter(|assets| assets.len() > 1) {
             cancel_if_requested(state)?;
-            merged += merge_verified_assets(state, assets, &media_kind)? as u32;
+            group_merges += merge_verified_assets(state, assets, &media_kind)? as u32;
+        }
+        merged += group_merges;
+        if candidate_count - group_merges as usize > 1 {
+            state.db.add_diagnostic(
+                progress.import_id,
+                "info",
+                "unmerged_duplicate_candidate",
+                Some(&diagnostic_path),
+                "Files share a quick hash but could not all be verified as duplicates",
+            )?;
         }
         if should_publish_progress(index, total) {
             progress.message = Some(format!(
@@ -958,21 +987,6 @@ fn merge_verified_assets(
     Ok(merged_assets.len().saturating_sub(1))
 }
 
-fn still_pair_stems(filename: &str) -> Vec<String> {
-    let stem = filename.split('.').next().unwrap_or_default().to_string();
-    let mut stems = vec![stem.clone()];
-
-    for suffix in ["-motion", "-live"] {
-        if let Some(stripped) = stem.strip_suffix(suffix) {
-            if !stems.iter().any(|existing| existing == stripped) {
-                stems.push(stripped.to_string());
-            }
-        }
-    }
-
-    stems
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1032,6 +1046,91 @@ mod tests {
         fn drop(&mut self) {
             let _ = fs::remove_dir_all(&self.directory);
         }
+    }
+
+    #[test]
+    fn live_photo_pairing_uses_literal_stems_and_preserves_dots() {
+        let library = Library::new("motion");
+        for (filename, bytes) in [
+            ("IMGA001.jpg", "different still"),
+            ("IMG_001.mov", "unpaired video"),
+            ("holiday.2024.jpg", "unrelated holiday"),
+            ("holiday.2025.jpg", "correct holiday"),
+            ("holiday.2025-motion.mov", "paired video"),
+        ] {
+            fs::write(library.directory.join("Photos").join(filename), bytes).unwrap();
+        }
+        library.refresh(library.roots.clone()).unwrap();
+        let paired_stills = library
+            .state
+            .db
+            .with_connection(|conn| {
+                let mut stmt = conn.prepare(
+                    "SELECT a.title FROM asset_files af JOIN assets a ON a.id = af.asset_id
+                 WHERE af.role = 'live_photo_video' ORDER BY a.title",
+                )?;
+                let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+                Ok(rows.collect::<Result<Vec<_>, _>>()?)
+            })
+            .unwrap();
+        assert_eq!(paired_stills, ["holiday.2025.jpg"]);
+        let request = || crate::models::AssetListRequest {
+            cursor: None,
+            limit: None,
+            query: None,
+            media_kind: None,
+            date_from: None,
+            date_to: None,
+        };
+        assert_eq!(
+            library
+                .state
+                .db
+                .list_assets_by_date(request())
+                .unwrap()
+                .total_count,
+            4
+        );
+        fs::remove_file(library.directory.join("Photos/holiday.2025.jpg")).unwrap();
+        library.refresh(library.roots.clone()).unwrap();
+        let result = library.state.db.list_assets_by_date(request()).unwrap();
+        assert!(
+            result
+                .items
+                .iter()
+                .any(|item| item.title.as_deref() == Some("holiday.2025-motion.mov"))
+        );
+        assert!(result.items.iter().all(|item| !item.has_live_photo));
+    }
+
+    #[test]
+    fn exact_sidecar_takes_precedence_over_supplemental_sidecar() {
+        let library = Library::new("sidecar-precedence");
+        let folder = library.directory.join("Photos");
+        fs::write(folder.join("still.jpg"), b"photo").unwrap();
+        fs::write(
+            folder.join("still.jpg.json"),
+            r#"{"title":"still.jpg","url":"https://example.com/exact"}"#,
+        )
+        .unwrap();
+        fs::write(
+            folder.join("still.jpg.supplemental-metadata.json"),
+            r#"{"title":"still.jpg","url":"https://example.com/supplemental"}"#,
+        )
+        .unwrap();
+        library.refresh(library.roots.clone()).unwrap();
+        let url = library
+            .state
+            .db
+            .with_connection(|conn| {
+                Ok(conn.query_row(
+                    "SELECT google_photos_url FROM sidecar_metadata",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?)
+            })
+            .unwrap();
+        assert_eq!(url, "https://example.com/exact");
     }
 
     #[test]
@@ -1102,6 +1201,19 @@ mod tests {
         library.refresh(library.roots.clone()).unwrap();
         assert_eq!(library.active_titles().len(), 2);
         assert!(library.active_titles().contains(&"b.jpg".into()));
+        let collision_count = || {
+            library
+                .state
+                .db
+                .get_ingress_diagnostics()
+                .unwrap()
+                .into_iter()
+                .filter(|item| item.diagnostic_type == "unmerged_duplicate_candidate")
+                .count()
+        };
+        assert_eq!(collision_count(), 1);
+        library.refresh(library.roots.clone()).unwrap();
+        assert_eq!(collision_count(), 1);
     }
 
     #[test]

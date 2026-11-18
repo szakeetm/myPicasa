@@ -534,20 +534,22 @@ impl DatabaseQueries for super::Database {
 
     fn list_albums(&self) -> Result<Vec<AlbumSummary>, AppError> {
         self.with_connection(|conn| {
-            let mut stmt = conn.prepare(
-                "SELECT al.id,
-                        al.name,
-                        al.source_path,
-                        COUNT(DISTINCT aa.asset_id),
-                        MIN(COALESCE(a.taken_at_utc, f.mtime_utc)),
-                        MAX(COALESCE(a.taken_at_utc, f.mtime_utc))
+            let mut stmt = conn.prepare(&format!(
+                "SELECT al.id, al.name, al.source_path,
+                        COALESCE(visible.asset_count, 0), visible.first_date, visible.last_date
                  FROM albums al
-                 LEFT JOIN album_assets aa ON aa.album_id = al.id
-                 LEFT JOIN assets a ON a.id = aa.asset_id AND a.is_deleted = 0
-                 LEFT JOIN file_entries f ON f.id = a.primary_file_id
-                 GROUP BY al.id, al.name, al.source_path
-                 ORDER BY MIN(COALESCE(a.taken_at_utc, f.mtime_utc)) ASC, al.name COLLATE NOCASE",
-            )?;
+                 LEFT JOIN (
+                     SELECT aa.album_id, COUNT(*) AS asset_count,
+                            MIN(COALESCE(a.taken_at_utc, f.mtime_utc)) AS first_date,
+                            MAX(COALESCE(a.taken_at_utc, f.mtime_utc)) AS last_date
+                     FROM album_assets aa
+                     JOIN assets a ON a.id = aa.asset_id
+                     JOIN file_entries f ON f.id = a.primary_file_id
+                     WHERE {VISIBLE_ASSET_SQL}
+                     GROUP BY aa.album_id
+                 ) visible ON visible.album_id = al.id
+                 ORDER BY visible.first_date ASC, al.name COLLATE NOCASE",
+            ))?;
             let rows = stmt.query_map([], |row| {
                 Ok(AlbumSummary {
                     id: row.get(0)?,
@@ -584,16 +586,15 @@ impl DatabaseQueries for super::Database {
     fn get_asset_detail(&self, asset_id: i64) -> Result<AssetDetail, AppError> {
         self.with_connection(|conn| {
             let detail = conn.query_row(
-                "SELECT a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, f.file_size, a.width, a.height, a.duration_ms,
-                        a.gps_lat, a.gps_lon, f.path, COALESCE(group_concat(DISTINCT al.name), ''), sm.google_photos_url
-                 FROM assets a
-                 JOIN file_entries f ON f.id = a.primary_file_id
-                 LEFT JOIN sidecar_metadata sm ON sm.asset_id = a.id
-                 LEFT JOIN album_assets aa ON aa.asset_id = a.id
-                 LEFT JOIN albums al ON al.id = aa.album_id
-                 WHERE a.id = ?1
-                 GROUP BY a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc, f.file_size, a.width, a.height, a.duration_ms,
-                          a.gps_lat, a.gps_lon, f.path, sm.google_photos_url",
+                &format!(
+                    "SELECT a.id, a.title, a.media_kind, a.display_type, a.taken_at_utc,
+                            f.file_size, a.width, a.height, a.duration_ms, a.gps_lat, a.gps_lon,
+                            f.path, {ALBUM_NAMES_SQL}, sm.google_photos_url
+                     FROM assets a
+                     JOIN file_entries f ON f.id = a.primary_file_id
+                     LEFT JOIN sidecar_metadata sm ON sm.asset_id = a.id
+                     WHERE a.id = ?1",
+                ),
                 params![asset_id],
                 |row| {
                     Ok(AssetDetail {
@@ -609,25 +610,14 @@ impl DatabaseQueries for super::Database {
                         gps_lat: row.get(9)?,
                         gps_lon: row.get(10)?,
                         primary_path: row.get(11)?,
-                        albums: split_csv(row.get::<_, String>(12)?),
+                        albums: read_album_names(row, 12)?,
                         live_photo_video_path: None,
                         google_photos_url: row.get(13)?,
                     })
                 },
             )?;
 
-            let live_photo = conn
-                .query_row(
-                    "SELECT f.path
-                     FROM asset_files af
-                     JOIN file_entries f ON f.id = af.file_id
-                     WHERE af.asset_id = ?1 AND af.role = 'live_photo_video'
-                     LIMIT 1",
-                    params![asset_id],
-                    |row| row.get::<_, String>(0),
-                )
-                .optional()?;
-
+            let live_photo = live_photo_path(conn, asset_id)?;
             Ok(AssetDetail {
                 live_photo_video_path: live_photo,
                 ..detail
@@ -636,19 +626,7 @@ impl DatabaseQueries for super::Database {
     }
 
     fn get_live_photo_pair(&self, asset_id: i64) -> Result<Option<String>, AppError> {
-        self.with_connection(|conn| {
-            conn.query_row(
-                "SELECT f.path
-                 FROM asset_files af
-                 JOIN file_entries f ON f.id = af.file_id
-                 WHERE af.asset_id = ?1 AND af.role = 'live_photo_video'
-                 LIMIT 1",
-                params![asset_id],
-                |row| row.get::<_, String>(0),
-            )
-            .optional()
-            .map_err(AppError::from)
-        })
+        self.with_connection(|conn| live_photo_path(conn, asset_id))
     }
 
     fn get_ingress_diagnostics(&self) -> Result<Vec<DiagnosticEntry>, AppError> {
@@ -823,16 +801,9 @@ fn paged_asset_query(
             );
             values.push(album_id.into());
         }
-        from_sql.push_str(
-            " JOIN file_entries f ON f.id = a.primary_file_id
-             WHERE a.is_deleted = 0
-               AND a.media_kind IN ('photo', 'video', 'live_photo')
-               AND NOT EXISTS (
-                 SELECT 1 FROM asset_files af_hidden
-                 WHERE af_hidden.file_id = a.primary_file_id
-                   AND af_hidden.role = 'live_photo_video'
-               )",
-        );
+        from_sql.push_str(&format!(
+            " JOIN file_entries f ON f.id = a.primary_file_id WHERE {VISIBLE_ASSET_SQL}",
+        ));
         match request.media_kind.as_deref() {
             Some("photo") => from_sql.push_str(" AND a.media_kind IN ('photo', 'live_photo')"),
             Some("live_photo") => from_sql.push_str(&format!(" AND {HAS_LIVE_PHOTO_SQL}")),
@@ -865,13 +836,7 @@ fn paged_asset_query(
         let direction = if album_id.is_some() { "ASC" } else { "DESC" };
         let sql = format!(
             "SELECT a.id, a.title, a.media_kind, a.taken_at_utc, a.duration_ms,
-                    {HAS_LIVE_PHOTO_SQL}, f.path,
-                    COALESCE((
-                        SELECT group_concat(DISTINCT al.name)
-                        FROM album_assets aa
-                        JOIN albums al ON al.id = aa.album_id
-                        WHERE aa.asset_id = a.id
-                    ), '')
+                    {HAS_LIVE_PHOTO_SQL}, f.path, {ALBUM_NAMES_SQL}
              {from_sql}
              ORDER BY COALESCE(a.taken_at_utc, f.mtime_utc) {direction}, a.id {direction}
              LIMIT ? OFFSET ?"
@@ -890,8 +855,36 @@ fn paged_asset_query(
     })
 }
 
+const VISIBLE_ASSET_SQL: &str = "a.is_deleted = 0 AND f.is_deleted = 0
+    AND a.media_kind IN ('photo', 'video', 'live_photo')
+    AND NOT EXISTS (
+        SELECT 1 FROM asset_files af
+        JOIN assets still ON still.id = af.asset_id AND still.is_deleted = 0
+        WHERE af.file_id = a.primary_file_id AND af.role = 'live_photo_video'
+    )";
+
+const ALBUM_NAMES_SQL: &str = "(SELECT json_group_array(DISTINCT al.name ORDER BY al.name)
+    FROM album_assets aa
+    JOIN albums al ON al.id = aa.album_id
+    WHERE aa.asset_id = a.id)";
+
+fn live_photo_path(conn: &rusqlite::Connection, asset_id: i64) -> Result<Option<String>, AppError> {
+    Ok(conn
+        .query_row(
+            "SELECT f.path
+         FROM asset_files af
+         JOIN file_entries f ON f.id = af.file_id AND f.is_deleted = 0
+         WHERE af.asset_id = ?1 AND af.role = 'live_photo_video'
+         ORDER BY f.id LIMIT 1",
+            [asset_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 const HAS_LIVE_PHOTO_SQL: &str = "EXISTS (
     SELECT 1 FROM asset_files af_live
+    JOIN file_entries motion ON motion.id = af_live.file_id AND motion.is_deleted = 0
     WHERE af_live.asset_id = a.id AND af_live.role = 'live_photo_video'
 )";
 
@@ -904,17 +897,18 @@ fn map_asset_list_item(row: &rusqlite::Row<'_>) -> rusqlite::Result<AssetListIte
         duration_ms: row.get(4)?,
         has_live_photo: row.get::<_, bool>(5)?,
         primary_path: row.get(6)?,
-        albums: split_csv(row.get::<_, String>(7)?),
+        albums: read_album_names(row, 7)?,
     })
 }
 
-fn split_csv(value: String) -> Vec<String> {
-    value
-        .split(',')
-        .map(str::trim)
-        .filter(|item| !item.is_empty())
-        .map(ToOwned::to_owned)
-        .collect()
+fn read_album_names(row: &rusqlite::Row<'_>, index: usize) -> rusqlite::Result<Vec<String>> {
+    serde_json::from_str(&row.get::<_, String>(index)?).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(
+            index,
+            rusqlite::types::Type::Text,
+            Box::new(error),
+        )
+    })
 }
 
 fn file_name(path: &str) -> String {
@@ -973,6 +967,24 @@ mod search_tests {
             date_from: None,
             date_to: None,
         }
+    }
+
+    #[test]
+    fn album_counts_match_visible_assets_and_preserve_commas_in_names() {
+        let db = search_fixture();
+        db.with_connection(|conn| {
+            conn.execute_batch(
+                "UPDATE albums SET name = 'Prague, 2024' WHERE id = 1;
+                 INSERT INTO asset_files (asset_id, file_id, role) VALUES (1, 2, 'live_photo_video');
+                 UPDATE assets SET is_deleted = 1 WHERE id = 3;
+                 INSERT INTO album_assets (album_id, asset_id, added_at) VALUES (1, 3, '');",
+            )?;
+            Ok(())
+        }).unwrap();
+        let album = db.list_assets_by_album(1, request("")).unwrap();
+        assert_eq!(db.list_albums().unwrap()[0].asset_count, album.total_count);
+        assert_eq!(album.items[0].albums, ["Prague, 2024"]);
+        assert_eq!(db.get_asset_detail(1).unwrap().albums, ["Prague, 2024"]);
     }
 
     #[test]
