@@ -68,3 +68,24 @@ export function getGridWindow(
     paddingBottom: padding + (rowCount - endRow) * rowPitch,
   };
 }
+
+
+// Normal browsing prepares only rendered media, with the visible rows first.
+// An explicit preload can also process the rest of the hydrated pages.
+export function gridMediaWork(
+  assets: AssetListItem[],
+  rendered: ReturnType<typeof gridSlots>,
+  visible: ReturnType<typeof gridSlots>,
+  preload: boolean,
+): AssetListItem[] {
+  const candidates = [
+    ...visible.map(({ asset }) => asset),
+    ...rendered.map(({ asset }) => asset),
+    ...(preload ? assets : []),
+  ];
+  const unique = new Map<number, AssetListItem>();
+  for (const asset of candidates) {
+    if (asset) unique.set(asset.id, asset);
+  }
+  return Array.from(unique.values());
+}

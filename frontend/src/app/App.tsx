@@ -8,6 +8,7 @@ import { MediaGrid } from "../components/MediaGrid";
 import { ViewerModal } from "../components/ViewerModal";
 import { DebugPanel } from "../components/DebugPanel";
 import { logClient } from "../lib/logger";
+import { pollWhile } from "../lib/pollWhile";
 import { isTauriRuntime } from "../lib/runtime";
 import { api } from "../lib/tauri";
 import { useAppState } from "../state/appState";
@@ -229,66 +230,48 @@ export function App() {
     };
   }, [batchTranscodeOpen, batchTranscodeStatus?.status]);
 
+  const migrationRunning = cacheStorageMigrationStatus?.running ?? false;
+  const migrationStatus = cacheStorageMigrationStatus?.status;
   useEffect(() => {
-    if (!tauriRuntime) {
-      return;
-    }
-    const shouldPoll =
-      cacheStorageMigrationStatus?.running ||
-      cacheStorageMigrationStatus?.status === "completed" ||
-      cacheStorageMigrationStatus?.status === "failed" ||
-      cacheStorageMigrationStatus?.status === "cancelled";
-    if (!shouldPoll) {
-      return;
-    }
+    if (!tauriRuntime || !migrationRunning) return;
+    setCacheStorageMigrationModalOpen(true);
 
-    let cancelled = false;
-    async function refreshMigrationStatus() {
+    return pollWhile(async (signal) => {
       try {
         const status = await api.getCacheStorageMigrationStatus();
-        if (cancelled) {
-          return;
-        }
-        setCacheStorageMigrationStatus(status);
-        if (status.running) {
-          setCacheStorageMigrationModalOpen(true);
-        } else if (cacheStorageMigrationWasRunningRef.current && status.status !== "idle") {
-          setCacheStorageMigrationModalOpen(true);
-        }
-        cacheStorageMigrationWasRunningRef.current = status.running;
-        if (!status.running && status.status !== "idle") {
-          const settings = await api.getAppSettings();
-          if (cancelled) {
-            return;
-          }
-          state.setViewerPreviewSize(settings.viewer_preview_size);
-          setCacheStorageDir(settings.cache_storage_dir ?? "");
-          setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
-          state.setRootsInput(settings.indexed_roots.join(";"));
-          const cacheStats = await api.getCacheStats();
-          if (!cancelled) {
-            state.setCacheStats(cacheStats);
-          }
-        }
+        if (!signal.aborted) setCacheStorageMigrationStatus(status);
+        return status.running;
       } catch (error) {
-        console.error("failed to refresh cache migration status", error);
+        if (!signal.aborted) console.error("failed to refresh cache migration status", error);
+        return true;
+      }
+    }, 500);
+  }, [migrationRunning, tauriRuntime]);
+
+  useEffect(() => {
+    if (!tauriRuntime || migrationRunning || !migrationStatus ||
+        migrationStatus === "idle" || !cacheStorageMigrationWasRunningRef.current) return;
+
+    const controller = new AbortController();
+    async function loadUpdatedStorage() {
+      try {
+        const [settings, stats] = await Promise.all([api.getAppSettings(), api.getCacheStats()]);
+        if (controller.signal.aborted) return;
+        const store = useAppState.getState();
+        store.setViewerPreviewSize(settings.viewer_preview_size);
+        setCacheStorageDir(settings.cache_storage_dir ?? "");
+        setSavedCacheStorageDir(settings.cache_storage_dir ?? "");
+        store.setRootsInput(settings.indexed_roots.join(";"));
+        store.setCacheStats(stats);
+      } catch (error) {
+        if (!controller.signal.aborted) console.error("failed to load cache migration settings", error);
+      } finally {
+        if (!controller.signal.aborted) cacheStorageMigrationWasRunningRef.current = false;
       }
     }
-
-    void refreshMigrationStatus();
-    if (!cacheStorageMigrationStatus?.running) {
-      return;
-    }
-
-    const timer = window.setInterval(() => {
-      void refreshMigrationStatus();
-    }, 500);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [cacheStorageMigrationStatus?.running, cacheStorageMigrationStatus?.status, state, tauriRuntime]);
+    void loadUpdatedStorage();
+    return () => controller.abort();
+  }, [migrationRunning, migrationStatus, tauriRuntime]);
 
   useEffect(() => {
     if (!didInitFilterEffect.current) {

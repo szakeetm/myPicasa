@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { commitPage, getGridWindow, gridSlots } from "../src/app/gridPaging.ts";
+import { commitPage, getGridWindow, gridMediaWork, gridSlots } from "../src/app/gridPaging.ts";
 
 const page = (startCursor) => ({
   startCursor,
@@ -43,4 +43,15 @@ test("the rendered window has the same total height anywhere in a large grid", (
   }
   assert.equal(middle.firstVisibleRow, 999);
   assert.equal(end.endRow, 2000);
+});
+
+test("normal media work starts with visible slots and stays within the rendered window", () => {
+  const slots = gridSlots([page(0), page(200)], 186, 224);
+  const visible = gridSlots([page(0), page(200)], 198, 208);
+  const assets = [...page(0).items, ...page(200).items];
+  const work = gridMediaWork(assets, slots, visible, false);
+  assert.deepEqual(work.slice(0, 10).map(({ id }) => id), visible.map(({ index }) => index));
+  assert.equal(work.length, 38);
+  assert.equal(new Set(work.map(({ id }) => id)).size, 38);
+  assert.equal(gridMediaWork(assets, slots, visible, true).length, 400);
 });

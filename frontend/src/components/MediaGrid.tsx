@@ -1,9 +1,10 @@
 import { startTransition, useEffect, useEffectEvent, useLayoutEffect, useMemo, useRef, useState } from "react";
 import dayjs from "dayjs";
 
-import { getGridWindow, gridSlots, type GridPage } from "../app/gridPaging";
+import { getGridWindow, gridMediaWork, gridSlots, type GridPage } from "../app/gridPaging";
 import { api } from "../lib/tauri";
 import { logClient } from "../lib/logger";
+import { pollWhile } from "../lib/pollWhile";
 import { materializeImageSrc } from "../lib/mediaSrc";
 import type { AssetListItem, ViewerPlaybackHint, ViewerPlaybackSupport } from "../lib/types";
 
@@ -149,6 +150,11 @@ export function MediaGrid({
     () => new Set(visibleSlots.flatMap(({ asset }) => asset ? [asset.id] : [])),
     [visibleSlots],
   );
+  const mediaWork = useMemo(
+    () => gridMediaWork(assets, entries, visibleSlots, thumbnailPreload?.active ?? false),
+    [assets, entries, visibleSlots, thumbnailPreload?.active],
+  );
+  const readMediaWork = useEffectEvent(() => mediaWork);
   const viewerPreviewReadySet = useMemo(
     () => new Set(viewerPreviewReadyAssetIds),
     [viewerPreviewReadyAssetIds],
@@ -212,48 +218,28 @@ export function MediaGrid({
   }, [thumbnailResetKey, thumbnailSize]);
 
   useEffect(() => {
-    let cancelled = false;
-
-    async function refreshPlaybackHints() {
-      const videoIds = assets
-        .filter((asset) => asset.media_kind === "video" && effectiveVisibleIdSet.has(asset.id))
-        .map((asset) => asset.id);
-
-      if (videoIds.length === 0) {
-        if (!cancelled) {
-          setVideoPlaybackHints({});
-        }
-        return;
-      }
-
-      try {
-        const hints = await api.getViewerPlaybackHints(videoIds, viewerPlaybackSupport);
-        if (cancelled) {
-          return;
-        }
-        setVideoPlaybackHints(
-          hints.reduce<Record<number, ViewerPlaybackHint["status"]>>((acc, hint) => {
-            acc[hint.asset_id] = hint.status;
-            return acc;
-          }, {}),
-        );
-      } catch (error) {
-        if (!cancelled) {
-          await logClient("grid", `viewer playback hint refresh failed: ${String(error)}`, "error");
-        }
-      }
+    const videoIds = visibleSlots.flatMap(({ asset }) =>
+      asset?.media_kind === "video" ? [asset.id] : [],
+    );
+    if (videoIds.length === 0) {
+      setVideoPlaybackHints((current) => Object.keys(current).length === 0 ? current : {});
+      return;
     }
 
-    void refreshPlaybackHints();
-    const timer = window.setInterval(() => {
-      void refreshPlaybackHints();
+    return pollWhile(async (signal) => {
+      try {
+        const hints = await api.getViewerPlaybackHints(videoIds, viewerPlaybackSupport);
+        if (!signal.aborted) {
+          setVideoPlaybackHints(Object.fromEntries(hints.map((hint) => [hint.asset_id, hint.status])));
+        }
+      } catch (error) {
+        if (!signal.aborted) {
+          void logClient("grid", `viewer playback hint refresh failed: ${String(error)}`, "error");
+        }
+      }
+      return true;
     }, 2000);
-
-    return () => {
-      cancelled = true;
-      window.clearInterval(timer);
-    };
-  }, [assets, effectiveVisibleIdSet, viewerPlaybackSupport]);
+  }, [visibleSlots, viewerPlaybackSupport]);
 
   useEffect(() => {
     const assetIds = new Set(assets.map((asset) => asset.id));
@@ -400,7 +386,7 @@ export function MediaGrid({
     let disposed = false;
 
     async function processPreviewPass() {
-      const previewEligibleIds = assets
+      const previewEligibleIds = readMediaWork()
         .filter((asset) => {
           const state = thumbsRef.current[asset.id];
           return (
@@ -597,7 +583,7 @@ export function MediaGrid({
     let disposed = false;
 
     async function processBatch() {
-      const thumbEligibleIds = assets.map((asset) => asset.id);
+      const thumbEligibleIds = readMediaWork().map((asset) => asset.id);
       const probeIds = thumbEligibleIds
         .filter((assetId) => {
           const state = thumbsRef.current[assetId];
